@@ -1,0 +1,11 @@
+fid: 1
+fid: 2
+label: 0.0
+label: 1.0
+line_id {
+  actions: 1
+}
+feature {
+  name: "a"
+  fid: 3
+}

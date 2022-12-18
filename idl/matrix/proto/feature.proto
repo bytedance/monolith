@@ -1,0 +1,63 @@
+// Copyright 2022 ByteDance and/or its affiliates.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto2";
+package idl.matrix.proto;
+option java_outer_classname = "FeatureProto";
+
+// 序列特征，文档见下面链接
+// 离散序列特征
+message Fixed64List {
+  repeated fixed64 value = 1 [packed = true];
+}
+
+// 浮点型连续值序列特征
+message FloatList {
+  repeated float value = 1 [packed = true];
+}
+
+// 整型连续值序列特征
+message Int64List {
+  repeated int64 value = 1 [packed = true];
+}
+
+// 原始值序列特征
+message BytesList {
+  repeated bytes value = 1;
+}
+
+message Feature {
+  // feature column name
+  // 一定要有名字，否则无法使用。
+  // 名字是唯一的，以 fc_ 开头。
+  optional string name = 1;
+
+  // 以下字段只使用其中一个。离散值和连续值特征都是有序的。
+  // 如果要对 fid 赋权，需要分在两个 feature column 中，顺序对应。
+
+  // oneof {
+  // 离散 id 化特征
+  repeated fixed64 fid = 2 [packed = true];
+  // 连续值特征
+  repeated float float_value = 3 [packed = true];
+  repeated int64 int64_value = 4 [packed = true];
+  // 原始特征
+  repeated bytes bytes_value = 5;
+  // 以下为序列特征，表达一个序列对应的离散或连续特征
+  repeated Fixed64List fid_list = 6;
+  repeated FloatList float_list = 7;
+  repeated Int64List int64_list = 8;
+  repeated BytesList bytes_list = 9;
+  // } // oneof
+}

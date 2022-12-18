@@ -1,0 +1,12 @@
+diff --git a/external/third_party/jcommander.BUILD b/external/third_party/jcommander.BUILD
+index 2335f6b1..5d5ec084 100644
+--- a/external/third_party/jcommander.BUILD
++++ b/external/third_party/jcommander.BUILD
+@@ -3,7 +3,6 @@ package(
+ )
+ JAVACOPTS = [
+     "-Xlint:unchecked",
+-    "-Werror:-unchecked,-rawtypes",
+     "-Xep:CollectionIncompatibleType:OFF",
+ ]
+ 

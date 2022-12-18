@@ -1,0 +1,139 @@
+// Copyright 2022 ByteDance and/or its affiliates.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto2";
+
+import public "monolith/native_training/runtime/hash_table/compressor/float_compressor.proto";
+import public "monolith/native_training/runtime/hash_table/initializer/initializer_config.proto";
+import public "monolith/native_training/runtime/hash_table/optimizer/optimizer.proto";
+
+package monolith.hash_table;
+
+message EntryConfig {
+  message Segment {
+    optional InitializerConfig init_config = 1;
+    optional OptimizerConfig opt_config = 2;
+    optional FloatCompressorConfig comp_config = 3;
+
+    // Will overwrite dim_size in init_config, opt_config and comp_config.
+    optional int32 dim_size = 7;
+  }
+  repeated Segment segments = 1;
+
+  enum EntryType {
+    UNKNOWN = 0;
+    TRAINING = 1;
+    SERVING = 2;
+  }
+  // If this entry is for serving:
+  // For training entry, comp_config is not used.
+  // For serving entry, init_config & opt_config is not used.
+  optional EntryType entry_type = 2 [default = TRAINING];
+}
+
+message EntryDump {
+  optional sfixed64 id = 1;
+  repeated float num = 2;
+  optional OptimizerDump opt = 3;
+  optional int64 last_update_ts_sec = 4;
+}
+
+// Use per slot expire time (in days) to align with sail requirement.
+// In future, slot settings might be deprecated.
+message SlotExpireTimeConfig {
+  // These slot and expire time are used to overwrite default slot expire time.
+  message SlotExpireTime {
+    optional uint32 slot = 1;
+    optional uint32 expire_time = 2;
+  }
+
+  repeated SlotExpireTime slot_expire_times = 1;
+  // default expire time is 100 years.
+  optional uint32 default_expire_time = 2 [default = 36500];
+}
+
+message CuckooEmbeddingHashTableConfig {
+}
+
+
+message EmbeddingHashTableConfig {
+  optional EntryConfig entry_config = 1;
+  enum EntryType {
+    // Memory efficient, but slower.
+    PACKED = 1;
+    // Fastest
+    RAW = 2;
+  }
+  optional EntryType entry_type = 6 [default = PACKED];
+  optional uint64 initial_capacity = 2 [default = 1];
+  optional SlotExpireTimeConfig slot_expire_time_config = 3;
+  oneof type {
+    CuckooEmbeddingHashTableConfig cuckoo = 5;
+  }
+  // Whether to evict features periodically during training and serving.
+  optional bool enable_feature_eviction = 7;
+  // Trigger features eviction every n hours.
+  optional int32 feature_evict_every_n_hours = 8 [default = 240];
+}
+
+message MultiEmbeddingHashTableConfig {
+  repeated string names = 1;
+  repeated EmbeddingHashTableConfig configs = 2;
+}
+
+// Use per slot occurrence threshold config to align with sail requirement.
+// In future, slot settings might be deprecated.
+message SlotOccurrenceThresholdConfig {
+  // These slot and occurrence threshold are used to overwrite default
+  // occurrence thresholds.
+  message SlotOccurrenceThreshold {
+    optional uint32 slot = 1;
+    optional uint32 occurrence_threshold = 2;
+  }
+
+  repeated SlotOccurrenceThreshold slot_occurrence_thresholds = 1;
+  optional uint32 default_occurrence_threshold = 2 [default = 0];
+}
+
+message SlidingHashFilterMetaDump {
+  optional uint32 split_num = 1 [default = 0];
+  optional uint32 max_forward_step = 2 [default = 0];
+  optional uint32 max_backward_step = 3 [default = 0];
+  optional uint32 max_step = 4 [default = 0];
+  optional uint32 head = 5 [default = 0];
+  optional uint32 head_increment = 6 [default = 0];
+  optional uint64 failure_count = 7 [default = 0];
+}
+
+// Here we make each hash filter split keep the shared meta dump.
+// This meta is small and it can help simplify the design to store
+// the shared meta in a seperate file. We will consider to refine this in
+// future.
+message HashFilterSplitMetaDump {
+  optional uint64 failure_count = 1 [default = 0];
+  optional uint64 total_size = 2 [default = 0];
+  optional uint64 num_elements = 3 [default = 0];
+  optional double fill_rate = 4 [default = 0];
+  optional SlidingHashFilterMetaDump sliding_hash_filter_meta = 5;
+}
+
+message HashFilterSplitDataDump {
+  optional uint32 offset = 1;
+  repeated uint32 data = 2;
+}
+
+message MultiHashTableMetadata {
+  optional string table_name = 1;
+  optional uint64 num_entries = 2;
+}

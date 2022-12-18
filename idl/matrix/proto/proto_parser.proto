@@ -1,0 +1,60 @@
+// Copyright 2022 ByteDance and/or its affiliates.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto2";
+package parser.proto;
+import "idl/matrix/proto/feature.proto";
+import "idl/matrix/proto/line_id.proto";
+
+
+message Instance
+{
+    repeated fixed64 fid = 1 [packed=true];
+    repeated float value = 2 [packed=true];
+    repeated float label = 3 [packed=true];
+    optional float instance_weight = 4;
+    optional idl.matrix.proto.LineId line_id = 5;
+    // deprecated, move to feature columns
+    repeated float dense = 6 [packed=true, deprecated=true];
+    repeated LabelTag label_tag = 7;
+    repeated fixed64 next_fid = 8 [packed=true];
+    // feature columns
+    repeated idl.matrix.proto.Feature feature = 9;
+
+    optional uint32 data_source_key = 100;
+}
+
+message InstanceWrapper
+{
+    // Serialized `Instance` message
+    optional bytes instance = 1;
+    // Which data source this Instance comes from.
+    optional string data_source = 2;
+}
+
+message LabelTag
+{
+    optional int32 key = 1;
+    optional float val = 2;
+}
+
+message Request
+{
+    optional string req_id = 1;
+    optional int32 ut = 2;
+    optional fixed64 uid = 3;
+    optional int64 req_time = 4;
+    repeated Instance instances = 5;
+    optional string user = 6;
+}

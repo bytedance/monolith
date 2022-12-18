@@ -1,0 +1,25 @@
+
+cityhash==0.4.1
+croniter==1.0.15
+cryptography==3.4.8
+dataclasses_json==0.5.2
+flask_api==2.0
+flask==1.1.2
+freezegun==1.1.0
+google-cloud-storage
+grpcio==1.32.0
+# Flask is stupid.
+itsdangerous==1.1.0
+kazoo==2.8.0
+kubernetes==19.15.0
+netifaces==0.11.0
+nltk==3.6.7
+portpicker==1.3.1
+psutil==5.9.4
+pytz==2021.3
+requests==2.26.0
+SQLAlchemy==1.4.13
+# This is needed since Werkzeug 2.0.0 breaks flask_api
+Werkzeug==1.0.1
+jinja2==3.0.3
+kafka-python==2.0.2

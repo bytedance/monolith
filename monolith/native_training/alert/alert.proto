@@ -1,0 +1,36 @@
+// Copyright 2022 ByteDance and/or its affiliates.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto2";
+
+package monolith;
+
+message KafkaAlertProto {
+  optional string topic = 1;
+  optional string group = 2;
+}
+
+message TrainingAlertProto { optional string prefix = 1; }
+
+message AlertMessageProto { optional string user = 1; }
+
+message AlertProto {
+  optional AlertMessageProto alert_message = 1;
+  optional KafkaAlertProto kafka_alert = 2;
+  optional TrainingAlertProto training_alert = 3;
+
+  // How long the monitoring will be started
+  optional int64 start_delay_sec = 1000;
+  optional int64 check_interval_sec = 10001 [ default = 1800 ];
+}

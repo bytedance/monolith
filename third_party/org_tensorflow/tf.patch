@@ -1,0 +1,359 @@
+diff --git a/tensorflow/BUILD b/tensorflow/BUILD
+index 56b33a4..c14d267 100644
+--- a/tensorflow/BUILD
++++ b/tensorflow/BUILD
+@@ -34,7 +34,7 @@ load(
+ load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+ 
+ package(
+-    default_visibility = [":internal"],
++    default_visibility = ["//visibility:public"],
+     licenses = ["notice"],  # Apache 2.0
+ )
+ 
+
+diff --git a/tensorflow/core/distributed_runtime/master.cc b/tensorflow/core/distributed_runtime/master.cc
+index 64031a3..0782597 100644
+--- a/tensorflow/core/distributed_runtime/master.cc
++++ b/tensorflow/core/distributed_runtime/master.cc
+@@ -260,6 +260,7 @@ class DeviceFinder {
+     mutex_lock l(mu_);
+     // TODO(mrry): Propagate a timeout here, since `num_pending_` may
+     // never become zero.
++    int times = 0;
+     while (num_pending_ != 0) {
+       pending_zero_.wait_for(l, std::chrono::milliseconds(kLoggingPeriodMs));
+       if (num_pending_ != 0) {
+@@ -271,6 +272,16 @@ class DeviceFinder {
+           }
+         }
+       }
++      if (++times >= 6) {
++        std::string unseen_workers;
++        for (size_t i = 0; i < targets_.size(); ++i) {
++          if (!seen_targets_[i]) {
++            unseen_workers += " " + targets_[i];
++          }
++        }
++        return errors::DeadlineExceeded(
++            "Unable to get responses from workers: ", unseen_workers);
++      }
+     }
+     return status_;
+   }
+diff --git a/tensorflow/core/distributed_runtime/rpc/grpc_channel.cc b/tensorflow/core/distributed_runtime/rpc/grpc_channel.cc
+index 985b045..e4b6c48 100644
+--- a/tensorflow/core/distributed_runtime/rpc/grpc_channel.cc
++++ b/tensorflow/core/distributed_runtime/rpc/grpc_channel.cc
+@@ -20,9 +20,9 @@ limitations under the License.
+ #include <map>
+ #include <unordered_map>
+ 
+-#include "grpcpp/create_channel.h"
+ #include "absl/strings/escaping.h"
+ #include "absl/strings/str_split.h"
++#include "grpcpp/create_channel.h"
+ #include "tensorflow/core/lib/core/errors.h"
+ #include "tensorflow/core/lib/core/status.h"
+ #include "tensorflow/core/lib/gtl/map_util.h"
+@@ -298,7 +298,7 @@ class SparseGrpcChannelCache : public CachingGrpcChannelCache {
+       : job_id_(job_id),
+         host_ports_(host_ports),
+         channel_func_(std::move(channel_func)) {
+-    LOG(INFO) << "Initialize GrpcChannelCache for job " << ToString();
++    // LOG(INFO) << "Initialize GrpcChannelCache for job " << ToString();
+   }
+   ~SparseGrpcChannelCache() override {}
+ 
+diff --git a/tensorflow/core/distributed_runtime/rpc/grpc_worker_service.cc b/tensorflow/core/distributed_runtime/rpc/grpc_worker_service.cc
+index 723a513..1d8ad6a 100644
+--- a/tensorflow/core/distributed_runtime/rpc/grpc_worker_service.cc
++++ b/tensorflow/core/distributed_runtime/rpc/grpc_worker_service.cc
+@@ -55,6 +55,7 @@ limitations under the License.
+ #include "tensorflow/core/platform/tracing.h"
+ #include "tensorflow/core/protobuf/transport_options.pb.h"
+ #include "tensorflow/core/protobuf/worker.pb.h"
++#include "tensorflow/core/util/env_var.h"
+ 
+ namespace tensorflow {
+ 
+@@ -132,6 +133,9 @@ class GrpcWorkerServiceThread {
+     // TODO(ncteisen): This may require performance engineering. We can
+     // change the number of threads, the number of handlers per thread,
+     // or even decide to specialize certain threads to certain methods.
++    float ratio;
++    ReadFloatFromEnvVar("MONOLITH_GRPC_WORKER_SERVICE_HANDLER_MULTIPLIER", 1.0, &ratio);
++    auto get_default_value = [ratio](int x) { return int(x * ratio); };
+     SETUP_FOR_REQUEST(GetStatus, 1, false);
+     SETUP_FOR_REQUEST(CreateWorkerSession, 1, false);
+     SETUP_FOR_REQUEST(DeleteWorkerSession, 1, false);
+@@ -140,20 +144,20 @@ class GrpcWorkerServiceThread {
+     SETUP_FOR_REQUEST(DeregisterGraph, 1, false);
+     SETUP_FOR_REQUEST(Logging, 1, false);
+     SETUP_FOR_REQUEST(Tracing, 1, false);
+-    SETUP_FOR_REQUEST(CompleteGroup, 10, true);
+-    SETUP_FOR_REQUEST(CompleteInstance, 10, true);
+-    SETUP_FOR_REQUEST(GetStepSequence, 10, true);
+-    SETUP_FOR_REQUEST(RecvBuf, 500, true);
+-    SETUP_FOR_REQUEST(RunGraph, 100, true);
+-    SETUP_FOR_REQUEST(CleanupGraph, 100, false);
+-    SETUP_FOR_REQUEST(MarkRecvFinished, 10, false);
++    SETUP_FOR_REQUEST(CompleteGroup, get_default_value(10), true);
++    SETUP_FOR_REQUEST(CompleteInstance, get_default_value(10), true);
++    SETUP_FOR_REQUEST(GetStepSequence, get_default_value(10), true);
++    SETUP_FOR_REQUEST(RecvBuf, get_default_value(500), true);
++    SETUP_FOR_REQUEST(RunGraph, get_default_value(100), true);
++    SETUP_FOR_REQUEST(CleanupGraph, get_default_value(100), false);
++    SETUP_FOR_REQUEST(MarkRecvFinished, get_default_value(10), false);
+ 
+     // TODO(ncteisen): Determine a better policy for enqueuing the
+     // appropriate number of each request type.
+     for (int i = 0;
+          i < gtl::FindWithDefault(
+                  queue_depth_, static_cast<int>(GrpcWorkerMethod::kRecvTensor),
+-                 1000);
++                 get_default_value(1000));
+          ++i) {
+       EnqueueRecvTensorRequestRaw();
+     }
+
+diff --git a/tensorflow/core/platform/hadoop/hadoop_file_system.cc b/tensorflow/core/platform/hadoop/hadoop_file_system.cc
+index 74195db7730..ffb7d1d8c83 100644
+--- a/tensorflow/core/platform/hadoop/hadoop_file_system.cc
++++ b/tensorflow/core/platform/hadoop/hadoop_file_system.cc
+@@ -16,6 +16,7 @@ limitations under the License.
+ #include "tensorflow/core/platform/hadoop/hadoop_file_system.h"
+
+ #include <errno.h>
++#include <sys/time.h>
+
+ #include "tensorflow/core/platform/env.h"
+ #include "tensorflow/core/platform/error.h"
+@@ -52,6 +53,7 @@ class LibHDFS {
+   std::function<void(hdfsBuilder*, const char*)> hdfsBuilderSetNameNode;
+   std::function<int(const char*, char**)> hdfsConfGetStr;
+   std::function<int(hdfsFS, hdfsFile)> hdfsCloseFile;
++  std::function<tSize(hdfsFS, hdfsFile, void*, tSize)> hdfsRead;
+   std::function<tSize(hdfsFS, hdfsFile, tOffset, void*, tSize)> hdfsPread;
+   std::function<tSize(hdfsFS, hdfsFile, const void*, tSize)> hdfsWrite;
+   std::function<int(hdfsFS, hdfsFile)> hdfsHFlush;
+@@ -79,6 +81,7 @@ class LibHDFS {
+       BIND_HDFS_FUNC(hdfsBuilderSetNameNode);
+       BIND_HDFS_FUNC(hdfsConfGetStr);
+       BIND_HDFS_FUNC(hdfsCloseFile);
++      BIND_HDFS_FUNC(hdfsRead);
+       BIND_HDFS_FUNC(hdfsPread);
+       BIND_HDFS_FUNC(hdfsWrite);
+       BIND_HDFS_FUNC(hdfsHFlush);
+@@ -225,6 +228,13 @@ class HDFSRandomAccessFile : public RandomAccessFile {
+     } else {
+       disable_eof_retried_ = false;
+     }
++    const char* hdfs_optimize_read = getenv("HDFS_OPTIMIZE_READ");
++    if (hdfs_optimize_read && hdfs_optimize_read[0] == '1') {
++      disable_eof_retried_ = true;
++      optimize_read_ = true;
++    } else {
++      optimize_read_ = false;
++    }
+   }
+
+   ~HDFSRandomAccessFile() override {
+@@ -256,8 +266,17 @@ class HDFSRandomAccessFile : public RandomAccessFile {
+       // of int32. -2 offset can avoid JVM OutOfMemoryError.
+       size_t read_n =
+           std::min(n, static_cast<size_t>(std::numeric_limits<int>::max() - 2));
+-      tSize r = libhdfs()->hdfsPread(fs_, file_, static_cast<tOffset>(offset),
+-                                     dst, static_cast<tSize>(read_n));
++
++      tSize r = 0;
++      if (optimize_read_) {
++        // offset is ignored, we simply rely on file_ to track the progress.
++        // Always reads from the beginning of the file.
++        r = libhdfs()->hdfsRead(fs_, file_, dst,
++                                static_cast<tSize>(read_n));
++      } else {
++        r = libhdfs()->hdfsPread(fs_, file_, static_cast<tOffset>(offset),
++                                 dst, static_cast<tSize>(read_n));
++      }
+       if (r > 0) {
+         dst += r;
+         n -= r;
+@@ -269,6 +288,8 @@ class HDFSRandomAccessFile : public RandomAccessFile {
+         // contents.
+         //
+         // Fixes #5438
++        struct timeval t0, t1;
++        gettimeofday(&t0, NULL);
+         if (file_ != nullptr && libhdfs()->hdfsCloseFile(fs_, file_) != 0) {
+           return IOError(filename_, errno);
+         }
+@@ -277,6 +298,10 @@ class HDFSRandomAccessFile : public RandomAccessFile {
+         if (file_ == nullptr) {
+           return IOError(filename_, errno);
+         }
++        gettimeofday(&t1, NULL);
++        long elapsed = (t1.tv_sec-t0.tv_sec)*1000000 + t1.tv_usec-t0.tv_usec;
++        LOG_EVERY_N(WARNING, 50) << "****************************Re-Open time: "
++                                 << elapsed/1000.0 << " ms. ******************";
+         eof_retried = true;
+       } else if (eof_retried && r == 0) {
+         s = Status(error::OUT_OF_RANGE, "Read less bytes than requested");
+@@ -295,6 +320,7 @@ class HDFSRandomAccessFile : public RandomAccessFile {
+   string hdfs_filename_;
+   hdfsFS fs_;
+   bool disable_eof_retried_;
++  bool optimize_read_;
+
+   mutable mutex mu_;
+   mutable hdfsFile file_ TF_GUARDED_BY(mu_);
+@@ -304,13 +330,24 @@ Status HadoopFileSystem::NewRandomAccessFile(
+     const string& fname, TransactionToken* token,
+     std::unique_ptr<RandomAccessFile>* result) {
+   hdfsFS fs = nullptr;
++  struct timeval t0, t1, t2;
++  gettimeofday(&t0, NULL);
+   TF_RETURN_IF_ERROR(Connect(fname, &fs));
+-
++  gettimeofday(&t1, NULL);
+   hdfsFile file = libhdfs()->hdfsOpenFile(fs, TranslateName(fname).c_str(),
+                                           O_RDONLY, 0, 0, 0);
++  gettimeofday(&t2, NULL);
+   if (file == nullptr) {
+     return IOError(fname, errno);
+   }
++  long elapsed1 = (t1.tv_sec-t0.tv_sec)*1000000 + t1.tv_usec-t0.tv_usec;
++  long elapsed2 = (t2.tv_sec-t1.tv_sec)*1000000 + t2.tv_usec-t1.tv_usec;
++  LOG_EVERY_N(WARNING, 50) << "****************************"
++                            <<"NewRandomAccessFile the connect time is: "
++                            << elapsed1/1000.0
++                            << " ms, and the open time is: "
++                            << elapsed2/1000.0
++                            << " ms. ***************************";
+   result->reset(
+       new HDFSRandomAccessFile(fname, TranslateName(fname), fs, file));
+   return Status::OK();
+
+diff --git a/tensorflow/core/kernels/BUILD b/tensorflow/core/kernels/BUILD
+index e73316c0622..1ceff654763 100644
+--- a/tensorflow/core/kernels/BUILD
++++ b/tensorflow/core/kernels/BUILD
+@@ -780,6 +780,18 @@ cc_library(
+     ],
+ )
+ 
++
++cc_library(
++    name = "gpu_device_array_for_custom_op",
++    hdrs = [
++        "gpu_device_array.h",
++        "gpu_device_array_gpu.h",
++    ],
++    deps = [
++        "//tensorflow/core:gpu_headers_lib",
++    ],
++)
++
+ # Depending on a build configuration this target provides custom kernel for Eigen
+ # tensor contractions (small matrix multiplication kernel used to multiple together
+ # blocks of the original tensors).
+
+
+
+diff --git a/tensorflow/core/kernels/padding_fifo_queue_op.cc b/tensorflow/core/kernels/padding_fifo_queue_op.cc
+index c92cd732d5b..d574f6a02d8 100644
+--- a/tensorflow/core/kernels/padding_fifo_queue_op.cc
++++ b/tensorflow/core/kernels/padding_fifo_queue_op.cc
+@@ -70,4 +70,9 @@ REGISTER_KERNEL_BUILDER(Name("PaddingFIFOQueue").Device(DEVICE_CPU),
+ REGISTER_KERNEL_BUILDER(Name("PaddingFIFOQueueV2").Device(DEVICE_CPU),
+                         PaddingFIFOQueueOp);
+ 
++REGISTER_KERNEL_BUILDER(
++    Name("PaddingFIFOQueueV2").Device(DEVICE_DEFAULT).HostMemory("handle"),
++    PaddingFIFOQueueOp);
++
++
+ }  // namespace tensorflow
+
+diff --git a/tensorflow/core/distributed_runtime/rpc/grpc_state.h b/tensorflow/core/distributed_runtime/rpc/grpc_state.h
+index d0e67cd..6528ad1 100644
+--- a/tensorflow/core/distributed_runtime/rpc/grpc_state.h
++++ b/tensorflow/core/distributed_runtime/rpc/grpc_state.h
+@@ -84,7 +84,7 @@ class RPCState : public GrpcClientCQTag {
+                 return false;
+               }
+             }(),
+-            (call_opts != nullptr ? call_opts->GetTimeout() : 0), max_retries,
++            (call_opts != nullptr ? call_opts->GetTimeout() : 600000), max_retries,
+             target) {
+   }
+ 
+
+diff --git a/tensorflow/tensorflow.bzl b/tensorflow/tensorflow.bzl
+index 096cdd17dcb..06f4b8bde42 100644
+--- a/tensorflow/tensorflow.bzl
++++ b/tensorflow/tensorflow.bzl
+@@ -1343,6 +1343,7 @@ def _cuda_copts(opts = []):
+         "//conditions:default": [],
+         "@local_config_cuda//cuda:using_nvcc": ([
+             "-nvcc_options=relaxed-constexpr",
++            "-nvcc_options=generate-line-info",
+             "-nvcc_options=ftz=true",
+         ]),
+         "@local_config_cuda//cuda:using_clang": ([
+@@ -1383,6 +1384,42 @@ def tf_gpu_kernel_library(
+         **kwargs
+     )
+
++def tf_gpu_kernel_library_allow_except(
++        srcs,
++        copts = [],
++        cuda_copts = [],
++        deps = [],
++        hdrs = [],
++        **kwargs):
++    copts = copts + tf_copts(allow_exceptions = True) + _cuda_copts(opts = cuda_copts) + rocm_copts(opts = cuda_copts)
++    kwargs["features"] = kwargs.get("features", []) + ["-use_header_modules"]
++
++    # tf_custom_op
++
++    cuda_deps = [
++            #clean_dep("//tensorflow/core:stream_executor_headers_lib"),
++            "@local_config_cuda//cuda:cuda_headers",
++            #"@local_config_cuda//cuda:cudart_static",
++        ]
++    rocm_deps = [
++        #clean_dep("//tensorflow/core:stream_executor_headers_lib"),
++    ]
++    # deps = deps + tf_custom_op_library_additional_deps()
++
++    # Override EIGEN_STRONG_INLINE to inline when
++    # --define=override_eigen_strong_inline=true to avoid long compiling time.
++    # See https://github.com/tensorflow/tensorflow/issues/10521
++    copts = copts + if_override_eigen_strong_inline(["/DEIGEN_STRONG_INLINE=inline"])
++
++    cuda_library(
++        srcs = srcs,
++        hdrs = hdrs,
++        copts = copts + if_tensorrt(["-DGOOGLE_TENSORRT=1"]),
++        deps = deps + if_cuda_is_configured_compat(cuda_deps) + if_rocm_is_configured(rocm_deps),
++        alwayslink = 1,
++        **kwargs
++    )
++
+ def tf_gpu_library(deps = None, cuda_deps = None, copts = tf_copts(), **kwargs):
+     """Generate a cc_library with a conditional set of CUDA dependencies.
+
+diff --git a/tensorflow/core/BUILD b/tensorflow/core/BUILD
+index 5f307a6..198b211 100644
+--- a/tensorflow/core/BUILD
++++ b/tensorflow/core/BUILD
+@@ -572,7 +572,7 @@ cc_library(
+     ]) + if_libtpu(
+         if_false = ["//tensorflow/compiler/mlir/tensorflow:mlir_passthrough_op"],
+         if_true = [],
+-    ),
++    ) + ["@//monolith/native_training/runtime/ops:monolith_ops_for_tf"],
+ )
+ 
+ alias(

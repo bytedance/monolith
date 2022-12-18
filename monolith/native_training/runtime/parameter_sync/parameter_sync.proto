@@ -1,0 +1,70 @@
+// Copyright 2022 ByteDance and/or its affiliates.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto2";
+
+package monolith.parameter_sync;
+
+
+// The request message containing delta fids and embeddings.
+message PushRequest {
+  message DeltaEmbeddingHashTable {
+    optional string unique_id = 1;
+    optional int32 dim_size = 2;
+    repeated int64 fids = 3;
+    repeated float embeddings = 4;
+  }
+
+  optional string model_name = 1;
+
+  optional string signature_name = 2;
+
+  repeated DeltaEmbeddingHashTable delta_hash_tables = 3;
+
+  // The embedding changes from multi hash tables
+  // The size of this field should equal to number of hash tables included in
+  // multi hash table.
+  repeated DeltaEmbeddingHashTable delta_multi_hash_tables = 5;
+
+  optional int64 timeout_in_ms = 4 [default = 1000];
+}
+
+// The response message
+message PushResponse {
+  // gRPC's server address
+  optional string target = 3;
+
+  // gRPC's status code, 0 means OK.
+  optional int32 status_code = 1;
+
+  // gRPC's error message
+  optional string error_message = 2;
+
+  // Number of fids successfully assigned
+  optional int32 update_num = 4;
+}
+
+message PushResult {
+  repeated PushResponse responses = 1;
+}
+
+message ClientConfig {
+  optional string model_name = 1;
+
+  optional string signature_name = 2;
+
+  repeated string targets = 3;
+
+  optional int64 timeout_in_ms = 4 [default = 1000];
+}

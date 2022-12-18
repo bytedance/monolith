@@ -1,0 +1,68 @@
+# Copied from https://github.com/tensorflow/serving/blob/master/.bazelrc
+# Some entries are commented to fit to ByteDance environment
+
+# Options used to build with CUDA.
+build:cuda --repo_env TF_NEED_CUDA=1
+build:cuda --crosstool_top=@local_config_cuda//crosstool:toolchain
+build:cuda --define=using_cuda=true --define=using_cuda_nvcc=true
+# build:cuda --action_env=TF_CUDA_COMPUTE_CAPABILITIES="sm_50,sm_60,sm_70,sm_75,compute_80"
+# Just compile for V100 and T4 and A100 for development:
+build:cuda --action_env=TF_CUDA_COMPUTE_CAPABILITIES="sm_70,sm_75,compute_80"
+
+# Explicitly specify "local" here to avoid sandboxed for local.
+# Use ./configure to create .monolith_configure.bazelrc to enable build from remote buildfarm.
+build --spawn_strategy=local
+
+build --define=grpc_no_ares=true
+
+# Sets the default Apple platform to macOS.
+build --apple_platform_type=macos
+
+build -c opt
+
+# LLVM, MLIR and TF require C++14.
+build --cxxopt=-std=c++14
+build --host_cxxopt=-std=c++14
+
+# Adding "--cxxopt=-D_GLIBCXX_USE_CXX11_ABI=0" creates parity with TF
+# compilation options. It also addresses memory use due to
+# copy-on-write semantics of std::strings of the older ABI.
+build --cxxopt=-D_GLIBCXX_USE_CXX11_ABI=0
+
+build --experimental_repo_remote_exec
+### end ###
+
+fetch --experimental_repo_remote_exec
+query --experimental_repo_remote_exec
+build --genrule_strategy=local
+
+# Make it default to TF2
+build --define=tf_api_version=2
+build --action_env=TF2_BEHAVIOR=1
+
+# Horovod requires dynamic load on shared object.
+build --define=framework_shared_object=true
+
+# Some optimization config.
+build --define=open_source_build=true
+build --define=use_fast_cpp_protos=true
+build --define=allow_oversize_protos=true
+build --define=with_xla_support=true
+
+# Some native optimizations
+build --copt=-O3
+build --copt=-mavx 
+build --copt=-mavx2 
+build --copt=-mfma 
+build --copt=-msse4.1 
+build --copt=-msse4.2
+
+# TF currently relies on some bazel deprecated behavior, removes theses options
+# once TF fixes bugs.
+build --noincompatible_remove_legacy_whole_archive --noincompatible_prohibit_aapt1
+
+# Import user configured options (e.g., like building cluster)
+try-import %workspace%/.monolith_configure.bazelrc
+# Import bazel 4 compatible options
+try-import %workspace%/.bazel4-compatible.bazelrc
+

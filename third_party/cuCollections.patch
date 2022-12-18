@@ -1,0 +1,1106 @@
+diff --git a/.gitignore b/.gitignore
+index 4146530..8edb720 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -81,9 +81,6 @@ cpp/thirdparty/googletest/
+ /html
+ /latex
+ 
+-#Java
+-target
+-
+ # Translations
+ *.mo
+ *.pot
+diff --git a/include/cuco/detail/__config b/include/cuco/detail/__config
+index c76a1bb..248dff1 100644
+--- a/include/cuco/detail/__config
++++ b/include/cuco/detail/__config
+@@ -16,7 +16,7 @@
+ 
+  #pragma once
+ 
+- #include <nv/target>
++ #include <cuco/detail/nv/target>
+ 
+ // WAR for libcudacxx/296
+ #define CUCO_CUDA_MINIMUM_ARCH _NV_FIRST_ARG(__CUDA_ARCH_LIST__)
+diff --git a/include/cuco/detail/nv/detail/__preprocessor b/include/cuco/detail/nv/detail/__preprocessor
+new file mode 100644
+index 0000000..3485565
+--- /dev/null
++++ b/include/cuco/detail/nv/detail/__preprocessor
+@@ -0,0 +1,117 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of libcu++, the C++ Standard Library for your entire system,
++// under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#if defined(__GNUC__)
++#pragma GCC system_header
++#endif
++
++// For all compilers and dialects this header defines:
++//  _NV_EVAL
++//  _NV_IF
++//  _NV_CONCAT_EVAL
++// For C++11 and up it defines:
++//  _NV_STRIP_PAREN
++//  _NV_DISPATCH_N_ARY
++//  _NV_FIRST_ARG
++//  _NV_REMOVE_PAREN
++
++#if defined(_NV_TARGET_CPP11)
++#  define _NV_EVAL1(...) __VA_ARGS__
++#  define _NV_EVAL(...) _NV_EVAL1(__VA_ARGS__)
++#else
++#  define _NV_EVAL1(x) x
++#  define _NV_EVAL(x) _NV_EVAL1(x)
++#endif // C++11
++
++#define _NV_CONCAT_EVAL1(l, r) _NV_EVAL(l ## r)
++#define _NV_CONCAT_EVAL(l, r) _NV_CONCAT_EVAL1(l, r)
++
++#define _NV_IF_0(t, f) f
++#define _NV_IF_1(t, f) t
++
++#define _NV_IF_BIT(b) _NV_EVAL(_NV_IF_##b)
++#define _NV_IF__EVAL(fn, t, f) _NV_EVAL(fn(t, f))
++#define _NV_IF_EVAL(cond, t, f) _NV_IF__EVAL(_NV_IF_BIT(cond), t, f)
++
++#define _NV_IF1(cond, t, f) _NV_IF_EVAL(cond, t, f)
++#define _NV_IF(cond, t, f) _NV_IF1(_NV_EVAL(cond), _NV_EVAL(t), _NV_EVAL(f))
++
++#if defined(_NV_TARGET_CPP11)
++
++// The below mechanisms were derived from: https://gustedt.wordpress.com/2010/06/08/detect-empty-macro-arguments/
++
++#define _NV_ARG32(...) _NV_EVAL(_NV_ARG32_0(__VA_ARGS__))
++#define _NV_ARG32_0(                                                                         \
++    _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15,                    \
++    _16, _17, _18, _19, _20, _21, _22, _23, _24, _25, _26, _27, _28, _29, _30, _31, ...) _31
++
++#define _NV_HAS_COMMA(...) _NV_ARG32(__VA_ARGS__,   \
++    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, \
++    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0)
++
++#define _NV_TRIGGER_PARENTHESIS_(...) ,
++
++#define _NV_ISEMPTY(...)                                                    \
++    _NV_ISEMPTY0(                                                           \
++          /* test if there is just one argument, eventually an empty        \
++             one */                                                         \
++          _NV_EVAL(_NV_HAS_COMMA(__VA_ARGS__)),                                       \
++          /* test if _TRIGGER_PARENTHESIS_ together with the argument       \
++             adds a comma */                                                \
++          _NV_EVAL(_NV_HAS_COMMA(_NV_TRIGGER_PARENTHESIS_ __VA_ARGS__)),              \
++          /* test if the argument together with a parenthesis               \
++             adds a comma */                                                \
++          _NV_EVAL(_NV_HAS_COMMA(__VA_ARGS__ (/*empty*/))),                           \
++          /* test if placing it between _TRIGGER_PARENTHESIS_ and the       \
++             parenthesis adds a comma */                                    \
++          _NV_EVAL(_NV_HAS_COMMA(_NV_TRIGGER_PARENTHESIS_ __VA_ARGS__ (/*empty*/)))   \
++          )
++
++#define _NV_PASTE5(_0, _1, _2, _3, _4) _0 ## _1 ## _2 ## _3 ## _4
++#define _NV_ISEMPTY0(_0, _1, _2, _3) _NV_HAS_COMMA(_NV_PASTE5(_NV_IS_EMPTY_CASE_, _0, _1, _2, _3))
++#define _NV_IS_EMPTY_CASE_0001 ,
++
++
++#define _NV_REMOVE_PAREN(...) _NV_REMOVE_PAREN1(__VA_ARGS__)
++#define _NV_REMOVE_PAREN1(...) _NV_STRIP_PAREN(_NV_IF(_NV_TEST_PAREN(__VA_ARGS__), (_NV_STRIP_PAREN(__VA_ARGS__)), (__VA_ARGS__)))
++
++#define _NV_STRIP_PAREN2(...) __VA_ARGS__
++#define _NV_STRIP_PAREN1(...) _NV_STRIP_PAREN2 __VA_ARGS__
++#define _NV_STRIP_PAREN(...) _NV_STRIP_PAREN1(__VA_ARGS__)
++
++#define _NV_TEST_PAREN(...) _NV_TEST_PAREN1(__VA_ARGS__)
++#define _NV_TEST_PAREN1(...) _NV_TEST_PAREN2(_NV_TEST_PAREN_DUMMY __VA_ARGS__)
++#define _NV_TEST_PAREN2(...) _NV_TEST_PAREN3(_NV_CONCAT_EVAL(_, __VA_ARGS__))
++#define _NV_TEST_PAREN3(...) _NV_EVAL(_NV_FIRST_ARG(__VA_ARGS__))
++
++#define __NV_PAREN_YES 1
++#define __NV_PAREN_NO 0
++
++#define _NV_TEST_PAREN_DUMMY(...) _NV_PAREN_YES
++#define __NV_TEST_PAREN_DUMMY     __NV_PAREN_NO,
++
++#define _NV_FIRST_ARG1(x, ...) x
++#define _NV_FIRST_ARG(x, ...) _NV_FIRST_ARG1(x)
++
++#define _NV_REMOVE_FIRST_ARGS1(...) __VA_ARGS__
++#define _NV_REMOVE_FIRST_ARGS(x, ...) _NV_REMOVE_FIRST_ARGS1(__VA_ARGS__)
++
++#define _NV_NUM_ARGS(...) _NV_NUM_ARGS0(__VA_ARGS__)
++#define _NV_NUM_ARGS0(...) _NV_EVAL(_NV_NUM_ARGS1(__VA_ARGS__))
++#define _NV_NUM_ARGS1(...) _NV_IF(_NV_ISEMPTY(__VA_ARGS__), 0, _NV_NUM_ARGS2(__VA_ARGS__))
++#define _NV_NUM_ARGS2(...) _NV_ARG32(__VA_ARGS__,   \
++    31,30,29,28,27,26,25,24,23,22,21,20,19,18,17,16, \
++    15,14,13,12,11,10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
++
++#define _NV_DISPATCH_N_IMPL1(name, ...) _NV_EVAL(name(__VA_ARGS__))
++#define _NV_DISPATCH_N_IMPL0(depth, name, ...) _NV_DISPATCH_N_IMPL1(_NV_CONCAT_EVAL(name, depth), __VA_ARGS__)
++#define _NV_DISPATCH_N_IMPL(name, ...) _NV_DISPATCH_N_IMPL0(_NV_NUM_ARGS(__VA_ARGS__), name, __VA_ARGS__)
++#define _NV_DISPATCH_N_ARY(name, ...) _NV_DISPATCH_N_IMPL(name, __VA_ARGS__)
++
++#endif // C++11
+\ No newline at end of file
+diff --git a/include/cuco/detail/nv/detail/__target_macros b/include/cuco/detail/nv/detail/__target_macros
+new file mode 100644
+index 0000000..d67d923
+--- /dev/null
++++ b/include/cuco/detail/nv/detail/__target_macros
+@@ -0,0 +1,472 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of libcu++, the C++ Standard Library for your entire system,
++// under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef _NV__TARGET_MACROS
++#define _NV__TARGET_MACROS
++
++#include "__preprocessor"
++
++#if defined(__GNUC__)
++#pragma GCC system_header
++#endif
++
++#  define _NV_TARGET_ARCH_TO_SELECTOR_350 nv::target::sm_35
++#  define _NV_TARGET_ARCH_TO_SELECTOR_370 nv::target::sm_37
++#  define _NV_TARGET_ARCH_TO_SELECTOR_500 nv::target::sm_50
++#  define _NV_TARGET_ARCH_TO_SELECTOR_520 nv::target::sm_52
++#  define _NV_TARGET_ARCH_TO_SELECTOR_530 nv::target::sm_53
++#  define _NV_TARGET_ARCH_TO_SELECTOR_600 nv::target::sm_60
++#  define _NV_TARGET_ARCH_TO_SELECTOR_610 nv::target::sm_61
++#  define _NV_TARGET_ARCH_TO_SELECTOR_620 nv::target::sm_62
++#  define _NV_TARGET_ARCH_TO_SELECTOR_700 nv::target::sm_70
++#  define _NV_TARGET_ARCH_TO_SELECTOR_720 nv::target::sm_72
++#  define _NV_TARGET_ARCH_TO_SELECTOR_750 nv::target::sm_75
++#  define _NV_TARGET_ARCH_TO_SELECTOR_800 nv::target::sm_80
++#  define _NV_TARGET_ARCH_TO_SELECTOR_860 nv::target::sm_86
++#  define _NV_TARGET_ARCH_TO_SELECTOR_870 nv::target::sm_87
++
++#  define _NV_TARGET_ARCH_TO_SM_350 35
++#  define _NV_TARGET_ARCH_TO_SM_370 37
++#  define _NV_TARGET_ARCH_TO_SM_500 50
++#  define _NV_TARGET_ARCH_TO_SM_520 52
++#  define _NV_TARGET_ARCH_TO_SM_530 53
++#  define _NV_TARGET_ARCH_TO_SM_600 60
++#  define _NV_TARGET_ARCH_TO_SM_610 61
++#  define _NV_TARGET_ARCH_TO_SM_620 62
++#  define _NV_TARGET_ARCH_TO_SM_700 70
++#  define _NV_TARGET_ARCH_TO_SM_720 72
++#  define _NV_TARGET_ARCH_TO_SM_750 75
++#  define _NV_TARGET_ARCH_TO_SM_800 80
++#  define _NV_TARGET_ARCH_TO_SM_860 86
++#  define _NV_TARGET_ARCH_TO_SM_870 87
++
++// Only enable when compiling for CUDA/stdpar
++#if defined(_NV_COMPILER_NVCXX) && defined(_NVHPC_CUDA)
++
++#  define _NV_TARGET_VAL_SM_35 nv::target::sm_35
++#  define _NV_TARGET_VAL_SM_37 nv::target::sm_37
++#  define _NV_TARGET_VAL_SM_50 nv::target::sm_50
++#  define _NV_TARGET_VAL_SM_52 nv::target::sm_52
++#  define _NV_TARGET_VAL_SM_53 nv::target::sm_53
++#  define _NV_TARGET_VAL_SM_60 nv::target::sm_60
++#  define _NV_TARGET_VAL_SM_61 nv::target::sm_61
++#  define _NV_TARGET_VAL_SM_62 nv::target::sm_62
++#  define _NV_TARGET_VAL_SM_70 nv::target::sm_70
++#  define _NV_TARGET_VAL_SM_72 nv::target::sm_72
++#  define _NV_TARGET_VAL_SM_75 nv::target::sm_75
++#  define _NV_TARGET_VAL_SM_80 nv::target::sm_80
++#  define _NV_TARGET_VAL_SM_86 nv::target::sm_86
++#  define _NV_TARGET_VAL_SM_87 nv::target::sm_87
++
++#  define _NV_TARGET___NV_IS_HOST nv::target::is_host
++#  define _NV_TARGET___NV_IS_DEVICE nv::target::is_device
++
++#  define _NV_TARGET___NV_ANY_TARGET (nv::target::any_target)
++#  define _NV_TARGET___NV_NO_TARGET (nv::target::no_target)
++
++#  if defined(NV_TARGET_SM_INTEGER_LIST)
++#    define NV_TARGET_MINIMUM_SM_SELECTOR _NV_FIRST_ARG(NV_TARGET_SM_SELECTOR_LIST)
++#    define NV_TARGET_MINIMUM_SM_INTEGER _NV_FIRST_ARG(NV_TARGET_SM_INTEGER_LIST)
++#    define __CUDA_MINIMUM_ARCH__ _NV_CONCAT_EVAL(_NV_FIRST_ARG(NV_TARGET_SM_INTEGER_LIST), 0)
++#  endif
++
++#  define _NV_TARGET_PROVIDES(q)   nv::target::provides(q)
++#  define _NV_TARGET_IS_EXACTLY(q) nv::target::is_exactly(q)
++
++#elif defined(_NV_COMPILER_NVCC) || defined (_NV_COMPILER_CLANG_CUDA)
++
++#  define _NV_TARGET_VAL_SM_35 350
++#  define _NV_TARGET_VAL_SM_37 370
++#  define _NV_TARGET_VAL_SM_50 500
++#  define _NV_TARGET_VAL_SM_52 520
++#  define _NV_TARGET_VAL_SM_53 530
++#  define _NV_TARGET_VAL_SM_60 600
++#  define _NV_TARGET_VAL_SM_61 610
++#  define _NV_TARGET_VAL_SM_62 620
++#  define _NV_TARGET_VAL_SM_70 700
++#  define _NV_TARGET_VAL_SM_72 720
++#  define _NV_TARGET_VAL_SM_75 750
++#  define _NV_TARGET_VAL_SM_80 800
++#  define _NV_TARGET_VAL_SM_86 860
++#  define _NV_TARGET_VAL_SM_87 870
++
++#  if defined(__CUDA_ARCH__)
++#    define _NV_TARGET_VAL __CUDA_ARCH__
++#    define NV_TARGET_MINIMUM_SM_SELECTOR _NV_CONCAT_EVAL(_NV_TARGET_ARCH_TO_SELECTOR_, __CUDA_ARCH__)
++#    define NV_TARGET_MINIMUM_SM_INTEGER _NV_CONCAT_EVAL(_NV_TARGET_ARCH_TO_SM_, __CUDA_ARCH__)
++#    define __CUDA_MINIMUM_ARCH__ __CUDA_ARCH__
++#  endif
++
++#  if defined(__CUDA_ARCH__)
++#    define _NV_TARGET_IS_HOST   0
++#    define _NV_TARGET_IS_DEVICE 1
++#  else
++#    define _NV_TARGET_IS_HOST   1
++#    define _NV_TARGET_IS_DEVICE 0
++#  endif
++
++#  if defined(_NV_TARGET_VAL)
++#    define _NV_DEVICE_CHECK(q) (q)
++#  else
++#    define _NV_DEVICE_CHECK(q) (0)
++#  endif
++
++#  define _NV_TARGET_PROVIDES(q)   _NV_DEVICE_CHECK(_NV_TARGET_VAL >= q)
++#  define _NV_TARGET_IS_EXACTLY(q) _NV_DEVICE_CHECK(_NV_TARGET_VAL == q)
++
++// NVCC/NVCXX not being used, only host dispatches allowed
++#else
++
++#  define _NV_COMPILER_NVCC
++
++#  define _NV_TARGET_VAL_SM_35 350
++#  define _NV_TARGET_VAL_SM_37 370
++#  define _NV_TARGET_VAL_SM_50 500
++#  define _NV_TARGET_VAL_SM_52 520
++#  define _NV_TARGET_VAL_SM_53 530
++#  define _NV_TARGET_VAL_SM_60 600
++#  define _NV_TARGET_VAL_SM_61 610
++#  define _NV_TARGET_VAL_SM_62 620
++#  define _NV_TARGET_VAL_SM_70 700
++#  define _NV_TARGET_VAL_SM_72 720
++#  define _NV_TARGET_VAL_SM_75 750
++#  define _NV_TARGET_VAL_SM_80 800
++#  define _NV_TARGET_VAL_SM_86 860
++#  define _NV_TARGET_VAL_SM_87 870
++
++#  define _NV_TARGET_VAL 0
++
++#  define _NV_TARGET_IS_HOST   1
++#  define _NV_TARGET_IS_DEVICE 0
++
++#  define _NV_DEVICE_CHECK(q) (false)
++
++#  define _NV_TARGET_PROVIDES(q)   _NV_DEVICE_CHECK(_NV_TARGET_VAL >= q)
++#  define _NV_TARGET_IS_EXACTLY(q) _NV_DEVICE_CHECK(_NV_TARGET_VAL == q)
++
++#endif
++
++#define _NV_TARGET___NV_PROVIDES_SM_35 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_35))
++#define _NV_TARGET___NV_PROVIDES_SM_37 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_37))
++#define _NV_TARGET___NV_PROVIDES_SM_50 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_50))
++#define _NV_TARGET___NV_PROVIDES_SM_52 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_52))
++#define _NV_TARGET___NV_PROVIDES_SM_53 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_53))
++#define _NV_TARGET___NV_PROVIDES_SM_60 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_60))
++#define _NV_TARGET___NV_PROVIDES_SM_61 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_61))
++#define _NV_TARGET___NV_PROVIDES_SM_62 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_62))
++#define _NV_TARGET___NV_PROVIDES_SM_70 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_70))
++#define _NV_TARGET___NV_PROVIDES_SM_72 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_72))
++#define _NV_TARGET___NV_PROVIDES_SM_75 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_75))
++#define _NV_TARGET___NV_PROVIDES_SM_80 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_80))
++#define _NV_TARGET___NV_PROVIDES_SM_86 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_86))
++#define _NV_TARGET___NV_PROVIDES_SM_87 (_NV_TARGET_PROVIDES(_NV_TARGET_VAL_SM_87))
++
++#define _NV_TARGET___NV_IS_EXACTLY_SM_35 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_35))
++#define _NV_TARGET___NV_IS_EXACTLY_SM_37 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_37))
++#define _NV_TARGET___NV_IS_EXACTLY_SM_50 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_50))
++#define _NV_TARGET___NV_IS_EXACTLY_SM_52 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_52))
++#define _NV_TARGET___NV_IS_EXACTLY_SM_53 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_53))
++#define _NV_TARGET___NV_IS_EXACTLY_SM_60 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_60))
++#define _NV_TARGET___NV_IS_EXACTLY_SM_61 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_61))
++#define _NV_TARGET___NV_IS_EXACTLY_SM_62 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_62))
++#define _NV_TARGET___NV_IS_EXACTLY_SM_70 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_70))
++#define _NV_TARGET___NV_IS_EXACTLY_SM_72 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_72))
++#define _NV_TARGET___NV_IS_EXACTLY_SM_75 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_75))
++#define _NV_TARGET___NV_IS_EXACTLY_SM_80 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_80))
++#define _NV_TARGET___NV_IS_EXACTLY_SM_86 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_86))
++#define _NV_TARGET___NV_IS_EXACTLY_SM_87 (_NV_TARGET_IS_EXACTLY(_NV_TARGET_VAL_SM_87))
++
++#define NV_PROVIDES_SM_35   __NV_PROVIDES_SM_35
++#define NV_PROVIDES_SM_37   __NV_PROVIDES_SM_37
++#define NV_PROVIDES_SM_50   __NV_PROVIDES_SM_50
++#define NV_PROVIDES_SM_52   __NV_PROVIDES_SM_52
++#define NV_PROVIDES_SM_53   __NV_PROVIDES_SM_53
++#define NV_PROVIDES_SM_60   __NV_PROVIDES_SM_60
++#define NV_PROVIDES_SM_61   __NV_PROVIDES_SM_61
++#define NV_PROVIDES_SM_62   __NV_PROVIDES_SM_62
++#define NV_PROVIDES_SM_70   __NV_PROVIDES_SM_70
++#define NV_PROVIDES_SM_72   __NV_PROVIDES_SM_72
++#define NV_PROVIDES_SM_75   __NV_PROVIDES_SM_75
++#define NV_PROVIDES_SM_80   __NV_PROVIDES_SM_80
++#define NV_PROVIDES_SM_86   __NV_PROVIDES_SM_86
++#define NV_PROVIDES_SM_87   __NV_PROVIDES_SM_87
++
++#define NV_IS_EXACTLY_SM_35 __NV_IS_EXACTLY_SM_35
++#define NV_IS_EXACTLY_SM_37 __NV_IS_EXACTLY_SM_37
++#define NV_IS_EXACTLY_SM_50 __NV_IS_EXACTLY_SM_50
++#define NV_IS_EXACTLY_SM_52 __NV_IS_EXACTLY_SM_52
++#define NV_IS_EXACTLY_SM_53 __NV_IS_EXACTLY_SM_53
++#define NV_IS_EXACTLY_SM_60 __NV_IS_EXACTLY_SM_60
++#define NV_IS_EXACTLY_SM_61 __NV_IS_EXACTLY_SM_61
++#define NV_IS_EXACTLY_SM_62 __NV_IS_EXACTLY_SM_62
++#define NV_IS_EXACTLY_SM_70 __NV_IS_EXACTLY_SM_70
++#define NV_IS_EXACTLY_SM_72 __NV_IS_EXACTLY_SM_72
++#define NV_IS_EXACTLY_SM_75 __NV_IS_EXACTLY_SM_75
++#define NV_IS_EXACTLY_SM_80 __NV_IS_EXACTLY_SM_80
++#define NV_IS_EXACTLY_SM_86 __NV_IS_EXACTLY_SM_86
++#define NV_IS_EXACTLY_SM_87 __NV_IS_EXACTLY_SM_87
++
++#define NV_IS_HOST         __NV_IS_HOST
++#define NV_IS_DEVICE       __NV_IS_DEVICE
++
++#define NV_ANY_TARGET      __NV_ANY_TARGET
++#define NV_NO_TARGET       __NV_NO_TARGET
++
++// Platform invoke mechanisms
++#if defined(_NV_COMPILER_NVCXX) && defined(_NVHPC_CUDA)
++
++#  define _NV_ARCH_COND(q) (_NV_TARGET_##q)
++
++#  define _NV_BLOCK_EXPAND(...) _NV_REMOVE_PAREN(__VA_ARGS__)
++
++#  define _NV_TARGET_IF(cond, t, ...) \
++    (if target _NV_ARCH_COND(cond) {    \
++      _NV_BLOCK_EXPAND(t)        \
++    } else { _NV_BLOCK_EXPAND(__VA_ARGS__) })
++
++#elif defined(_NV_COMPILER_NVCC) || defined (_NV_COMPILER_CLANG_CUDA)
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_35)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_35 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_35 0
++#  endif
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_37)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_37 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_37 0
++#  endif
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_50)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_50 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_50 0
++#  endif
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_52)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_52 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_52 0
++#  endif
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_53)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_53 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_53 0
++#  endif
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_60)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_60 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_60 0
++#  endif
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_61)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_61 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_61 0
++#  endif
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_62)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_62 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_62 0
++#  endif
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_70)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_70 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_70 0
++#  endif
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_72)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_72 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_72 0
++#  endif
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_75)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_75 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_75 0
++#  endif
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_80)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_80 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_80 0
++#  endif
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_86)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_86 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_86 0
++#  endif
++
++#  if (_NV_TARGET___NV_IS_EXACTLY_SM_87)
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_87 1
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_EXACTLY_SM_87 0
++#  endif
++
++#  if (_NV_TARGET_IS_HOST)
++#    define _NV_TARGET_BOOL___NV_IS_HOST   1
++#    define _NV_TARGET_BOOL___NV_IS_DEVICE 0
++#  else
++#    define _NV_TARGET_BOOL___NV_IS_HOST   0
++#    define _NV_TARGET_BOOL___NV_IS_DEVICE 1
++#  endif
++
++#  define _NV_TARGET_BOOL___NV_ANY_TARGET 1
++#  define _NV_TARGET_BOOL___NV_NO_TARGET 0
++
++// NVCC Greater than stuff
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_35)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_35 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_35 0
++#  endif
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_37)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_37 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_37 0
++#  endif
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_50)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_50 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_50 0
++#  endif
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_52)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_52 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_52 0
++#  endif
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_53)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_53 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_53 0
++#  endif
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_60)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_60 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_60 0
++#  endif
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_61)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_61 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_61 0
++#  endif
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_62)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_62 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_62 0
++#  endif
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_70)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_70 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_70 0
++#  endif
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_72)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_72 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_72 0
++#  endif
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_75)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_75 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_75 0
++#  endif
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_80)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_80 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_80 0
++#  endif
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_86)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_86 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_86 0
++#  endif
++
++#  if (_NV_TARGET___NV_PROVIDES_SM_87)
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_87 1
++#  else
++#    define _NV_TARGET_BOOL___NV_PROVIDES_SM_87 0
++#  endif
++
++#  define _NV_ARCH_COND_CAT1(cond) _NV_TARGET_BOOL_##cond
++#  define _NV_ARCH_COND_CAT(cond) _NV_EVAL(_NV_ARCH_COND_CAT1(cond))
++
++#    define _NV_TARGET_EMPTY_PARAM ;
++
++#  if defined(_NV_TARGET_CPP11)
++
++#    define _NV_BLOCK_EXPAND(...) { _NV_REMOVE_PAREN(__VA_ARGS__) }
++#    define _NV_TARGET_IF(cond, t, ...) _NV_IF( _NV_ARCH_COND_CAT(cond), t, __VA_ARGS__)
++
++#  else // <C++11 fallback
++
++#    define _NV_BLOCK_EXPAND(x) { x }
++
++#    define _NV_TARGET_IF(cond, t)         _NV_IF(_NV_ARCH_COND_CAT(cond), t, _NV_TARGET_EMPTY_PARAM)
++#    define _NV_TARGET_IF_ELSE(cond, t, f) _NV_IF(_NV_ARCH_COND_CAT(cond), t, f)
++
++#  endif
++
++#endif // _NV_COMPILER_NVCC
++
++#if defined(_NV_TARGET_CPP11)
++
++#  define _NV_TARGET_DISPATCH_HANDLE0()
++#  define _NV_TARGET_DISPATCH_HANDLE2(q, fn)        _NV_TARGET_IF(q, fn)
++#  define _NV_TARGET_DISPATCH_HANDLE4(q, fn, ...)   _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE2(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE6(q, fn, ...)   _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE4(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE8(q, fn, ...)   _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE6(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE10(q, fn, ...)  _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE8(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE12(q, fn, ...)  _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE10(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE14(q, fn, ...)  _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE12(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE16(q, fn, ...)  _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE14(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE18(q, fn, ...)  _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE16(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE20(q, fn, ...)  _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE18(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE22(q, fn, ...)  _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE20(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE24(q, fn, ...)  _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE22(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE26(q, fn, ...)  _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE24(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE28(q, fn, ...)  _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE26(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE30(q, fn, ...)  _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE28(__VA_ARGS__))
++#  define _NV_TARGET_DISPATCH_HANDLE32(q, fn, ...)  _NV_TARGET_IF(q, fn, _NV_TARGET_DISPATCH_HANDLE30(__VA_ARGS__))
++
++#  define _NV_TARGET_DISPATCH(...) _NV_BLOCK_EXPAND(_NV_DISPATCH_N_ARY(_NV_TARGET_DISPATCH_HANDLE, __VA_ARGS__))
++
++// NV_IF_TARGET supports a false statement provided as a variadic macro
++#  define NV_IF_TARGET(cond, ...)    _NV_BLOCK_EXPAND(_NV_TARGET_IF(cond, __VA_ARGS__))
++#  define NV_IF_ELSE_TARGET(cond, t, f) _NV_BLOCK_EXPAND(_NV_TARGET_IF(cond, t, f))
++#  define NV_DISPATCH_TARGET(...)       _NV_TARGET_DISPATCH(__VA_ARGS__)
++
++#else // <C++11 fallback
++
++// NV_IF_TARGET does not support a fallback false statement in C++03 or C dialects
++#  define NV_IF_TARGET(cond, t)         _NV_BLOCK_EXPAND(_NV_TARGET_IF(cond, t))
++#  define NV_IF_ELSE_TARGET(cond, t, f) _NV_BLOCK_EXPAND(_NV_TARGET_IF_ELSE(cond, t, f))
++
++#endif
++
++#endif // _NV__TARGET_MACROS
+\ No newline at end of file
+diff --git a/include/cuco/detail/nv/target b/include/cuco/detail/nv/target
+new file mode 100644
+index 0000000..f199ee7
+--- /dev/null
++++ b/include/cuco/detail/nv/target
+@@ -0,0 +1,201 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of libcu++, the C++ Standard Library for your entire system,
++// under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++// This header contains a preview of a portability system that enables
++// CUDA C++ development with NVC++, NVCC, and supported host compilers.
++// These interfaces are not guaranteed to be stable.
++
++#ifndef __NV_TARGET_H
++#define __NV_TARGET_H
++
++#if defined(__NVCC__) || defined(__CUDACC_RTC__)
++#  define _NV_COMPILER_NVCC
++#elif defined(__NVCOMPILER) && __cplusplus >= 201103L
++#  define _NV_COMPILER_NVCXX
++#elif defined(__clang__) && defined(__CUDA__) && defined(__CUDA_ARCH__)
++// clang compiling CUDA code, device mode.
++#  define _NV_COMPILER_CLANG_CUDA
++#endif
++
++#if defined(__CUDACC_RTC__)
++#  define _NV_FUNCTION_ANNOTATION __device__
++#else
++#  define _NV_FUNCTION_ANNOTATION
++#endif
++
++#if defined(_NV_COMPILER_NVCXX)
++#  define _NV_BITSET_ATTRIBUTE [[nv::__target_bitset]]
++#else
++#  define _NV_BITSET_ATTRIBUTE
++#endif
++
++#if (!defined(__ibmxl__)) && \
++    ((defined(__cplusplus) && __cplusplus >= 201103L) || \
++     (defined(_MSC_VER) && _MSVC_LANG >= 201103L))
++#  define _NV_TARGET_CPP11
++#endif
++
++#if defined(_NV_TARGET_CPP11)
++
++namespace nv {
++  namespace target {
++    namespace detail {
++
++      typedef unsigned long long base_int_t;
++
++      // No host specialization
++      constexpr base_int_t all_hosts = 1;
++
++      // NVIDIA GPUs
++      constexpr base_int_t sm_35_bit = 1 << 1;
++      constexpr base_int_t sm_37_bit = 1 << 2;
++      constexpr base_int_t sm_50_bit = 1 << 3;
++      constexpr base_int_t sm_52_bit = 1 << 4;
++      constexpr base_int_t sm_53_bit = 1 << 5;
++      constexpr base_int_t sm_60_bit = 1 << 6;
++      constexpr base_int_t sm_61_bit = 1 << 7;
++      constexpr base_int_t sm_62_bit = 1 << 8;
++      constexpr base_int_t sm_70_bit = 1 << 9;
++      constexpr base_int_t sm_72_bit = 1 << 10;
++      constexpr base_int_t sm_75_bit = 1 << 11;
++      constexpr base_int_t sm_80_bit = 1 << 12;
++      constexpr base_int_t sm_86_bit = 1 << 13;
++      constexpr base_int_t sm_87_bit = 1 << 14;
++      constexpr base_int_t all_devices =
++          sm_35_bit | sm_37_bit |
++          sm_50_bit | sm_52_bit | sm_53_bit |
++          sm_60_bit | sm_61_bit | sm_62_bit |
++          sm_70_bit | sm_72_bit | sm_75_bit |
++          sm_80_bit | sm_86_bit | sm_87_bit;
++
++      // Store a set of targets as a set of bits
++      struct _NV_BITSET_ATTRIBUTE target_description {
++        base_int_t targets;
++        _NV_FUNCTION_ANNOTATION
++        constexpr target_description(base_int_t a) : targets(a) { }
++      };
++
++      // The type of the user-visible names of the NVIDIA GPU targets
++      enum class sm_selector : base_int_t {
++        sm_35 = 35, sm_37 = 37,
++        sm_50 = 50, sm_52 = 52, sm_53 = 53,
++        sm_60 = 60, sm_61 = 61, sm_62 = 62,
++        sm_70 = 70, sm_72 = 72, sm_75 = 75,
++        sm_80 = 80, sm_86 = 86, sm_87 = 87,
++      };
++      _NV_FUNCTION_ANNOTATION
++      constexpr base_int_t toint(sm_selector a) {
++        return static_cast<base_int_t>(a);
++      }
++      _NV_FUNCTION_ANNOTATION
++      constexpr base_int_t bitexact(sm_selector a) {
++        return toint(a) == 35 ? sm_35_bit :
++               toint(a) == 37 ? sm_37_bit :
++               toint(a) == 50 ? sm_50_bit :
++               toint(a) == 52 ? sm_52_bit :
++               toint(a) == 53 ? sm_53_bit :
++               toint(a) == 60 ? sm_60_bit :
++               toint(a) == 61 ? sm_61_bit :
++               toint(a) == 62 ? sm_62_bit :
++               toint(a) == 70 ? sm_70_bit :
++               toint(a) == 72 ? sm_72_bit :
++               toint(a) == 75 ? sm_75_bit :
++               toint(a) == 80 ? sm_80_bit :
++               toint(a) == 86 ? sm_86_bit :
++               toint(a) == 87 ? sm_87_bit : 0;
++      }
++      _NV_FUNCTION_ANNOTATION
++      constexpr base_int_t bitrounddown(sm_selector a) {
++        return toint(a) >= 87 ? sm_87_bit :
++               toint(a) >= 86 ? sm_86_bit :
++               toint(a) >= 80 ? sm_80_bit :
++               toint(a) >= 75 ? sm_75_bit :
++               toint(a) >= 72 ? sm_72_bit :
++               toint(a) >= 70 ? sm_70_bit :
++               toint(a) >= 62 ? sm_62_bit :
++               toint(a) >= 61 ? sm_61_bit :
++               toint(a) >= 60 ? sm_60_bit :
++               toint(a) >= 53 ? sm_53_bit :
++               toint(a) >= 52 ? sm_52_bit :
++               toint(a) >= 50 ? sm_50_bit :
++               toint(a) >= 37 ? sm_37_bit :
++               toint(a) >= 35 ? sm_35_bit : 0;
++      }
++
++      // Public API for NVIDIA GPUs
++
++      _NV_FUNCTION_ANNOTATION
++      constexpr target_description is_exactly(sm_selector a) {
++        return target_description(bitexact(a));
++      }
++
++      _NV_FUNCTION_ANNOTATION
++      constexpr target_description provides(sm_selector a) {
++        return target_description(~(bitrounddown(a) - 1) & all_devices);
++      }
++
++      // Boolean operations on target sets
++
++      _NV_FUNCTION_ANNOTATION
++      constexpr target_description operator&&(target_description a,
++                                              target_description b) {
++        return target_description(a.targets & b.targets);
++      }
++
++      _NV_FUNCTION_ANNOTATION
++      constexpr target_description operator||(target_description a,
++                                              target_description b) {
++        return target_description(a.targets | b.targets);
++      }
++
++      _NV_FUNCTION_ANNOTATION
++      constexpr target_description operator!(target_description a) {
++        return target_description(~a.targets & (all_devices | all_hosts));
++      }
++    }
++
++    using detail::target_description;
++    using detail::sm_selector;
++
++    // The predicates for basic host/device selection
++    constexpr target_description is_host =
++      target_description(detail::all_hosts);
++    constexpr target_description is_device =
++      target_description(detail::all_devices);
++    constexpr target_description any_target =
++      target_description(detail::all_hosts | detail::all_devices);
++    constexpr target_description no_target =
++      target_description(0);
++
++    // The public names for NVIDIA GPU architectures
++    constexpr sm_selector sm_35 = sm_selector::sm_35;
++    constexpr sm_selector sm_37 = sm_selector::sm_37;
++    constexpr sm_selector sm_50 = sm_selector::sm_50;
++    constexpr sm_selector sm_52 = sm_selector::sm_52;
++    constexpr sm_selector sm_53 = sm_selector::sm_53;
++    constexpr sm_selector sm_60 = sm_selector::sm_60;
++    constexpr sm_selector sm_61 = sm_selector::sm_61;
++    constexpr sm_selector sm_62 = sm_selector::sm_62;
++    constexpr sm_selector sm_70 = sm_selector::sm_70;
++    constexpr sm_selector sm_72 = sm_selector::sm_72;
++    constexpr sm_selector sm_75 = sm_selector::sm_75;
++    constexpr sm_selector sm_80 = sm_selector::sm_80;
++    constexpr sm_selector sm_86 = sm_selector::sm_86;
++    constexpr sm_selector sm_87 = sm_selector::sm_87;
++
++    using detail::is_exactly;
++    using detail::provides;
++  }
++}
++
++#endif // C++11
++
++#include "detail/__target_macros"
++
++#endif // __NV_TARGET_H
+\ No newline at end of file
+diff --git a/include/cuco/detail/pair.cuh b/include/cuco/detail/pair.cuh
+index 7ea3988..846728b 100644
+--- a/include/cuco/detail/pair.cuh
++++ b/include/cuco/detail/pair.cuh
+@@ -24,6 +24,39 @@
+ #include <algorithm>
+ #include <tuple>
+ #include <type_traits>
++namespace std {
++template <class...>
++using void_t = void;
++
++template <bool B>
++using bool_constant = std::integral_constant<bool, B>;
++
++template <typename _Tp>
++struct has_unique_object_representations : bool_constant<__has_unique_object_representations(std::remove_cv_t<std::remove_all_extents_t<_Tp>>)> {};
++
++template <class T>
++inline constexpr bool has_unique_object_representations_v = has_unique_object_representations<T>::value;
++
++// Fangzhou Ai @ 2022/07/07 3:28 PM PST
++// This deprecated function cast is for older veriosn of cuCollection
++// template< class From, class To >
++// inline constexpr bool is_convertible_v = is_convertible<From, To>::value;
++
++template <typename Key, typename ProbeKey, typename KeyEqual>
++struct is_invocable :
++    std::is_constructible<
++        std::function<void(ProbeKey, KeyEqual)>,
++        std::reference_wrapper<typename std::remove_reference<Key>::type>
++    >
++{
++};
++
++template <typename Key, typename ProbeKey, typename KeyEqual>
++inline constexpr bool is_invocable_v = is_invocable<Key, ProbeKey, KeyEqual>::value;
++
++template <typename Base, typename Derived>
++inline constexpr bool is_base_of_v = is_base_of<Base, Derived>::value;
++} // namespace std
+ 
+ namespace cuco {
+ namespace detail {
+diff --git a/include/cuco/detail/static_map.inl b/include/cuco/detail/static_map.inl
+index 09e9d05..4fb2d8f 100644
+--- a/include/cuco/detail/static_map.inl
++++ b/include/cuco/detail/static_map.inl
+@@ -275,6 +275,42 @@ void static_map<Key, Value, Scope, Allocator>::contains(InputIt first,
+   detail::contains<block_size, tile_size>
+     <<<grid_size, block_size, 0, stream>>>(first, last, output_begin, view, hash, key_equal);
+ }
++template <typename Key, typename Value, cuda::thread_scope Scope, typename Allocator>
++template <typename Hash,
++          typename KeyEqual>
++void static_map<Key, Value, Scope, Allocator>::rehash(
++  size_t new_capacity,
++  Hash hash,
++  KeyEqual key_equal,
++  cudaStream_t stream) {
++  
++  auto* new_slots = std::allocator_traits<slot_allocator_type>::allocate(slot_allocator_, new_capacity);
++  // initialize new map
++  auto constexpr block_size = 512;
++  auto grid_size  = (new_capacity + block_size - 1) / block_size;
++  detail::initialize<block_size, atomic_key_type, atomic_mapped_type>
++  <<<grid_size, block_size, 0, stream>>>(
++    new_slots, empty_key_sentinel_, empty_value_sentinel_, new_capacity);
++
++  // insert k/v pair from old map to new map
++  grid_size  = (capacity_ + block_size - 1) / block_size;
++  auto view = device_mutable_view{
++    new_slots,
++    new_capacity,
++    sentinel::empty_key<Key>{empty_key_sentinel_},
++    sentinel::empty_value<Value>{empty_value_sentinel_},
++    sentinel::erased_key<Key>{erased_key_sentinel_}
++  };
++  detail::rehash<block_size>
++    <<<grid_size, block_size, 0, stream>>>(
++      slots_, slots_ + capacity_, view, hash, key_equal);
++  CUCO_CUDA_TRY(cudaStreamSynchronize(stream));
++
++  // free old map and replace old map ptr with new map ptr
++  std::allocator_traits<slot_allocator_type>::deallocate(slot_allocator_, slots_, capacity_);
++  slots_ = new_slots; 
++  capacity_ = new_capacity;
++}
+ 
+ template <typename Key, typename Value, cuda::thread_scope Scope, typename Allocator>
+ template <typename KeyEqual>
+@@ -512,6 +548,81 @@ __device__
+   }
+ }
+ 
++template <typename Key, typename Value, cuda::thread_scope Scope, typename Allocator>
++template <typename CG,
++          typename atomicT, 
++          typename Hash,
++          typename KeyEqual>
++__device__ Value 
++  static_map<Key, Value, Scope, Allocator>::device_mutable_view::insert_and_find_inc(
++  CG const& g, Key const& key, atomicT* start_idx, const Value* avai_idx, size_t avai_idx_size, Value next_empty_idx, Hash hash, KeyEqual key_equal) noexcept
++{
++#if __CUDA_ARCH__ < 700
++  // Spinning to ensure that the write to the value part took place requires
++  // independent thread scheduling introduced with the Volta architecture.
++  static_assert(cuco::detail::is_packable<value_type>(),
++                "insert_and_find is not supported for unpackable data on pre-Volta GPUs.");
++#endif
++
++  auto current_slot{initial_slot(g, key, hash)};
++  auto const empty_value = this->get_empty_value_sentinel();
++  while (true) {
++    key_type const existing_key = current_slot->first.load(cuda::std::memory_order_relaxed);
++    // The user provide `key_equal` can never be used to compare against `empty_key_sentinel` as the
++    // sentinel is not a valid key value. Therefore, first check for the sentinel
++    auto const slot_is_available =
++      detail::bitwise_compare(existing_key, this->get_empty_key_sentinel()) or
++      detail::bitwise_compare(existing_key, this->get_erased_key_sentinel());
++    auto const if_key_equal = key_equal(existing_key, key);
++    // the key we are trying to insert is already in the map, so we just load the value
++    if (g.any(not slot_is_available and if_key_equal)) {
++      // In case another thread is currently inserting at this slot, wait for it to finish
++      auto src_lane = __ffs(g.ballot(if_key_equal)) - 1;
++      Value val;
++      if (g.thread_rank() == src_lane) {
++        auto& slot_value = current_slot->second;
++        while (detail::bitwise_compare(
++          val = slot_value.load(cuda::std::memory_order_relaxed), empty_value));
++      }
++      return g.shfl(val, src_lane);
++    }
++
++    auto const window_contains_available = g.ballot(slot_is_available);
++    if (window_contains_available) {
++      auto src_lane = __ffs(window_contains_available) - 1;
++      Value val = empty_value;
++      if (g.thread_rank() == src_lane) {
++        auto existing_key_copy = existing_key;
++        auto const key_success =
++          current_slot->first.compare_exchange_strong(existing_key_copy, key, cuda::std::memory_order_relaxed);
++        if (key_success) {
++          // successful insert
++          auto idx = start_idx->fetch_add(1, cuda::std::memory_order_relaxed);
++          val = (idx >= avai_idx_size) ? next_empty_idx + (idx - avai_idx_size) : avai_idx[avai_idx_size - idx - 1];
++          current_slot->second.store(val, cuda::std::memory_order_relaxed);
++        } else if (key_equal(key, existing_key_copy)) {
++          // duplicate present during insert
++          // another thread is currently inserting at this slot. Wait for it to finish
++          auto& slot_value = current_slot->second;
++          while (detail::bitwise_compare(
++            val = slot_value.load(cuda::std::memory_order_relaxed), empty_value));
++        }
++      }
++      auto g_val = g.shfl(val, src_lane);
++      if (!detail::bitwise_compare(g_val, empty_value)) {
++        return g_val;
++      }
++      // if we've gotten this far, a different key took our spot
++      // before we could insert. We need to retry the insert on the
++      // same window
++    } else {
++      // if we couldn't insert the key, but it wasn't a duplicate, then there must
++      // have been some other key there, so we keep looking for a slot
++      current_slot = next_slot(g, current_slot);
++    }
++  }
++}
++
+ template <typename Key, typename Value, cuda::thread_scope Scope, typename Allocator>
+ template <typename CG, typename Hash, typename KeyEqual>
+ __device__ bool static_map<Key, Value, Scope, Allocator>::device_mutable_view::insert(
+diff --git a/include/cuco/detail/static_map_kernels.cuh b/include/cuco/detail/static_map_kernels.cuh
+index 7a3ca0d..77d8337 100644
+--- a/include/cuco/detail/static_map_kernels.cuh
++++ b/include/cuco/detail/static_map_kernels.cuh
+@@ -20,6 +20,8 @@
+ #include <cuda/std/atomic>
+ 
+ #include <cooperative_groups.h>
++#include <cuco/traits.hpp>
++#include <cuco/detail/bitwise_compare.cuh>
+ 
+ namespace cuco {
+ namespace detail {
+@@ -528,5 +530,28 @@ __global__ void contains(
+   }
+ }
+ 
+-}  // namespace detail
+-}  // namespace cuco
++template <std::size_t block_size,
++          typename InputIt,
++          typename viewT,
++          typename Hash,
++          typename KeyEqual>
++__global__ void rehash(
++  InputIt first, InputIt last, viewT view, Hash hash, KeyEqual key_equal)
++{
++  auto tid = block_size * blockIdx.x + threadIdx.x;
++  auto it  = first + tid;
++
++  while (it < last) {
++    auto key = it->first.load(cuda::std::memory_order_relaxed);
++    auto const slot_empty =
++      bitwise_compare(key, view.get_empty_key_sentinel()) or
++      bitwise_compare(key, view.get_erased_key_sentinel());
++    
++    if (!slot_empty) {
++      view.insert(*it, hash, key_equal);
++    }
++    it += gridDim.x * block_size;
++  }
++}
++} // namespace detail
++} // namespace cuco
+diff --git a/include/cuco/static_map.cuh b/include/cuco/static_map.cuh
+index 1daad99..23e5910 100644
+--- a/include/cuco/static_map.cuh
++++ b/include/cuco/static_map.cuh
+@@ -416,6 +416,13 @@ class static_map {
+                 KeyEqual key_equal  = KeyEqual{},
+                 cudaStream_t stream = 0) const;
+ 
++  template <typename Hash     = cuco::detail::MurmurHash3_32<key_type>,
++            typename KeyEqual = thrust::equal_to<key_type>>
++  void rehash(size_t new_capacity,
++              Hash hash           = Hash{},
++              KeyEqual key_equal  = KeyEqual{},
++              cudaStream_t stream = 0);
++
+  private:
+   class device_view_base {
+    protected:
+@@ -966,6 +973,12 @@ class static_map {
+     __device__ thrust::pair<iterator, bool> insert_and_find(
+       value_type const& insert_pair, Hash hash = Hash{}, KeyEqual key_equal = KeyEqual{}) noexcept;
+ 
++    template <typename CG,
++              typename atomicT,
++              typename Hash     = cuco::detail::MurmurHash3_32<key_type>,
++              typename KeyEqual = thrust::equal_to<key_type>>
++    __device__ Value insert_and_find_inc(
++      CG const& g, Key const& key, atomicT* start_idx, const Value* avai_idx, size_t avai_idx_size, Value next_empty_idx, Hash hash = Hash{}, KeyEqual key_equal = KeyEqual{}) noexcept;
+     /**
+      * @brief Inserts the specified key/value pair into the map.
+      *
+@@ -1357,6 +1370,7 @@ class static_map {
+    * @return The number of elements in the map
+    */
+   std::size_t get_size() const noexcept { return size_; }
++  std::size_t& get_size() noexcept { return size_; }
+ 
+   /**
+    * @brief Gets the load factor of the hash map.
+diff --git a/include/cuco/traits.hpp b/include/cuco/traits.hpp
+index 445a40d..07fe954 100644
+--- a/include/cuco/traits.hpp
++++ b/include/cuco/traits.hpp
+@@ -17,6 +17,7 @@
+ #pragma once
+ 
+ #include <type_traits>
++#include <cuco/detail/pair.cuh>
+ 
+ namespace cuco {
+ 

@@ -1,0 +1,20 @@
+"root":
+"feature":
+0:
+"fid":
+0: "1"
+"name": "fc_a"
+1:
+"fid":
+0: "2"
+"name": "fc_b"
+2:
+"fid":
+0: "3"
+1: "4"
+label":
+0: 0
+1: 1
+"line_id":
+"actions":
+0: 1

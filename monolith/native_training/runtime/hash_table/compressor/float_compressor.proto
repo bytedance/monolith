@@ -1,0 +1,50 @@
+// Copyright 2022 ByteDance and/or its affiliates.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto2";
+
+package monolith.hash_table;
+
+message FloatCompressorConfig {
+  // Not compressed. Useful in the test.
+  message Fp32 {
+    optional int32 dim_size = 1;
+  }
+
+  // Using half-precision floating-point format.
+  message Fp16 {
+    optional int32 dim_size = 1;
+  }
+  // Corresponding to qat8 in Bytedance PS.
+  message FixedR8 {
+    optional int32 dim_size = 1;
+    optional float r = 2 [default = 1.0];
+  }
+
+  // HashNet
+  message OneBit {
+    optional int32 dim_size = 1;
+    optional int64 step_size = 2 [default = 200];
+    optional float init_scale = 3 [default = 1.0];
+    optional float max_scale = 4 [default = 10000.0];
+    optional float amplitude = 5 [default = 0.1];
+  }
+
+  oneof type {
+    Fp32 fp32 = 1;
+    Fp16 fp16 = 2;
+    FixedR8 fixed_r8 = 3;
+    OneBit one_bit = 4;
+  }
+}

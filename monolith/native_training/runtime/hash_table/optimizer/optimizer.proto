@@ -1,0 +1,236 @@
+// Copyright 2022 ByteDance and/or its affiliates.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto2";
+
+package monolith.hash_table;
+
+message AdagradOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float learning_rate = 2 [default = 0.001];
+  optional float initial_accumulator_value = 3 [default = 0.1];
+  optional int32 hessian_compression_times = 4 [default = 1];
+  optional float weight_decay_factor = 5 [default = 0.];
+  optional int64 warmup_steps = 6 [default = 0];
+}
+
+message AdagradOptimizerDump {
+  repeated float norm = 1;
+}
+
+message DynamicWdAdagradOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float learning_rate = 2 [default = 0.001];
+  optional float initial_accumulator_value = 3 [default = 0.1];
+  optional int32 hessian_compression_times = 4 [default = 1];
+  optional float weight_decay_factor = 5 [default = 0.];
+  optional int64 warmup_steps = 6 [default = 0];
+  optional bool decouple_weight_decay = 7 [default = false];
+  optional bool enable_dynamic_wd = 8 [default = false];
+  optional float dynamic_wd_temperature = 9 [default = 1.0];
+  optional bool flip_direction = 10 [default = false];
+}
+
+message DynamicWdAdagradOptimizerDump {
+  repeated float norm = 1;
+  optional int64 last_update_step = 2;
+}
+
+message SgdOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float learning_rate = 2 [default = 0.01];
+  optional int64 warmup_steps = 6 [default = 0];
+}
+
+message SgdOptimizerDump {
+}
+
+message FtrlOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float learning_rate = 2 [default = 0.01];
+  optional float beta = 3 [default = 0.0];
+  optional float initial_accumulator_value = 4 [default = 0.1];
+  optional float l1_regularization_strength = 5 [default = 0.0];
+  optional float l2_regularization_strength = 6 [default = 0.0];
+  optional int64 warmup_steps = 7 [default = 0];
+}
+
+message FtrlOptimizerDump {
+  repeated float zero = 1;
+  repeated float norm = 2;
+}
+
+message GroupFtrlOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float learning_rate = 2 [default = 0.01];
+  optional float beta = 3 [default = 1.0];
+  optional float initial_accumulator_value = 4 [default = 0.0];
+
+  optional float l1_regularization_strength = 5 [default = 0.0];
+  optional float l2_regularization_strength = 6 [default = 0.0];
+  optional int64 warmup_steps = 7 [default = 0];
+}
+
+message GroupFtrlOptimizerDump {
+  repeated float zero = 1;
+  repeated float norm = 2;
+}
+
+message AdadeltaOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float learning_rate = 2 [default = 0.01];
+  optional float weight_decay_factor = 3 [default = 0.];
+  optional float averaging_ratio = 4 [default = 0.9];
+  optional float epsilon = 5 [default = 0.01];
+  optional int64 warmup_steps = 7 [default = 0];
+}
+
+message AdadeltaOptimizerDump {
+  repeated float accum = 1;
+  repeated float accum_update = 2;
+}
+
+message AdamOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float learning_rate = 2 [default = 0.01];
+  optional float beta1 = 3 [default = 0.9];
+  optional float beta2 = 4 [default = 0.99];
+  optional bool use_beta1_warmup = 5 [default = false];
+  optional float weight_decay_factor = 6 [default = 0.];
+  optional bool use_nesterov = 7 [default = false];
+  optional float epsilon = 8 [default = 0.01];
+  optional int64 warmup_steps = 9 [default = 0];
+}
+
+message AdamOptimizerDump {
+  repeated float m = 1;
+  repeated float v = 2;
+  optional float beta1_power = 3;
+  optional float beta2_power = 4;
+}
+
+message AmsgradOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float learning_rate = 2 [default = 0.01];
+  optional float beta1 = 3 [default = 0.9];
+  optional float beta2 = 4 [default = 0.99];
+  optional float weight_decay_factor = 6 [default = 0.];
+  optional bool use_nesterov = 7 [default = false];
+  optional float epsilon = 8 [default = 0.01];
+  optional int64 warmup_steps = 9 [default = 0];
+}
+
+message AmsgradOptimizerDump {
+  repeated float m = 1;
+  repeated float v = 2;
+  repeated float vhat = 3;
+  optional float beta1_power = 4;
+  optional float beta2_power = 5;
+}
+
+message MomentumOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float learning_rate = 2 [default = 0.01];
+  optional float weight_decay_factor = 3 [default = 0.];
+  optional bool use_nesterov = 4 [default = false];
+  optional float momentum = 5 [default = 0.9];
+  optional int64 warmup_steps = 6 [default = 0];
+}
+
+message MomentumOptimizerDump {
+  repeated float n = 1;
+}
+
+message MovingAverageOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float momentum = 2 [default = 0.9];
+}
+
+message BatchSoftmaxOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float learning_rate = 2 [default = 0.1];
+}
+
+message BatchSoftmaxOptimizerDump {
+  optional int64 global_step = 1;
+}
+
+message RmspropOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float learning_rate = 2 [default = 0.01];
+  optional float weight_decay_factor = 3 [default = 0.];
+  optional float momentum = 4 [default = 0.9];
+}
+
+message RmspropOptimizerDump {
+  repeated float n = 1;
+}
+
+message RmspropV2OptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float learning_rate = 2 [default = 0.01];
+  optional float weight_decay_factor = 3 [default = 0.];
+  optional float momentum = 4 [default = 0.9];
+}
+
+message RmspropV2OptimizerDump {
+  repeated float n = 1;
+}
+
+message DcOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float lambda_ = 2 [default = 0.];
+}
+
+message OptimizerConfig {
+  oneof type {
+    AdagradOptimizerConfig adagrad = 1;
+    SgdOptimizerConfig sgd = 2;
+    FtrlOptimizerConfig ftrl = 3;
+    DynamicWdAdagradOptimizerConfig dynamic_wd_adagrad = 5;
+    AdadeltaOptimizerConfig adadelta = 6;
+    AdamOptimizerConfig adam = 7;
+    AmsgradOptimizerConfig amsgrad = 8;
+    MomentumOptimizerConfig momentum = 9;
+    MovingAverageOptimizerConfig moving_average = 10;
+    RmspropOptimizerConfig rmsprop = 11;
+    RmspropV2OptimizerConfig rmspropv2 = 12;
+    DcOptimizerConfig dc = 13;
+    GroupFtrlOptimizerConfig group_ftrl = 14;
+    BatchSoftmaxOptimizerConfig batch_softmax = 15;
+  }
+  optional bool stochastic_rounding_float16 = 4;  // Default false.
+}
+
+message SingleOptimizerDump {
+  oneof type {
+    AdagradOptimizerDump adagrad = 1;
+    SgdOptimizerDump sgd = 2;
+    FtrlOptimizerDump ftrl = 3;
+    DynamicWdAdagradOptimizerDump dynamic_wd_adagrad = 4;
+    AdadeltaOptimizerDump adadelta = 6;
+    AdamOptimizerDump adam = 7;
+    AmsgradOptimizerDump amsgrad = 8;
+    MomentumOptimizerDump momentum = 9;
+    RmspropOptimizerDump rmsprop = 11;
+    RmspropV2OptimizerDump rmspropv2 = 12;
+    GroupFtrlOptimizerDump group_ftrl = 13;
+    BatchSoftmaxOptimizerDump batch_softmax = 14;
+  }
+}
+
+// TODO(leqi.zou): Consider about adding Arena to improve the performance.
+message OptimizerDump {
+  repeated SingleOptimizerDump dump = 1;
+}

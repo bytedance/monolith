@@ -1,0 +1,176 @@
+// Copyright 2022 ByteDance and/or its affiliates.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+option java_package = "com.bytedance.primus.proto";
+option java_generate_equals_and_hash = true;
+
+import "google/protobuf/wrappers.proto";
+package primus;
+
+enum PonyState {
+  PS_REGISTERING = 0;
+  PS_REGISTERED = 1;
+  RUNNING = 2;
+  FINISH = 3;
+}
+
+message PonyHeartbeatRequest {
+}
+
+message PonyHeartbeatResponse {
+  PonyState state = 1;
+}
+
+message PSInfo {
+  string ip = 1;
+  repeated int32 ports = 2;
+  int32 shard_id = 3;
+  string name = 4;
+}
+
+message PonyGetPSInfoRequest {
+}
+
+message PonyGetPSInfoResponse {
+  repeated PSInfo ps_info = 1;
+}
+
+message PonyStartWorkerRequest {
+}
+
+message PonyStartWorkerResponse {
+}
+
+message SucceedRequest {
+  int32 exit_code = 1;
+  string diagnose = 2;
+  google.protobuf.Int64Value graceful_shutdown_timeout_ms = 3;
+}
+
+message SucceedResponse {
+}
+
+message KillRequest {
+  int32 exit_code = 1;
+  string diagnose = 2;
+  google.protobuf.Int64Value graceful_shutdown_timeout_ms = 3;
+}
+
+message KillResponse {
+}
+
+message SuspendRequest {
+  int32 snapshot_id = 1;
+}
+
+message SuspendResponse {
+}
+
+message SuspendStatusRequest {
+}
+
+message SuspendStatusResponse {
+  bool succeed = 1;
+  string message = 2;
+}
+
+message ResumeRequest {
+}
+
+message ResumeResponse {
+}
+
+message GetSnapshotRequest {
+  int32 snapshot_id = 1;
+}
+
+message GetSnapshotResponse {
+  bool available = 1;
+  string dir = 2;
+}
+
+message ProgressRequest {
+}
+
+message ProgressResponse {
+  float progress = 1;
+}
+
+message StarvingRequest {
+}
+
+message StarvingResponse {
+  bool starving = 1;
+}
+
+message StatusRequest {
+}
+
+message StatusResponse {
+  string app_id = 1;
+  string final_status = 2;
+  string track_url = 3;
+}
+
+message TaskTimePointRequest {
+}
+
+message TaskTimePointResponse {
+  string time_point = 1;
+}
+
+message CreateSavepointRequest {
+  string savepoint_dir = 1;
+}
+
+message CreateSavepointResponse {
+  int32 code = 1;
+  string message = 2;
+  string savepoint_id = 3;
+}
+
+message CreateSavepointStatusRequest {
+  string savepoint_restore_id = 1;
+}
+
+message CreateSavepointStatusResponse {
+  enum CreateSavepointState {
+    PENDING = 0;
+    RUNNING = 1;
+    SUCCEEDED = 2;
+    FAILED = 3;;
+  }
+  int32 code = 1;
+  string message = 2;
+  CreateSavepointState create_savepoint_state = 3;
+}
+
+service AppMasterService {
+  rpc ponyHeartbeat (PonyHeartbeatRequest) returns (PonyHeartbeatResponse);
+  rpc ponyGetPSInfo (PonyGetPSInfoRequest) returns (PonyGetPSInfoResponse);
+  rpc ponyStartWorker (PonyStartWorkerRequest) returns (PonyStartWorkerResponse);
+  rpc succeed (SucceedRequest) returns (SucceedResponse);
+  rpc kill (KillRequest) returns (KillResponse);
+  rpc suspend (SuspendRequest) returns (SuspendResponse);
+  rpc suspendStatus (SuspendStatusRequest) returns (SuspendStatusResponse);
+  rpc resume (ResumeRequest) returns (ResumeResponse);
+  rpc getSnapshot (GetSnapshotRequest) returns (GetSnapshotResponse);
+  rpc progress (ProgressRequest) returns (ProgressResponse);
+  rpc isStarving (StarvingRequest) returns (StarvingResponse);
+  rpc status (StatusRequest) returns (StatusResponse);
+  rpc getTaskTimePoint (TaskTimePointRequest) returns (TaskTimePointResponse);
+  rpc createSavepoint(CreateSavepointRequest) returns (CreateSavepointResponse);
+  rpc createSavepointStatus(CreateSavepointStatusRequest) returns (CreateSavepointStatusResponse);
+}

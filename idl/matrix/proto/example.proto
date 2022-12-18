@@ -1,0 +1,220 @@
+// Copyright 2022 ByteDance and/or its affiliates.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+package monolith.io.proto;
+option cc_enable_arenas = true;
+
+import "idl/matrix/proto/line_id.proto";
+
+message FidList {
+  repeated fixed64 value = 1;
+}
+
+message FidLists {
+  repeated FidList list = 1;
+}
+
+message FloatList {
+  repeated float value = 1;
+}
+
+message FloatLists {
+  repeated FloatList list = 1;
+}
+
+message DoubleList {
+  repeated double value = 1;
+}
+
+message DoubleLists {
+  repeated DoubleList list = 1;
+}
+
+message Int64List {
+  repeated int64 value = 1;
+}
+
+message Int64Lists {
+  repeated Int64List list = 1;
+}
+
+message BytesList {
+  repeated bytes value = 1;
+}
+
+message BytesLists {
+  repeated BytesList list = 1;
+}
+
+// Basic extracted features
+message Feature {
+  oneof type {
+    FidList fid_v1_list = 1;
+    FidList fid_v2_list = 2;
+    FloatList float_list = 3;
+    DoubleList double_list = 4;
+    Int64List int64_list = 5;
+    BytesList bytes_list = 6;
+
+    FidLists fid_v2_lists = 7;
+    FloatLists float_lists = 8;
+    DoubleLists double_lists = 9;
+    Int64Lists int64_lists = 10;
+    BytesLists bytes_lists = 11;
+
+    int64 int64_value = 12;
+    float float_value = 13;
+    double double_value = 14;
+    bytes bytes_value = 15;
+
+    FidLists fid_v1_lists = 16;
+  }
+}
+
+// Feature map for easy retrieval
+message FeatureMap {
+  map<string, Feature> feature_map = 1;
+}
+
+// Raw features, or intermediate results during extraction
+message RawFeature {
+  repeated Feature feature = 1;
+}
+
+// ---------ColumnMajor definitions----------
+enum FeatureListType {
+  INDIVIDUAL = 0;  // each example has its own value
+  SHARED = 1;      // all examples share the same value
+}
+
+message NamedFeatureList {
+  int32 id = 4;
+  string name = 1;
+  repeated Feature feature = 2;
+  FeatureListType type = 3;
+}
+
+message NamedRawFeatureList {
+  int32 id = 4;
+  string name = 1;
+  repeated RawFeature raw_feature = 2;
+  FeatureListType type = 3;
+}
+
+// column major examples
+message ExampleBatch {
+  repeated NamedFeatureList named_feature_list = 1;
+  repeated NamedRawFeatureList named_raw_feature_list = 2;
+  int32 batch_size = 3;
+
+  uint32 data_source_key = 100;
+}
+
+// ---------RowMajor definitions----------
+message NamedFeature {
+  int32 id = 3;
+  string name = 1;
+  Feature feature = 2;
+  int32 sorted_id = 6;
+}
+
+message NamedRawFeature {
+  int32 id = 3;
+  string name = 1;
+  RawFeature raw_feature = 2;
+}
+
+// Example for both online and offline
+message Example {
+  repeated NamedFeature named_feature = 1;
+  repeated NamedRawFeature named_raw_feature = 2;
+
+  idl.matrix.proto.LineId line_id = 100;
+  repeated float label = 101;
+  float instance_weight = 102;
+  uint32 data_source_key = 103;
+}
+
+message ExampleBatchRowMajor {
+  repeated NamedFeature shared_feature = 1;
+  repeated NamedRawFeature shared_raw_feature = 2;
+  repeated Example example = 3;
+}
+
+message FeatureData {
+  int64 gid = 1;
+  repeated int64 fids = 2;
+  repeated NamedFeature feature_columns = 3;
+  int64 origin_cnt = 4;
+  int64 sample_cnt = 5;
+}
+
+message ChannelCache {
+  int64 channel_id = 1;
+  repeated FeatureData feature_datas = 2;
+}
+
+message FilterValues {
+  oneof type {
+    FloatList float_list = 1;
+    Int64List int64_list = 2;
+    BytesList bytes_list = 3;
+  }
+}
+
+enum PoolingType {
+  SUM = 0;
+  MEAN = 1;
+  FIRSTN = 3;
+}
+
+enum OutType {
+  CONCAT = 0;
+  STACK = 1;
+  ADDN = 2;
+  NONE = 3;
+}
+
+message SliceConfig {
+  string feature_name = 1;
+  int32 start = 2;
+  int32 end = 3;
+  int32 feature_idx = 4;
+  int32 slice_idx = 5;
+  PoolingType pooling_type = 10;
+  int32 max_sequence_length = 11;
+}
+
+message TensorShape {
+  repeated int32 dims = 1;
+}
+
+message OutConfig {
+  repeated SliceConfig slice_configs = 1;
+  OutType out_type = 2;
+  repeated TensorShape shape = 3;
+}
+
+message FeatureConfig {
+  string table = 1;
+  PoolingType pooling_type = 2;
+  repeated int32 slice_dims = 3;
+  int32 max_sequence_length = 4;
+}
+
+message FeatureConfigs {
+  map<string, FeatureConfig> feature_configs = 1;
+  map<string, OutConfig> out_configs = 2;
+}

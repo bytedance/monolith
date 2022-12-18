@@ -1,0 +1,112 @@
+diff --git a/tensorflow_serving/model_servers/BUILD b/tensorflow_serving/model_servers/BUILD
+index 6c812c12..f214f76a 100644
+--- a/tensorflow_serving/model_servers/BUILD
++++ b/tensorflow_serving/model_servers/BUILD
+@@ -235,7 +235,9 @@ cc_library(
+         "//tensorflow_serving/servables/tensorflow:predict_impl",
+         "//tensorflow_serving/servables/tensorflow:regression_service",
+         "//tensorflow_serving/servables/tensorflow:thread_pool_factory",
++        "@//monolith/native_training/runtime/common:metrics",
+         "@com_github_grpc_grpc//:grpc++",
++        "@com_google_absl//absl/time",
+         "@org_tensorflow//tensorflow/core:lib",
+         "@org_tensorflow//tensorflow/core:protos_all_cc",
+     ],
+@@ -319,6 +321,7 @@ SUPPORTED_TENSORFLOW_OPS = if_v2([]) + if_not_v2([
+     "@org_tensorflow//tensorflow/contrib:contrib_ops_op_lib",
+ ]) + [
+     "@org_tensorflow_text//tensorflow_text:ops_lib",
++    "@//monolith/native_training/runtime/ops:serving_ops_cc",
+ ]
+ 
+ cc_library(
+diff --git a/tensorflow_serving/model_servers/version.cc b/tensorflow_serving/model_servers/version.cc
+index 96230a6c..4b1fb8e5 100644
+--- a/tensorflow_serving/model_servers/version.cc
++++ b/tensorflow_serving/model_servers/version.cc
+@@ -13,9 +13,7 @@ See the License for the specific language governing permissions and
+ limitations under the License.
+ ==============================================================================*/
+ 
+-#include "tensorflow_serving/model_servers/version.h"
+-
+-const char kTFS_SCM_Revision[] = TF_MODELSERVER_VERSION_STRING;
++const char kTFS_SCM_Revision[] = "2.4.0";
+ 
+ extern "C" {
+ const char* TF_Serving_Version() { return kTFS_SCM_Revision; }
+
+diff --git a/tensorflow_serving/config/BUILD b/tensorflow_serving/config/BUILD
+index 516bf55..b32b2ad 100644
+--- a/tensorflow_serving/config/BUILD
++++ b/tensorflow_serving/config/BUILD
+@@ -51,6 +51,18 @@ serving_proto_library(
+     ],
+ )
+ 
++serving_proto_library_py(
++    name = "platform_config_py_pb2",
++    srcs = ["platform_config.proto"],
++    proto_library = "platform_config_proto",
++    visibility = [
++        "//visibility:public",
++    ],
++    deps = [
++        "@org_tensorflow//tensorflow/core:protos_all_py",
++    ],
++)
++
+ serving_proto_library(
+     name = "log_collector_config_proto",
+     srcs = ["log_collector_config.proto"],
+diff --git a/tensorflow_serving/servables/tensorflow/BUILD b/tensorflow_serving/servables/tensorflow/BUILD
+index ef4c54c..9fc97c3 100644
+--- a/tensorflow_serving/servables/tensorflow/BUILD
++++ b/tensorflow_serving/servables/tensorflow/BUILD
+@@ -2,6 +2,7 @@
+ 
+ load("//tensorflow_serving:oss_or_google.bzl", "if_google", "if_oss")
+ load("//tensorflow_serving:serving.bzl", "serving_proto_library", "serving_tensorflow_proto_dep")
++load("//tensorflow_serving:serving.bzl", "serving_proto_library_py")
+ 
+ package(
+     default_visibility = [
+@@ -38,6 +39,18 @@ serving_proto_library(
+     ],
+ )
+ 
++serving_proto_library_py(
++    name = "session_bundle_config_py_pb2",
++    srcs = ["session_bundle_config.proto"],
++    proto_library = "session_bundle_config_proto",
++    visibility = [
++        "//visibility:public",
++    ],
++    deps = [
++        "@org_tensorflow//tensorflow/core:protos_all_py",
++    ],
++)
++
+ cc_library(
+     name = "resource_estimator",
+     hdrs = ["resource_estimator.h"],
+@@ -253,6 +266,19 @@ serving_proto_library(
+     ],
+ )
+ 
++serving_proto_library_py(
++    name = "saved_model_bundle_source_adapter_py_pb2",
++    srcs = ["saved_model_bundle_source_adapter.proto"],
++    proto_library = "saved_model_bundle_source_adapter_proto",
++    visibility = [
++        "//visibility:public",
++    ],
++    deps = [
++        ":session_bundle_config_py_pb2",
++        "@org_tensorflow//tensorflow/core:protos_all_py",
++    ],
++)
++
+ cc_library(
+     name = "simple_servers",
+     srcs = ["simple_servers.cc"],
