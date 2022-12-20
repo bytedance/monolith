@@ -24,6 +24,7 @@ os.environ["MONOLITH_WITH_HOROVOD"] = "True"
 
 from monolith.native_training import cpu_training, embedding_combiners, feature, device_utils
 from monolith.native_training.native_task import NativeTask
+from monolith.native_training import entry
 from monolith.native_training.data.training_instance.python.parser_utils import advanced_parse
 
 import horovod.tensorflow as hvd
@@ -65,6 +66,62 @@ class FeatureTask(NativeTask):
       return tf.estimator.EstimatorSpec(mode,
                                         train_op=train_op,
                                         loss=loss,
+                                        predictions=tf.constant(0))
+
+    return model_fn
+
+
+class EmbeddingUpdateTask(NativeTask):
+  """A test task that will compare TF and monolith embedding update."""
+
+  def create_input_fn(self, _):
+
+    def input_fn():
+      return tf.data.Dataset.from_tensors({
+          "feature": tf.ragged.constant([[1, 2, 3, 4]], dtype=np.int64),
+          "tf_feature": tf.constant([[0, 1, 2, 3]], dtype=np.int64),
+      }).map(advanced_parse).repeat(10)
+
+    return input_fn
+
+  def create_model_fn(self):
+
+    def model_fn(mode, features, **kwargs):
+      slot = self.ctx.feature_factory.create_feature_slot(
+          feature.FeatureSlotConfig(
+              name="slot",
+              default_vec_initializer=entry.ConstantsInitializer(0),
+              default_vec_optimizer=entry.AdagradOptimizer(
+                  learning_rate=0.1, initial_accumulator_value=1)))
+      s = slot.add_feature_slice(5)
+      fc = feature.FeatureColumnV1(slot, "feature")
+      embedding = fc.embedding_lookup(s)
+      tf_embeddings = tf.Variable(initial_value=tf.zeros(shape=(4, 5)),
+                                  name='embedding')
+      tf_embedding = tf.reduce_sum(tf.nn.embedding_lookup(
+          params=tf_embeddings, ids=features["tf_feature"]),
+                                   axis=1)
+      if mode == tf.estimator.ModeKeys.PREDICT:
+        return tf.estimator.EstimatorSpec(mode, predictions=tf.constant(0))
+      all_embeddings = [fc.get_all_embeddings_concat()]
+      loss = tf.reduce_sum(embedding)
+      tf_loss = tf.reduce_sum(tf_embedding)
+      grads = tf.gradients(loss, all_embeddings)
+      tf_grads = tf.gradients(tf_loss, tf_embeddings)
+      gs = tf.compat.v1.train.get_or_create_global_step()
+      print1 = tf.print(gs, "embedding: ", embedding)
+      print2 = tf.print(gs, "tf_embedding: ", tf_embedding)
+      assert_equal = tf.compat.v1.assert_equal(embedding, tf_embedding)
+      with tf.control_dependencies([print1, print2, assert_equal]):
+        train_op = tf.group(
+            self._ctx.feature_factory.apply_gradients(zip(
+                grads, all_embeddings)),
+            tf.compat.v1.train.AdagradOptimizer(
+                learning_rate=0.1, initial_accumulator_value=1).apply_gradients(
+                    zip(tf_grads, [tf_embeddings])), gs.assign_add(1))
+      return tf.estimator.EstimatorSpec(mode,
+                                        train_op=train_op,
+                                        loss=loss + tf_loss,
                                         predictions=tf.constant(0))
 
     return model_fn
@@ -187,6 +244,23 @@ class CpuSyncTrainTest(tf.test.TestCase):
         device_fn=device_utils.default_device_fn)
     est = tf.estimator.Estimator(training.create_model_fn(), config=run_config)
     est.train(training.create_input_fn(tf.estimator.ModeKeys.TRAIN), steps=2)
+
+  def test_embedding_update(self):
+    hvd.init()
+    p = EmbeddingUpdateTask.params()
+    p.name = "embedding_update_task"
+    task = EmbeddingUpdateTask(p)
+    training = cpu_training.CpuTraining(
+        cpu_training.CpuTrainingConfig(num_workers=hvd.size(),
+                                       num_ps=0,
+                                       reorder_fids_in_data_pipeline=True,
+                                       embedding_prefetch_capacity=0,
+                                       enable_sync_training=True), task)
+    run_config = tf.estimator.RunConfig(
+        model_dir=os.path.join(test_folder, "test_embedding_update"),
+        device_fn=device_utils.default_device_fn)
+    est = tf.estimator.Estimator(training.create_model_fn(), config=run_config)
+    est.train(training.create_input_fn(tf.estimator.ModeKeys.TRAIN), steps=10)
 
   def test_cpu_training_float_feature(self):
     hvd.init()
