@@ -893,6 +893,36 @@ class PyKafkaDataset(dataset_ops.DatasetSource):
   def element_spec(self):
     return self._dataset.element_spec
 
+def create_plain_kafka_dataset( topics: List[str], group_id: str, servers: str,
+               stream_timeout=-1, message_poll_timeout=10000, poll_batch_size: int = 1024,
+                configuration=None, container: str = '', shared_name: str = '',):
+  metadata = list(configuration or [])
+  if group_id is not None:
+    metadata.append(f"group.id={group_id}")
+  if servers is not None:
+    metadata.append(f"bootstrap.servers={servers}")
+  if poll_batch_size is not None:
+    assert isinstance(poll_batch_size, int) and poll_batch_size > 0
+    metadata.append(f"batch.num.messages={poll_batch_size}")
+
+  resource = kafka_resource_init(topics=topics, metadata=metadata,
+                                container=container, shared_name=shared_name)
+
+  dataset = tf.data.experimental.Counter()
+  dataset = dataset.map(
+    lambda i: kafka_read_next(
+      input=resource,
+      index=i,
+      message_poll_timeout=message_poll_timeout,
+      stream_timeout=stream_timeout,
+    )
+  )
+  dataset = dataset.apply(
+    tf.data.experimental.take_while(
+      lambda v: tf.greater(v.continue_fetch, 0)
+    )
+  )
+  return dataset
 
 class KafkaDataset(dataset_ops.DatasetSource):
 

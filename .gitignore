@@ -72,3 +72,6 @@ target/
 /bazel-*
 /.vscode
 
+# Jupyter noteobok
+.ipynb_checkpoints
+

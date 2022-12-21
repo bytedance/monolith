@@ -46,6 +46,10 @@ def write_deep_insight(features: Dict[str, tf.Tensor],
   Extra fields specified in extra_fields_keys must be present in features, and
   must have batch_size numbers of values.
   """
+  if 'req_time' not in features:
+    logging.info("Disabling deep_insight because req_time is absent")
+    return tf.no_op()
+
   deep_insight_client = deep_insight_ops.deep_insight_client(
       enable_deep_insight_metrics, enable_kafka_metrics)
   req_times = tf.reshape(features["req_time"], [-1])
