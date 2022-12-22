@@ -76,13 +76,13 @@ from monolith.native_training.alert import alert_manager
 from monolith.native_training.hash_table_utils import infer_dim_size
 from monolith.native_training.distributed_serving_ops import ParameterSyncClient
 from monolith.native_training.hash_filter_ops import FilterType
-from monolith.native_training.hooks import controller_hooks
 from monolith.native_training.hooks import ckpt_hooks
 from monolith.native_training.hooks import ckpt_info
 from monolith.native_training.hooks import ps_check_hooks
 from monolith.native_training.hooks import hook_utils
 from monolith.native_training.hooks import session_hooks
 from monolith.native_training.hooks import feature_engineering_hooks
+from monolith.native_training.hooks.server import server_lib as server_hook_lib
 from monolith.native_training.metric import cli
 from monolith.native_training.metric.metric_hook import Tf2ProfilerHook, Tf2ProfilerCaptureOnceHook, NVProfilerCaptureOnceHook
 from monolith.native_training.metric.metric_hook import ByteCCLTelemetryHook
@@ -923,17 +923,13 @@ class CpuTraining:
         )
 
       # We do not use barrier for the sync training.
-      barrier_before_save_listeners = []
-      barrier_after_save_listeners = []
+      guard_listeners = []
       if not self.config.enable_sync_training:
-        l = ckpt_hooks.BarrierSaverListener(
-            barrier_op,
-            max_pending_seconds=self._params.train.
-            max_pending_seconds_for_barrier)
-        barrier_before_save_listeners.append(hook_utils.BeforeSaveListener(l))
-        barrier_after_save_listeners.append(hook_utils.AfterSaveListener(l))
-      save_listeners = barrier_before_save_listeners + save_listeners
-      finally_after_save_listeners = barrier_after_save_listeners
+        guard_listeners.append(
+            ckpt_hooks.BarrierSaverListener(
+                barrier_op,
+                max_pending_seconds=self._params.train.
+                max_pending_seconds_for_barrier))
 
       # In the rare case, we need to do the first save.
       # Otherwise, partial_recovery won't work and will go through initialization phase.
@@ -947,7 +943,7 @@ class CpuTraining:
           save_steps=save_checkpoints_steps,
           saver=saver,
           listeners=save_listeners,
-          finally_after_save_listeners=finally_after_save_listeners,
+          guard_saver_listeners=guard_listeners,
           save_graph_def=is_root_node,
           tide_start_hour=self.config.tide_start_hour,
           tide_start_minute=self.config.tide_start_minute,
@@ -967,11 +963,9 @@ class CpuTraining:
       hooks.append(saver_hook)
 
       if not self.config.enable_sync_training:
-        ctrl_hook = controller_hooks.ControllerHook(self.config.num_ps,
-                                                    barrier_op,
-                                                    saver_hook.timer.reset)
-        query_hook = controller_hooks.QueryActionHook(model_dir, ctrl_hook)
-        hooks.extend([ctrl_hook, query_hook])
+        server_hook = server_hook_lib.ServerHook(model_dir, barrier_op,
+                                                 saver_hook)
+        hooks.extend([server_hook])
 
       dense_only_save_checkpoints_steps = self.config.dense_only_save_checkpoints_steps or self._params.train.dense_only_save_checkpoints_steps
       dense_only_save_checkpoints_secs = self.config.dense_only_save_checkpoints_secs or self._params.train.dense_only_save_checkpoints_secs
@@ -987,21 +981,19 @@ class CpuTraining:
         export_dir_base = os.path.join(model_dir,
                                        self._params.serving.export_dir_base)
         save_utils.NoFirstSaveCheckpointSaverHook._has_dense_only = True
-        dense_barrier_before_save_listeners = barrier_before_save_listeners if self.config.dense_only_stop_training_when_save else []
-        dense_barrier_after_save_listeners = barrier_after_save_listeners if self.config.dense_only_stop_training_when_save else []
+        dense_guard_listeners = guard_listeners if self.config.dense_only_stop_training_when_save else []
 
         dense_saver_hook = save_utils.NoFirstSaveCheckpointSaverHook(
             dense_model_dir,
             save_secs=dense_only_save_checkpoints_secs,
             save_steps=dense_only_save_checkpoints_steps,
             saver=dense_saver,
-            listeners=dense_barrier_before_save_listeners +
-            get_saver_listeners_for_exporting(
+            listeners=get_saver_listeners_for_exporting(
                 dense_basename,
                 export_dir_base=export_dir_base,
                 dense_only=True,
                 exempt_checkpoint_paths=exempt_checkpoint_paths),
-            finally_after_save_listeners=dense_barrier_after_save_listeners,
+            guard_saver_listeners=dense_guard_listeners,
             tide_start_hour=self.config.tide_start_hour,
             tide_start_minute=self.config.tide_start_minute,
             tide_end_hour=self.config.tide_end_hour,
@@ -1266,7 +1258,6 @@ class CpuTraining:
         training_chief_hooks = ()
         ckpt_helper = ckpt_hooks.WorkerCkptHelper(config.model_dir,
                                                   self.config.index)
-        stop_helper = controller_hooks.StopHelper()
         # SetCurrentSessionHook must present first.
         training_hooks += (session_hooks.SetCurrentSessionHook(),)
         barrier_op = None
@@ -1282,15 +1273,13 @@ class CpuTraining:
               is_chief=is_chief(self.config),
               barrier_callbacks=[
                   ckpt_helper.create_save_iterator_callback(),
-                  stop_helper.create_barrier_callback()
               ])
           training_hooks += sync_hook_helper.training_hooks + (
               barrier_ops.BarrierHook(self.config.index, barrier_op),)
           if self._params.mode == tf.estimator.ModeKeys.TRAIN:
             training_hooks += get_slow_start_hook(
                 self._params.train.slow_start_steps)
-          training_hooks += (ckpt_helper.create_restorer_hook(),
-                             stop_helper.create_stop_hook())
+          training_hooks += (ckpt_helper.create_restorer_hook(),)
 
           training_chief_hooks += (ps_check_hooks.PsHealthCheckerHook(
               ps_check_hooks.Config(barrier_op=barrier_op,

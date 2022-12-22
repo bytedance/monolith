@@ -141,12 +141,24 @@ class SaverHookTest(tf.test.TestCase):
             checkpoint_dir=ckpt_dir,
             save_steps=100,
             listeners=[AssertFailListener()],
-            finally_after_save_listeners=[l],
+            guard_saver_listeners=[l],
             ignore_save_errors=True,
             no_first_save=False)
     ]) as sess:
       pass
     self.assertTrue(l.called)
+
+  def test_trigger_save(self):
+    ckpt_dir = self.get_ckpt_dir()
+    global_step = tf.compat.v1.train.get_or_create_global_step()
+    global_step = tf.compat.v1.assign_add(global_step, 1)
+    h = save_utils.NoFirstSaveCheckpointSaverHook(checkpoint_dir=ckpt_dir,
+                                                  save_steps=100)
+    with tf.compat.v1.train.SingularMonitoredSession([h]) as sess:
+      sess.run(global_step)
+      h.trigger_save(sess.raw_session())
+      self.assertGreater(
+          len(tf.io.gfile.glob(os.path.join(ckpt_dir, "model.ckpt-1\\.*"))), 0)
 
 
 class SaverTest(tf.test.TestCase):

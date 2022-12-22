@@ -133,6 +133,14 @@ class WorkerCkptHooksTest(tf.test.TestCase):
         save_steps=1,
         listeners=[listener1, listener2],
         saver=tf.compat.v1.train.Saver())
+
+    class WaitAllWorkersHook(tf.estimator.SessionRunHook):
+
+      def end(self, session):
+        nonlocal barrier_op
+        while not barrier_op.is_none_blocked(session):
+          time.sleep(0.1)
+
     with tf.compat.v1.Session() as sess:
 
       g = tf.compat.v1.get_default_graph()
@@ -142,7 +150,7 @@ class WorkerCkptHooksTest(tf.test.TestCase):
       def run():
         with g.as_default(), tf.compat.v1.train.MonitoredSession(
             session_creator=FixedSessionCreator(sess),
-            hooks=[hook]) as mon_sess:
+            hooks=[hook, WaitAllWorkersHook()]) as mon_sess:
           mon_sess.run(train_op)
 
       worker = threading.Thread(target=run)

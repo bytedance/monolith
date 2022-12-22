@@ -23,6 +23,10 @@ import tensorflow as tf
 from monolith.native_training import basic_restore_hook
 
 
+class BarrierAlreadyPlacedError(Exception):
+  pass
+
+
 class BarrierOp:
   """
   A barrier operation that used to blocking worker by chief.
@@ -66,6 +70,8 @@ class BarrierOp:
 
   def place_barrier(self, session, action: str = ""):
     with self._lock:
+      if self.is_barrier_placed(session):
+        raise BarrierAlreadyPlacedError()
       session.run([self._place_op, self._action_assign],
                   feed_dict={
                       self._action_placeholder: action,
@@ -74,7 +80,10 @@ class BarrierOp:
       self._run_barrier_callbacks(action, session)
 
   def remove_barrier(self, session):
-    session.run(self._remove_op, feed_dict={self._idx_ph: 0})
+    with self._lock:
+      # We are more generous about removing barrier
+      # We don't check barrier state here
+      session.run(self._remove_op, feed_dict={self._idx_ph: 0})
 
   def is_barrier_placed(self, session):
     return session.run(self.barrier_placed_tensor)
@@ -83,13 +92,16 @@ class BarrierOp:
   def barrier_placed_tensor(self):
     return self._barrier_placed_tensor
 
+  @property
+  def capacity(self):
+    return self._capacity
+
   def is_barrier_removed(self, session):
-    qsize = session.run(self.barrier_placed_tensor)
-    return not qsize
+    return not self.is_barrier_placed(session)
 
   def wait_until_barrier_removed(self, session, index):
     with self._lock:
-      if index <= 0 or index > self._capacity:
+      if index < 0 or index > self._capacity:
         raise ValueError(
             "Index [{}] must be non-negative and less than capacity [{}]. ".
             format(index, self._capacity))
@@ -97,13 +109,13 @@ class BarrierOp:
       action = session.run(self._action).decode()
       self._run_barrier_callbacks(action, session)
 
-      while not self.is_barrier_removed(session):
-        logging.log_every_n_seconds(
-            logging.INFO,
-            "The worker {} waits until barrier removed.".format(index), 60)
-        time.sleep(self._wait_seconds)
+    while not self.is_barrier_removed(session):
+      logging.log_every_n_seconds(
+          logging.INFO,
+          "The worker {} waits until barrier removed.".format(index), 60)
+      time.sleep(self._wait_seconds)
 
-      session.run(self._remove_op, feed_dict={self._idx_ph: index})
+    session.run(self._remove_op, feed_dict={self._idx_ph: index})
 
   def is_all_blocked(self, session):
     barriers = session.run(self._barrier_vars)

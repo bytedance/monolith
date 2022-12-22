@@ -29,6 +29,7 @@
 
 from typing import Set
 import collections
+import threading
 import time
 import traceback
 import os, sys
@@ -268,13 +269,11 @@ class NoFirstSaveCheckpointSaverHook(tf.estimator.CheckpointSaverHook):
                is_dense_only: bool = False,
                use_native_multi_hash_table: bool = False,
                no_first_save: bool = True,
-               finally_after_save_listeners=None):
+               guard_saver_listeners=None):
     """
     Args:
-      finally_after_save_listeners -
-          since this hook support retrying in save,
-          finally_after_save_listeners's after_save will always be called no matter
-          if there is an error or not.
+      guard_saver_listeners - listeners which are not related to saving,
+      and will always call even there is an error.
     """
     super().__init__(checkpoint_dir=checkpoint_dir,
                      save_secs=save_secs,
@@ -299,8 +298,10 @@ class NoFirstSaveCheckpointSaverHook(tf.estimator.CheckpointSaverHook):
     self._ignore_save_errors = ignore_save_errors
     self._is_dense_only = is_dense_only
     self._use_native_multi_hash_table = use_native_multi_hash_table
-    self._finally_after_save_listeners = finally_after_save_listeners or []
+    self._guard_saver_listeners = guard_saver_listeners or ()
     self._mcli = cli.get_cli(utils.get_metric_prefix())
+    # Used to protect after_run, which may be called concurrently
+    self._l = threading.Lock()
 
   @property
   def timer(self):
@@ -315,6 +316,28 @@ class NoFirstSaveCheckpointSaverHook(tf.estimator.CheckpointSaverHook):
     if isinstance(self._saver, PartialRecoverySaver):
       self._saver.setup_ps_initialized_state(session)
     self._create_or_update_monolith_ckpt_state(do_update=False)
+
+  def trigger_save(self, session, ignore_save_errors=False):
+    # There might be some concurency issue but should be fine
+    # Since our goal is only to do the save.
+    with self._l:
+      self._timer.reset()
+    run_context = tf.estimator.SessionRunContext((), session)
+    run_values = tf.estimator.SessionRunValues(0, None, None)
+    # this function may be called in the different thread.
+    with session.graph.as_default():
+      with self._l:
+        old_value = self._ignore_save_errors
+        try:
+          # Always throw error in this case.
+          self._ignore_save_errors = ignore_save_errors
+          super().after_run(run_context, run_values)
+        finally:
+          self._ignore_save_errors = old_value
+
+  def after_run(self, run_context, run_values):
+    with self._l:
+      super().after_run(run_context, run_values)
 
   def _save(self, session, step: int) -> bool:
     if self._no_first_save:
@@ -333,6 +356,11 @@ class NoFirstSaveCheckpointSaverHook(tf.estimator.CheckpointSaverHook):
     tags = {"mode": mode}
 
     try:
+      for l in self._guard_saver_listeners:
+        try:
+          l.before_save(session, step)
+        except:
+          logging.error(traceback.format_exc())
       for retries in range(2):
         try:
           start_time = time.time()
@@ -351,7 +379,7 @@ class NoFirstSaveCheckpointSaverHook(tf.estimator.CheckpointSaverHook):
           catched_error = op_error
           continue
     finally:
-      for l in self._finally_after_save_listeners:
+      for l in reversed(self._guard_saver_listeners):
         try:
           l.after_save(session, step)
         except:

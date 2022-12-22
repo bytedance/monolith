@@ -31,6 +31,8 @@ class BarrierOpsTest(tf.test.TestCase):
       self.evaluate(tf.compat.v1.local_variables_initializer())
       barrier_op.place_barrier(sess)
       self.assertTrue(barrier_op.is_barrier_placed(sess))
+      with self.assertRaises(barrier_ops.BarrierAlreadyPlacedError):
+        barrier_op.place_barrier(sess)
       barrier_op.remove_barrier(sess)
       self.assertTrue(barrier_op.is_barrier_removed(sess))
 

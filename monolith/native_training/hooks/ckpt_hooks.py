@@ -79,13 +79,19 @@ class BarrierSaverListener(tf.estimator.CheckpointSaverListener):
     self._max_pending_seconds = max_pending_seconds
     # Make sure meta is created.
     self._meta = _get_meta()
+    self._release_barrier = False
 
   def before_save(self, session, global_step_value):
     assign_ckpt_info(
         session, ckpt_hooks_pb2.WorkerCkptInfo(global_step=global_step_value))
     logging.info("Place barrier for saving.")
     start_time = time.time()
-    self._barrier_op.place_barrier(session, action=SAVE_ACTION)
+    try:
+      self._barrier_op.place_barrier(session, action=SAVE_ACTION)
+      self._release_barrier = True
+    except barrier_ops.BarrierAlreadyPlacedError:
+      logging.info("Barrier is placed by someone else already.")
+
     while not self._barrier_op.is_all_blocked(session):
       time.sleep(self._wait_seconds)
       if time.time() - start_time > self._max_pending_seconds:
@@ -99,19 +105,11 @@ class BarrierSaverListener(tf.estimator.CheckpointSaverListener):
       logging.info("All workers have been blocked.")
 
   def after_save(self, session, global_step_value):
-    logging.info("Remove barrier for saving.")
     start_time = time.time()
-    self._barrier_op.remove_barrier(session)
-    while not self._barrier_op.is_none_blocked(session):
-      time.sleep(self._wait_seconds)
-      if time.time() - start_time > self._max_pending_seconds:
-        break
-
-    blocked_indices = self._barrier_op.get_blocked_indices(session)
-    if blocked_indices:
-      logging.info("Blocked worker indices: {}.".format(str(blocked_indices)))
-    else:
-      logging.info("None worker has been blocked.")
+    if self._release_barrier:
+      logging.info("Remove barrier for saving.")
+      self._barrier_op.remove_barrier(session)
+      self._release_barrier = False
 
 
 class _WorkerCkptRestorerHook(tf.estimator.SessionRunHook):
