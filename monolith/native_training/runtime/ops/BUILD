@@ -152,6 +152,7 @@ tf_gpu_kernel_library_allow_except(
         "hash_table_restore_op.cc",
         "hash_table_save_op.cc",
         "hash_table_update_op.cc",
+        "gpu_multi_hash_table.h",
         "multi_hash_table.h",
         "multi_hash_table_lookup_op.cc",
         "multi_hash_table_op.cc",

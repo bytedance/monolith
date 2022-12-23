@@ -179,9 +179,10 @@ class HashTableFusedLookupOp : public OpKernel {
         *embedding_sizes;
     OP_REQUIRES_OK(
         ctx, ctx->allocate_output(1, {num_of_shards_}, &embedding_splits));
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(2, {slot_size_cnt}, &id_offsets));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_output(2, {slot_size_cnt + 1}, &id_offsets));
     OP_REQUIRES_OK(
-        ctx, ctx->allocate_output(3, {slot_size_cnt}, &embedding_offsets));
+        ctx, ctx->allocate_output(3, {slot_size_cnt + 1}, &embedding_offsets));
     OP_REQUIRES_OK(ctx,
                    ctx->allocate_output(4, {slot_size_cnt}, &embedding_sizes));
 
@@ -189,8 +190,8 @@ class HashTableFusedLookupOp : public OpKernel {
     int prev_output_dim = 0;
     // [num_of_tables*num_of_shards_] for offsets for different shards and
     // tables.
-    std::vector<int> input_offsets(slot_size_cnt, 0);
-    std::vector<int> output_offsets(slot_size_cnt, 0);
+    std::vector<int> input_offsets(slot_size_cnt + 1, 0);
+    std::vector<int> output_offsets(slot_size_cnt + 1, 0);
     auto segment_embedding_dims = embedding_sizes->flat<int32>().data();
     // [num_of_shards_] for splits
     // embedding_splits and embedding_offsets are used as a metadata for later
@@ -203,12 +204,9 @@ class HashTableFusedLookupOp : public OpKernel {
             hash_table_dims[table_id] * fused_slot_size_vec(curr_idx);
         output_dim += segment_dim;
         segment_embedding_dims[curr_idx] = segment_dim;
-        if (curr_idx > 0) {
-          output_offsets[curr_idx] = output_offsets[curr_idx - 1] +
-                                     segment_embedding_dims[curr_idx - 1];
-          input_offsets[curr_idx] =
-              input_offsets[curr_idx - 1] + fused_slot_size_vec(curr_idx - 1);
-        }
+        output_offsets[curr_idx + 1] = output_offsets[curr_idx] + segment_dim;
+        input_offsets[curr_idx + 1] =
+            input_offsets[curr_idx] + fused_slot_size_vec(curr_idx);
       }
       output_splits[shard_id] = output_dim - prev_output_dim;
       prev_output_dim = output_dim;
@@ -218,9 +216,9 @@ class HashTableFusedLookupOp : public OpKernel {
     auto ids_flat = ids.flat<int64_t>();
 
     std::memcpy(id_offsets->flat<int32>().data(), input_offsets.data(),
-                sizeof(int32) * slot_size_cnt);
+                sizeof(int32) * (slot_size_cnt + 1));
     std::memcpy(embedding_offsets->flat<int32>().data(), output_offsets.data(),
-                sizeof(int32) * slot_size_cnt);
+                sizeof(int32) * (slot_size_cnt + 1));
     auto lookup = [&](const int begin, const int end) {
       for (int shard_id = begin; shard_id < end; shard_id++) {
         for (int table_id = 0; table_id < num_of_tables; table_id++) {
@@ -317,8 +315,8 @@ REGISTER_OP("MonolithHashTableFusedLookup")
       dim_handles.push_back(c->UnknownDim());
       c->set_output(0, c->MakeShape(dim_handles));
       c->set_output(1, c->Vector(num_of_shards));
-      c->set_output(2, c->input(num_tables_ + 1));
-      c->set_output(3, c->input(num_tables_ + 1));
+      c->set_output(2, c->Vector(num_tables_ * num_of_shards + 1));
+      c->set_output(3, c->Vector(num_tables_ * num_of_shards + 1));
       c->set_output(4, c->input(num_tables_ + 1));
       return Status::OK();
     });

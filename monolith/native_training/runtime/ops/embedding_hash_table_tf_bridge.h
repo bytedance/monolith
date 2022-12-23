@@ -42,7 +42,8 @@ class EmbeddingHashTableTfBridge : public ResourceBase {
   static Status New(monolith::hash_table::EmbeddingHashTableConfig config,
                     HashFilterTfBridge* hash_filter,
                     EmbeddingHashTableTfBridge** new_bridge,
-                    const std::string& name, cudaStream_t stream = 0);
+                    const std::string& name,
+                    monolith::hash_table::GpuExtraArgs args = {});
 
   ~EmbeddingHashTableTfBridge();
 
@@ -106,6 +107,9 @@ class EmbeddingHashTableTfBridge : public ResourceBase {
   std::vector<std::pair<int64_t, const void*>> TouchedKeySet() const;
 
   const monolith::hash_table::EmbeddingHashTableConfig& GetConfig() const;
+  monolith::hash_table::EmbeddingHashTableInterface* GetTable() const {
+    return table_.get();
+  }
 
  private:
   explicit EmbeddingHashTableTfBridge(HashFilterTfBridge* hash_filter)

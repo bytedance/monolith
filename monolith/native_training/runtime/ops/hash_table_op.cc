@@ -28,6 +28,7 @@ namespace tensorflow {
 namespace monolith_tf {
 
 using ::monolith::hash_table::EmbeddingHashTableConfig;
+using ::monolith::hash_table::GpuExtraArgs;
 // using ::monolith::hopscotch::HopscotchHashSet;
 using ::monolith::parameter_sync::ParameterSyncClient;
 
@@ -74,18 +75,9 @@ class HashTableOp : public OpKernel {
           ctx, LookupResource(ctx, HandleFromInput(ctx, 1), &sync_client));
       auto sync_client_ptr = sync_client.get();
 
-      auto creator =
-          [this, sync_client_ptr,
-           ctx](EmbeddingHashTableTfBridge** out_hash_table) -> Status {
-#ifdef GOOGLE_CUDA
-        TF_RETURN_IF_ERROR(EmbeddingHashTableTfBridge::New(
-            config_, hash_filter_, out_hash_table, cinfo_.name(),
-            ctx->eigen_gpu_device().stream()));
-#else
+      auto creator = [&, this](EmbeddingHashTableTfBridge** out_hash_table) {
         TF_RETURN_IF_ERROR(EmbeddingHashTableTfBridge::New(
             config_, hash_filter_, out_hash_table, cinfo_.name()));
-#endif
-        // #ifndef GOOGLE_CUDA
         if (sync_client_ptr->IsDummySyncClient()) {
           LOG(INFO) << absl::StrFormat(
               "Hash table %s will not be attached to the sync client",
@@ -99,7 +91,6 @@ class HashTableOp : public OpKernel {
               "Hash table %s will be attached to the sync client",
               cinfo_.name());
         }
-        // #endif
         return Status::OK();
       };
       OP_REQUIRES_OK(

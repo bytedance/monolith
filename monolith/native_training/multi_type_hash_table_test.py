@@ -171,8 +171,8 @@ class MultiTypeHashTableTest(tf.test.TestCase):
           values_dict)
     self.assertAllEqual(embeddings, [1, 2, 2, 4, 4, 8, 8])
     self.assertAllEqual(recv_splits, [7])
-    self.assertAllEqual(id_offsets, [0, 1, 2])
-    self.assertAllEqual(emb_offsets, [0, 1, 3])
+    self.assertAllEqual(id_offsets, [0, 1, 2, 4])
+    self.assertAllEqual(emb_offsets, [0, 1, 3, 7])
     self.assertAllEqual(emb_sizes, [1, 2, 4])
 
   def test_fused_lookup_multi_shards(self):
@@ -193,8 +193,8 @@ class MultiTypeHashTableTest(tf.test.TestCase):
           values_dict)
     self.assertAllEqual(embeddings, [1, 4, 4, 2, 2, 8, 8])
     self.assertAllEqual(recv_splits, [3, 4])
-    self.assertAllEqual(id_offsets, [0, 1, 1, 2, 2, 3])
-    self.assertAllEqual(emb_offsets, [0, 1, 1, 3, 3, 5])
+    self.assertAllEqual(id_offsets, [0, 1, 1, 2, 2, 3, 4])
+    self.assertAllEqual(emb_offsets, [0, 1, 1, 3, 3, 5, 7])
     self.assertAllEqual(emb_sizes, [1, 0, 2, 0, 2, 2])
 
   def test_fused_apply_gradients(self):
@@ -217,8 +217,8 @@ class MultiTypeHashTableTest(tf.test.TestCase):
           lookup_op)
     self.assertAllEqual(embeddings, [-2, -1, -3, -2, -4])
     self.assertAllEqual(recv_splits, [5])
-    self.assertAllEqual(id_offsets, [0, 1])
-    self.assertAllEqual(emb_offsets, [0, 1])
+    self.assertAllEqual(id_offsets, [0, 1, 3])
+    self.assertAllEqual(emb_offsets, [0, 1, 5])
     self.assertAllEqual(emb_sizes, [1, 4])
 
   def test_fused_apply_gradients_missing_tables(self):
@@ -241,8 +241,8 @@ class MultiTypeHashTableTest(tf.test.TestCase):
           lookup_op)
     self.assertAllEqual(embeddings, [-3, -3])
     self.assertAllEqual(recv_splits, [1, 1])
-    self.assertAllEqual(id_offsets, [0, 1, 1, 2])
-    self.assertAllEqual(emb_offsets, [0, 1, 1, 2])
+    self.assertAllEqual(id_offsets, [0, 1, 1, 2, 2])
+    self.assertAllEqual(emb_offsets, [0, 1, 1, 2, 2])
     self.assertAllEqual(emb_sizes, [1, 0, 1, 0])
 
 

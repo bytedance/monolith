@@ -49,7 +49,7 @@ Status ValidateDim(const Tensor& t, int64 expected_dim) {
 Status EmbeddingHashTableTfBridge::New(
     monolith::hash_table::EmbeddingHashTableConfig config,
     HashFilterTfBridge* hash_filter, EmbeddingHashTableTfBridge** new_bridge,
-    const std::string& name, cudaStream_t stream) {
+    const std::string& name, hash_table::GpuExtraArgs args) {
   auto bridge = core::RefCountPtr<EmbeddingHashTableTfBridge>(
       new EmbeddingHashTableTfBridge(hash_filter));
   bridge->config_ = config;
@@ -60,7 +60,7 @@ Status EmbeddingHashTableTfBridge::New(
   }
   try {
     bridge->table_ =
-        hash_table::NewEmbeddingHashTableFromConfig(config, stream);
+        hash_table::NewEmbeddingHashTableFromConfig(config, std::move(args));
   } catch (const std::exception& e) {
     return errors::InvalidArgument(e.what());
   }
@@ -133,7 +133,6 @@ Status EmbeddingHashTableTfBridge::BatchLookup(OpKernelContext* ctx,
     return errors::InvalidArgument(e.what());
   }
 }
-
 
 Status EmbeddingHashTableTfBridge::BatchLookupEntry(
     OpKernelContext* ctx, const int num_ids, int64_t* ids,

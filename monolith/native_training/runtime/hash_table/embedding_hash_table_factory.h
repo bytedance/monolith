@@ -23,7 +23,7 @@ namespace monolith {
 namespace hash_table {
 
 std::unique_ptr<EmbeddingHashTableInterface> NewEmbeddingHashTableFromConfig(
-    EmbeddingHashTableConfig config, cudaStream_t stream = 0);
+    EmbeddingHashTableConfig config, GpuExtraArgs args = GpuExtraArgs{});
 
 }  // namespace hash_table
 }  // namespace monolith

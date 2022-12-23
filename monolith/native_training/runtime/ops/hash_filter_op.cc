@@ -25,8 +25,8 @@ namespace tensorflow {
 namespace monolith_tf {
 
 using ::monolith::hash_filter::DummyHashFilter;
-using ::monolith::hash_filter::SlidingHashFilter;
 using ::monolith::hash_filter::ProbabilisticFilter;
+using ::monolith::hash_filter::SlidingHashFilter;
 
 class DummyFilterOp : public ResourceOpKernel<HashFilterTfBridge> {
  public:
@@ -99,7 +99,7 @@ class ProbabilisticFilterOp : public ResourceOpKernel<HashFilterTfBridge> {
   Status CreateResource(HashFilterTfBridge** filter_bridge)
       TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) override {
     auto filter = std::make_unique<ProbabilisticFilter>(equal_probability_);
-    *filter_bridge = new HashFilterTfBridge(std::move(filter), config_);
+    *filter_bridge = new HashFilterTfBridge(std::move(filter), config_, true);
     return Status::OK();
   };
 
@@ -132,9 +132,6 @@ REGISTER_OP("MonolithProbabilisticFilter")
     .SetIsStateful()
     .SetShapeFn(shape_inference::ScalarShape);
 
-REGISTER_KERNEL_BUILDER(Name("MonolithProbabilisticFilter").Device(DEVICE_CPU),
-                        ProbabilisticFilterOp);
-
 REGISTER_OP("MonolithDummyHashFilter")
     .Output("handle: resource")
     .Attr("container: string = ''")
@@ -143,6 +140,8 @@ REGISTER_OP("MonolithDummyHashFilter")
     .SetShapeFn(shape_inference::ScalarShape);
 REGISTER_KERNEL_BUILDER(Name("MonolithDummyHashFilter").Device(DEVICE_CPU),
                         DummyFilterOp);
+REGISTER_KERNEL_BUILDER(Name("MonolithProbabilisticFilter").Device(DEVICE_CPU),
+                        ProbabilisticFilterOp);
 
 }  // namespace monolith_tf
 }  // namespace tensorflow

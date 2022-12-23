@@ -1103,8 +1103,8 @@ class HashTableOpsTest(tf.test.TestCase):
           embeddings)
     self.assertAllEqual(embeddings, [1, 0, 1, 1, 1, 0, 1, 1])
     self.assertAllEqual(recv_splits, [4, 4])
-    self.assertAllEqual(id_offsets, [0, 1, 2, 3, 4, 5])
-    self.assertAllEqual(emb_offsets, [0, 1, 2, 4, 5, 6])
+    self.assertAllEqual(id_offsets, [0, 1, 2, 3, 4, 5, 6])
+    self.assertAllEqual(emb_offsets, [0, 1, 2, 4, 5, 6, 8])
     self.assertAllEqual(emb_dims, [1, 1, 2, 1, 1, 2])
 
   def test_fused_optimize(self):
@@ -1147,8 +1147,8 @@ class HashTableOpsTest(tf.test.TestCase):
           lookup_op)
     self.assertAllClose(embeddings, [1.1, 0.2, 0.2, 1.1, 0.2, 0.2])
     self.assertAllEqual(recv_splits, [3, 3])
-    self.assertAllEqual(id_offsets, [0, 1, 2, 3])
-    self.assertAllEqual(emb_offsets, [0, 1, 3, 4])
+    self.assertAllEqual(id_offsets, [0, 1, 2, 3, 4])
+    self.assertAllEqual(emb_offsets, [0, 1, 3, 4, 6])
     self.assertAllEqual(emb_dims, [1, 2, 1, 2])
 
   def test_batch_softmax_optimizer(self):

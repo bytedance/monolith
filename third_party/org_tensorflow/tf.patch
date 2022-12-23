@@ -357,3 +357,15 @@ index 5f307a6..198b211 100644
  )
  
  alias(
+diff --git a/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc b/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
+index 2bcc2b6e..d438ff6b 100644
+--- a/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
++++ b/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
+@@ -479,6 +479,7 @@ class DynamicPartitionOpGPU : public AsyncOpKernel {
+ 
+ TF_CALL_GPU_NUMBER_TYPES(REGISTER_DYNAMIC_PARTITION_GPU);
+ TF_CALL_COMPLEX_TYPES(REGISTER_DYNAMIC_PARTITION_GPU);
++TF_CALL_int32(REGISTER_DYNAMIC_PARTITION_GPU);
+ #undef REGISTER_DYNAMIC_PARTITION_GPU
+ 
+ }  // namespace tensorflow

@@ -43,6 +43,7 @@ class FilterType(object):
 
   SLIDING_HASH_FILTER = 'sliding_hash_filter'
   PROBABILISTIC_FILTER = 'probabilistic_filter'
+  NO_FILTER = 'no_filter'
 
 
 def create_hash_filter(capacity: int,
@@ -88,6 +89,8 @@ def _create_hash_filter(
     elif filter_type == FilterType.PROBABILISTIC_FILTER:
       return create_probabilistic_filter(filter_equal_probability, config,
                                          name_suffix)
+    elif filter_type == FilterType.NO_FILTER:
+      return create_dummy_hash_filter(name_suffix)
     else:
       raise ValueError("Invalid filter type, please investigate and retry!")
   else:

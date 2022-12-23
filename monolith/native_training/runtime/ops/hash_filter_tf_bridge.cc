@@ -13,19 +13,21 @@
 // limitations under the License.
 
 #include "monolith/native_training/runtime/ops/hash_filter_tf_bridge.h"
+
 #include "monolith/native_training/data/training_instance/cc/reader_util.h"
 
 namespace tensorflow {
 namespace monolith_tf {
 
 using ::monolith::hash_filter::Filter;
-using ::monolith::hash_table::HashFilterSplitMetaDump;
 using ::monolith::hash_table::HashFilterSplitDataDump;
+using ::monolith::hash_table::HashFilterSplitMetaDump;
 using ::monolith::hash_table::SlotOccurrenceThresholdConfig;
 
 HashFilterTfBridge::HashFilterTfBridge(
-    std::unique_ptr<Filter> filter, const SlotOccurrenceThresholdConfig& config)
-    : filter_(std::move(filter)) {
+    std::unique_ptr<Filter> filter, const SlotOccurrenceThresholdConfig& config,
+    bool is_probabilistic)
+    : filter_(std::move(filter)), is_probabilistic_(is_probabilistic) {
   slot_to_occurrence_threshold_.resize(get_max_slot_number(),
                                        config.default_occurrence_threshold());
   for (const auto& slot_occurrence_threshold :

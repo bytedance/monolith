@@ -604,8 +604,6 @@ class CpuTraining:
         with device_utils.maybe_device_if_allowed('/device:GPU:0'):
           hash_filters = hash_filter_ops.create_hash_filters(
               self.config.num_ps,
-              # disable hash filter (only use dummy filter) for GPU table for now
-              False if self._params.train.use_gpu_emb_table else
               self._enable_hash_filter,
               config=slot_occurrence_threshold_config.SerializeToString(),
               filter_capacity=self.config.filter_capacity,

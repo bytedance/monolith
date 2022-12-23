@@ -30,7 +30,8 @@ class HashFilterTfBridge : public ResourceBase {
  public:
   explicit HashFilterTfBridge(
       std::unique_ptr<monolith::hash_filter::Filter> filter,
-      const monolith::hash_table::SlotOccurrenceThresholdConfig& config);
+      const monolith::hash_table::SlotOccurrenceThresholdConfig& config,
+      bool is_probabilistic = false);
 
   bool ShouldBeFiltered(
       int64_t id, int64_t count,
@@ -65,12 +66,17 @@ class HashFilterTfBridge : public ResourceBase {
           get_meta_fn,
       std::function<bool(::monolith::hash_table::HashFilterSplitDataDump*)>
           get_data_fn) const;
+  const std::vector<int>& GetOccuranceThresholdArray() const {
+    return slot_to_occurrence_threshold_;
+  }
+  bool IsProbabilistic() const { return is_probabilistic_; }
 
  private:
   int GetSlotOccurrenceThreshold(int64_t fid) const;
 
   std::unique_ptr<monolith::hash_filter::Filter> filter_;
   std::vector<int> slot_to_occurrence_threshold_;
+  const bool is_probabilistic_;
 };
 
 // Carries the data through async process.

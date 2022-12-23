@@ -22,7 +22,6 @@
 
 #include "absl/algorithm/container.h"
 #include "absl/types/span.h"
-#include "glog/logging.h"
 #include "monolith/native_training/runtime/hash_table/embedding_hash_table.pb.h"
 #include "monolith/native_training/runtime/hash_table/initializer/initializer_interface.h"
 #include "monolith/native_training/runtime/hash_table/optimizer/optimizer_interface.h"

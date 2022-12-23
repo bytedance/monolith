@@ -477,14 +477,14 @@ def hash_table_from_config(config: entry.HashTableConfigInstance,
   slot_expire_time_config = config.table_config.slot_expire_time_config.SerializeToString(
   )
   hash_table_name = "MonolithHashTable_" + name_suffix
-  if hash_filter is None or use_gpu:  # We don't have gpu filter for now, get rid of or use_gpu if added one
-    with tf.device(d):
-      hash_filter = hash_filter_ops.create_dummy_hash_filter(
-          name_suffix=name_suffix)
   if len(config.learning_rate_fns) != len(
       config.table_config.entry_config.segments):
     raise ValueError(
         "Size of learning_rate_fns and size of segments must be equal.")
+  if hash_filter is None:
+    with tf.device(d):
+      hash_filter = hash_filter_ops.create_dummy_hash_filter(
+          name_suffix=name_suffix)
   if sync_client is None or use_gpu:  # We don't have gpu sync for now, get rid of or use_gpu if added one
     with tf.device(d):
       sync_client = distributed_serving_ops.create_dummy_sync_client()

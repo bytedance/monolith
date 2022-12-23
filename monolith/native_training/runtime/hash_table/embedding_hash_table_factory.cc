@@ -24,7 +24,7 @@ namespace monolith {
 namespace hash_table {
 
 std::unique_ptr<EmbeddingHashTableInterface> NewEmbeddingHashTableFromConfig(
-    EmbeddingHashTableConfig config, cudaStream_t stream) {
+    EmbeddingHashTableConfig config, GpuExtraArgs args) {
   std::unique_ptr<EntryAccessorInterface> accessor =
       NewEntryAccessor(config.entry_config());
   switch (config.type_case()) {

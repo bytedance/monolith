@@ -201,10 +201,8 @@ class HashTableFusedOptimizeOp : public OpKernel {
         ctx->input(num_tables_ + 6).vec<int32>();
     int64_t update_time = ctx->input(num_tables_ + 7).scalar<int64_t>()();
     int64_t global_step_value = ctx->input(num_tables_ + 8).scalar<int64_t>()();
-
     std::vector<EmbeddingHashTableTfBridge*> hash_tables(num_of_tables,
                                                          nullptr);
-    std::vector<int> hash_table_dims(num_of_tables, 0);
     std::vector<int> learning_rate_offsets_flat(num_of_tables, 0);
 
     for (int table_id = 0; table_id < num_of_tables; table_id++) {
@@ -213,7 +211,6 @@ class HashTableFusedOptimizeOp : public OpKernel {
                                          &hash_table));
       core::ScopedUnref unref(hash_table);
       hash_tables[table_id] = hash_table;
-      hash_table_dims[table_id] = hash_table->dim_size();
       if (table_id > 0) {
         learning_rate_offsets_flat[table_id] =
             learning_rate_offsets_flat[table_id - 1] +
