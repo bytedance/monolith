@@ -26,7 +26,8 @@ from tensorflow.python.keras.engine.input_spec import InputSpec
 
 from monolith.native_training.utils import with_params
 from monolith.native_training.monolith_export import monolith_export
-from monolith.native_training.layers.layer_ops import bernoulli_gate, discrete_gate, discrete_truncated_gate
+from monolith.native_training.layers.layer_ops import bernoulli_gate, discrete_gate, discrete_truncated_gate, \
+                                                      nas_arch_weight
 from monolith.native_training.layers.utils import check_dim, dim_size
 
 FLAGS = flags.FLAGS

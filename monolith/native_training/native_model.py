@@ -340,6 +340,7 @@ class MonolithBaseModel(NativeTask, ABC):
         features: Dict[str, tf.Tensor], mode: tf.estimator.ModeKeys,
         config: tf.estimator.RunConfig) -> tf.estimator.EstimatorSpec:
 
+      global_step = self._global_step
       real_mode = self._get_real_mode(mode)
       local_spec = self.model_fn(features, real_mode)
 
@@ -572,7 +573,7 @@ class MonolithBaseModel(NativeTask, ABC):
                   clip_type=feature_utils.GradClipType.ClipByGlobalNorm,
                   clip_norm=self.clip_norm,
                   dense_weight_decay=self.dense_weight_decay,
-                  global_step=self._global_step))
+                  global_step=global_step))
         else:
           train_ops.append(
               feature_utils.apply_gradients_with_var_optimizer(
@@ -583,7 +584,7 @@ class MonolithBaseModel(NativeTask, ABC):
                   clip_type=feature_utils.GradClipType.ClipByGlobalNorm,
                   clip_norm=self.clip_norm,
                   dense_weight_decay=self.dense_weight_decay,
-                  global_step=self._global_step,
+                  global_step=global_step,
                   grads_and_vars_summary=self.enable_grads_and_vars_summary))
 
         return tf.estimator.EstimatorSpec(mode,

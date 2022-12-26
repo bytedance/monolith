@@ -518,6 +518,10 @@ class GraphDefHelper(object):
         sub_gd.node.extend([copy.deepcopy(node)])
       elif node.op == "VarHandleOp":
         variables.add(n)
+      elif node.op == "ReadVariableOp":
+        name = f'{node.input[0]}/Read/ReadVariableOp'
+        if node.name != name:
+          sub_gd.node.extend([copy.deepcopy(node)])
 
     if with_library:
       func_names = set()

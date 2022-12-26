@@ -82,7 +82,7 @@ REGISTER_OP("DiscreteTruncatedGate")
       if (drop_first_dim) {
         shape_inference::DimensionHandle alpha_dim = ctx->Dim(ctx->input(0), 0);
         shape_inference::DimensionHandle sampled_dim;
-        ctx->Subtract(alpha_dim,  1, &sampled_dim);
+        ctx->Subtract(alpha_dim, 1, &sampled_dim);
 
         ctx->set_output(0, ctx->Vector(sampled_dim));
       } else {
@@ -103,6 +103,16 @@ REGISTER_OP("DiscreteTruncatedGateGrad")
     .Attr("temperature: float")
     .SetShapeFn([](shape_inference::InferenceContext *ctx) {
       ctx->set_output(0, ctx->input(2));
+      return Status::OK();
+    });
+
+REGISTER_OP("NasArchWeight")
+    .Input("arch_weight: float")
+    .Input("global_step: float")
+    .Output("arch_output: float")
+    .Attr("update_rate: float")
+    .SetShapeFn([](shape_inference::InferenceContext *ctx) {
+      ctx->set_output(0, ctx->input(0));
       return Status::OK();
     });
 

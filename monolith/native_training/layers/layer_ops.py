@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import tensorflow as tf
+from absl import logging
 
 from monolith.native_training.runtime.ops import gen_monolith_ops
 
