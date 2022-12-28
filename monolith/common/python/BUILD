@@ -19,5 +19,6 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//monolith:utils",
+        "//monolith/native_training:mlp_utils",
     ],
 )

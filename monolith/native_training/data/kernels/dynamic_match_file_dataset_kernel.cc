@@ -49,8 +49,8 @@ class DynamicMatchingFilesDatasetOp : public DatasetOpKernel {
     pattern_strs.reserve(num_patterns);
 
     for (size_t i = 0; i < num_patterns; i++) {
-      LOG(INFO) << "pattern " << patterns(i) << ", num_patterns "
-                << num_patterns;
+      LOG_EVERY_N(INFO, 100) << "pattern " << patterns(i) << ", num_patterns "
+                              << num_patterns;
       pattern_strs.push_back(patterns(i));
     }
 

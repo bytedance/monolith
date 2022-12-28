@@ -112,6 +112,7 @@ py_library(
         "//monolith/native_training/distribute:distributed_dataset",
         "//monolith/native_training/hooks:ckpt_hooks",
         "//monolith/native_training/runtime/ops:gen_monolith_ops",
+        "//monolith/native_training:mlp_utils",
         "@org_tensorflow//tensorflow:tensorflow_py",
         requirement("kafka_python"),
     ],
@@ -129,6 +130,8 @@ py_library(
         "//monolith/native_training:monolith_export",
         "//monolith/native_training:utils",
         "//monolith/native_training/runtime/ops:gen_monolith_ops",
+        "//idl:example_py_proto",
+        "//idl:proto_parser_py_proto",
         "@org_tensorflow//tensorflow:tensorflow_py",
     ],
 )

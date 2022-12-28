@@ -15,6 +15,7 @@
 import os
 
 from monolith import utils
+from monolith.native_training.mlp_utils import MLPEnv
 
 
 def enable_tcmalloc():
@@ -28,7 +29,8 @@ def setup_heap_profile(heap_profile_inuse_interval=104857600,
                        heap_profile_allocation_interval=1073741824,
                        heap_profile_time_interval=0,
                        sample_ratio=1.0,
-                       heap_profile_mmap=False):
+                       heap_profile_mmap=False,
+                       heap_pro_file=None):
   """See https://gperftools.github.io/gperftools/heapprofile.html for the meaning of each
   parameters meaning.
 
@@ -37,7 +39,9 @@ def setup_heap_profile(heap_profile_inuse_interval=104857600,
     very slow, usually can be set something like 1/64.
   """
   enable_tcmalloc()
-  os.environ["HEAPPROFILE"] = os.path.join(utils.find_main(), "hprof")
+  mlp_env = MLPEnv()
+  os.environ["HEAPPROFILE"] = os.path.join(heap_pro_file or utils.find_main(),
+                                           f"hprof_{mlp_env.index}")
   os.environ["HEAP_PROFILE_INUSE_INTERVAL"] = str(
       int(heap_profile_inuse_interval / sample_ratio))
   os.environ["HEAP_PROFILE_ALLOCATION_INTERVAL"] = str(

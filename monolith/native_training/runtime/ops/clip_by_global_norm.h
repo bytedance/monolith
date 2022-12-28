@@ -40,14 +40,13 @@ struct ClipByGlobalNormImpl {
 template <typename Device>
 class ClipByGlobalNorm : public OpKernel {
  public:
-  explicit ClipByGlobalNorm(OpKernelConstruction* context) : OpKernel(context) {
-    OP_REQUIRES_OK(context, context->GetAttr("clip_norm", &clip_norm_));
-  }
+  explicit ClipByGlobalNorm(OpKernelConstruction* context)
+      : OpKernel(context) {}
 
   void Compute(OpKernelContext* context) override {
     VLOG(1) << "In ClipByGlobalNorm Computation";
 
-    auto num_inputs = context->num_inputs() - 1;
+    auto num_inputs = context->num_inputs() - 2;
     std::vector<const float*> input_ptrs(num_inputs);
     std::vector<int> input_lens(num_inputs);
     for (int i = 0; i < num_inputs; ++i) {
@@ -57,7 +56,8 @@ class ClipByGlobalNorm : public OpKernel {
 
     std::vector<float*> output_ptrs(num_inputs);
     float global_norm = context->input(num_inputs).scalar<float>().data()[0];
-    if (global_norm > clip_norm_) {
+    float clip_norm = context->input(num_inputs + 1).scalar<float>().data()[0];
+    if (global_norm > clip_norm) {
       for (int i = 0; i < num_inputs; ++i) {
         Tensor* temp;
         OP_REQUIRES_OK(context, context->allocate_output(
@@ -66,7 +66,7 @@ class ClipByGlobalNorm : public OpKernel {
       }
       ClipByGlobalNormImpl<Device>::Compute(context, input_ptrs, input_lens,
                                             output_ptrs,
-                                            clip_norm_ / global_norm);
+                                            clip_norm / global_norm);
     } else {
       // If no clip, output as input.
       for (int i = 0; i < num_inputs; ++i) {
@@ -74,9 +74,6 @@ class ClipByGlobalNorm : public OpKernel {
       }
     }
   }
-
- private:
-  float clip_norm_;
 };
 
 }  // namespace monolith

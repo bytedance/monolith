@@ -201,9 +201,9 @@ class PBDatasetOp : public DatasetOpKernel {
       }
       CHECK(mapper_->SetMapping(name_to_id, id_to_name));
       if (input_pb_type == "examplebatch" && output_pb_type == "example") {
-        mapper_->TurnOn();
+//        mapper_->TurnOn();
       }
-      LOG_FIRST_N(INFO, 1) << "NameToId: " << mapper_->DebugString();
+//      LOG_FIRST_N(INFO, 1) << "NameToId: " << mapper_->DebugString();
     }
 
     std::unique_ptr<IteratorBase> MakeIteratorInternal(

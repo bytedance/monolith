@@ -1,3 +1,4 @@
+load("@org_tensorflow//tensorflow:tensorflow.bzl", "tf_cc_binary")
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("@pip_deps//:requirements.bzl", "requirement")
 
@@ -76,3 +77,4 @@ py_test(
         ":utils",
     ],
 )
+

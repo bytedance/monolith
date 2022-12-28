@@ -125,6 +125,8 @@ class NativeTask(BaseTask, abc.ABC):
     p.metrics.define("parse_fn", None, "parse_fn")
     p.metrics.define("key_fn", None, "key_fn")
     p.metrics.define("layout_fn", None, "layout_fn")
+    p.metrics.define("dump_filename", '', "Dump filename")
+    p.metrics.define('use_data_service', False, "use data service")
 
     p.train.define(
         'max_pending_seconds_for_barrier', 30,

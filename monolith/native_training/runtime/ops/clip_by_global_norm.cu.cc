@@ -102,7 +102,8 @@ struct ClipByGlobalNormImpl<GPUDevice> {
 
 REGISTER_KERNEL_BUILDER(Name("MonolithClipByGlobalNorm")
                             .Device(DEVICE_GPU)
-                            .HostMemory("global_norm"),
+                            .HostMemory("global_norm")
+                            .HostMemory("clip_norm"),
                         ClipByGlobalNorm<GPUDevice>);
 }  // namespace monolith
 }  // namespace tensorflow

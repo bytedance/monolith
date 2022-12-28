@@ -451,6 +451,7 @@ cc_library(
     name = "deep_insight_client_tf_bridge",
     hdrs = ["deep_insight_client_tf_bridge.h"],
     deps = [
+        ":file_metric_writer",
         "//monolith/native_training/runtime/deep_insight",
         "@com_google_absl//absl/strings:str_format",
         "@org_tensorflow//tensorflow/core:framework_headers_lib",
@@ -530,6 +531,33 @@ cc_library(
         "@org_tensorflow//tensorflow/core/distributed_runtime/rpc:grpc_runtime",
     ],
 )
+
+cc_library(
+    name = "file_metric_writer",
+    srcs = ["file_metric_writer.cc"],
+    hdrs = ["file_metric_writer.h"],
+    deps = [
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_glog//:glog",
+        "@org_tensorflow//tensorflow/core:framework_headers_lib",
+        "//monolith/native_training/runtime/concurrency:queue",
+        "//monolith/native_training/runtime/concurrency:thread_pool",
+    ],
+)
+
+tf_cc_test(
+    name = "file_metric_writer_test",
+    srcs = ["file_metric_writer_test.cc"],
+    deps = [
+        ":file_metric_writer",
+        "@com_google_glog//:glog",
+        "@com_google_googletest//:gtest_main",
+        "@org_tensorflow//tensorflow/core:framework",
+        "@org_tensorflow//tensorflow/core:tensorflow",
+        "@org_tensorflow//tensorflow/core:lib",
+    ],
+)
+
 
 # Expose monolith ops for tf serving
 # we may need to change it to tf_gpu_kernel_library_allow_except later

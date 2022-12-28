@@ -27,7 +27,7 @@ _FEATURE_REQ_TIME = "req_time"
 _SAMPLE_RATE = "sample_rate"
 _UID = "uid"
 
-def deep_insight_client(enable_metrics_counter: bool=False, is_fake: bool = False, container: str=socket.gethostname()) \
+def deep_insight_client(enable_metrics_counter: bool=False, is_fake: bool = False, dump_filename=None, container: str=socket.gethostname()) \
   -> tf.Tensor:
   """
   Create a deep insight client
@@ -37,7 +37,7 @@ def deep_insight_client(enable_metrics_counter: bool=False, is_fake: bool = Fals
                 create and use a seperate deepinsight resource.
   """
   return deep_insight_ops.monolith_create_deep_insight_client(
-      enable_metrics_counter, is_fake, container)
+      enable_metrics_counter, is_fake, dump_filename, container)
 
 
 def write_deep_insight(deep_insight_client_tensor: tf.Tensor,

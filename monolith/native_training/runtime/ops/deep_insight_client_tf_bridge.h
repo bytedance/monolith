@@ -19,6 +19,7 @@
 
 #include "absl/strings/str_format.h"
 #include "monolith/native_training/runtime/deep_insight/deep_insight.h"
+#include "monolith/native_training/runtime/ops/file_metric_writer.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 
 using monolith::deep_insight::ExtraField;
@@ -29,8 +30,11 @@ namespace monolith_tf {
 class DeepInsightClientTfBridge : public ResourceBase {
  public:
   explicit DeepInsightClientTfBridge(
-      std::unique_ptr<monolith::deep_insight::DeepInsight> deep_insight_client)
-      : deep_insight_client_(std::move(deep_insight_client)) {}
+      std::unique_ptr<monolith::deep_insight::DeepInsight> deep_insight_client,
+      std::unique_ptr<monolith::deep_insight::FileMetricWriter>
+          file_metric_writer)
+      : deep_insight_client_(std::move(deep_insight_client)),
+        file_metric_writer_(std::move(file_metric_writer)) {}
 
   std::string SendV2(
       const std::string& model_name, const std::vector<std::string>& targets,
@@ -39,9 +43,11 @@ class DeepInsightClientTfBridge : public ResourceBase {
       const std::vector<float>& sample_rates, float sample_ratio,
       const std::vector<std::shared_ptr<ExtraField>>& extra_fields,
       bool return_msgs) {
-    return deep_insight_client_->SendV2(
+    std::string msg = deep_insight_client_->SendV2(
         model_name, targets, uid, req_time, train_time, labels, preds,
-        sample_rates, sample_ratio, extra_fields, return_msgs);
+        sample_rates, sample_ratio, extra_fields, true);
+    file_metric_writer_->Write(msg);
+    return return_msgs ? msg : "";
   }
 
   int64_t GenerateTrainingTime() {
@@ -59,6 +65,7 @@ class DeepInsightClientTfBridge : public ResourceBase {
 
  private:
   std::unique_ptr<monolith::deep_insight::DeepInsight> deep_insight_client_;
+  std::unique_ptr<monolith::deep_insight::FileMetricWriter> file_metric_writer_;
 };
 
 }  // namespace monolith_tf

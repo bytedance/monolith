@@ -182,6 +182,7 @@ class MonolithBaseModel(NativeTask, ABC):
              'enable_grads_and_vars_summary')
     p.define('dense_weight_decay', 0.0, 'dense_weight_decay')
     p.define("clip_norm", 1000.0, "float, clip_norm")
+    p.define("sparse_norm_warmup_steps", None, "int, sparse norm warmup steps")
     p.define('default_occurrence_threshold', 0, 'int')
     return p
 
@@ -463,18 +464,14 @@ class MonolithBaseModel(NativeTask, ABC):
           labels_list.append(label_tensor)
           preds_list.append(pred_tensor)
 
-          mask = tf.greater_equal(label_tensor, self.valid_label_threshold)
-          l = tf.boolean_mask(label_tensor, mask)
-          p = tf.boolean_mask(pred_tensor, mask)
-
           if head_classification:
             auc_per_core, auc_update_op = tf.compat.v1.metrics.auc(
-                labels=l, predictions=p, name=name)
+                labels=label_tensor, predictions=pred_tensor, name=name)
             tf.compat.v1.summary.scalar("{}_auc".format(name), auc_per_core)
             train_ops.append(auc_update_op)
           else:
             mean_squared_error, mse_update_op = tf.compat.v1.metrics.mean_squared_error(
-                labels=l, predictions=p, name=name)
+                labels=label_tensor, predictions=pred_tensor, name=name)
             tf.compat.v1.summary.scalar("{}_mse".format(name),
                                         mean_squared_error)
             train_ops.append(mse_update_op)
@@ -501,6 +498,7 @@ class MonolithBaseModel(NativeTask, ABC):
         sample_ratio = self.metrics.deep_insight_sample_ratio
         extra_fields_keys = self.metrics.extra_fields_keys
 
+        dump_filename = f"{self.metrics.dump_filename}.part-{get().worker_index:05d}" if self.metrics.dump_filename else None
         deep_insight_op = metric_utils.write_deep_insight(
             features=features,
             sample_ratio=self.metrics.deep_insight_sample_ratio,
@@ -513,7 +511,8 @@ class MonolithBaseModel(NativeTask, ABC):
             preds_list=preds_list,
             extra_fields_keys=extra_fields_keys,
             enable_kafka_metrics=self.metrics.enable_kafka_metrics or
-            self.metrics.enable_file_metrics)
+            self.metrics.enable_file_metrics,
+            dump_filename=dump_filename)
         logging.info("model_name: {}, target: {}.".format(
             model_name, self.metrics.deep_insight_target))
         train_ops.append(deep_insight_op)
@@ -583,9 +582,11 @@ class MonolithBaseModel(NativeTask, ABC):
                   loss,
                   clip_type=feature_utils.GradClipType.ClipByGlobalNorm,
                   clip_norm=self.clip_norm,
+                  sparse_norm_warmup_steps=self.sparse_norm_warmup_steps,
                   dense_weight_decay=self.dense_weight_decay,
                   global_step=global_step,
-                  grads_and_vars_summary=self.enable_grads_and_vars_summary))
+                  grads_and_vars_summary=self.enable_grads_and_vars_summary,
+                  use_allreduce=FLAGS.enable_sync_training))
 
         return tf.estimator.EstimatorSpec(mode,
                                           loss=loss,
@@ -660,7 +661,7 @@ class MonolithBaseModel(NativeTask, ABC):
       name (:obj:`str`): 签名的名称
       outputs (:obj:`Union[tf.Tensor, Dict[str, tf.Tensor]]`): 输出, 可以是一个Tensor, 也可以是一个Dict[str, tf.Tensor]
       head_name (:obj:`str`): output对应的head的名称
-      head_name (:obj:`str`): output对应的head的类型, 如user, item, context等 
+      head_name (:obj:`str`): output对应的head的类型, 如user, item, context等
 
     """
 
@@ -745,11 +746,14 @@ class MonolithModel(MonolithBaseModel):
 
   def _get_fs_conf(self, shared_name: str, slot: int, occurrence_threshold: int,
                    expire_time: int) -> FeatureSlotConfig:
-    return FeatureSlotConfig(name=shared_name,
-                             has_bias=False,
-                             slot_id=slot,
-                             occurrence_threshold=occurrence_threshold,
-                             expire_time=expire_time)
+    return FeatureSlotConfig(
+        name=shared_name,
+        has_bias=False,
+        slot_id=slot,
+        occurrence_threshold=occurrence_threshold,
+        expire_time=expire_time,
+        hashtable_config=entry.GpucucoHashTableConfig()
+        if self.p.train.use_gpu_emb_table else entry.CuckooHashTableConfig())
 
   def _embedding_slice_lookup(self, fc: Union[str, FeatureColumn],
                               slice_name: str, slice_dim: int,

@@ -528,6 +528,7 @@ py_library(
         ":native_task",
         ":native_task_context",
         ":utils",
+        ":mlp_utils",
         "//monolith:utils",
         "//monolith/core:base_layer",
         "//monolith/native_training:feature_utils",
@@ -774,6 +775,7 @@ py_library(
     deps = [
         ":consul",
         ":zk_utils",
+        ":mlp_utils",
     ],
 )
 
@@ -1224,4 +1226,11 @@ py_test(
     deps = [
         ":nested_tensors",
     ],
+)
+
+
+py_library(
+    name = "mlp_utils",
+    srcs = ["mlp_utils.py"],
+    # deps = [requirement('mpi4py')],
 )

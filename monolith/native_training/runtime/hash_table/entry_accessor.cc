@@ -297,7 +297,6 @@ Objects GenerateObjFromSegments(
 }  // namespace
 
 std::unique_ptr<EntryAccessorInterface> NewEntryAccessor(EntryConfig config) {
-  LOG(INFO) << "EntryConfig: " << config.DebugString();
   Objects obj = GenerateObjFromSegments(config.mutable_segments());
   switch (config.entry_type()) {
     case EntryConfig::TRAINING:

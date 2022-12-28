@@ -30,12 +30,15 @@ from kazoo.exceptions import NoNodeError, NodeExistsError
 
 from monolith.native_training import consul
 from monolith.native_training.zk_utils import default_zk_servers
+from monolith.native_training.mlp_utils import MLPEnv, check_port
+
 
 
 class ServiceDiscoveryType(Enum):
   PRIMUS = 1
   CONSUL = 2
   ZK = 3
+  MLP = 4
 
 
 class ServiceDiscovery(abc.ABC):
@@ -382,6 +385,86 @@ class ZKServiceDiscovery(ServiceDiscovery):
 
     for ts in self._threads.values():
       ts.stop_and_join()
+
+  def __del__(self):
+    self.close()
+
+
+class MLPServiceDiscovery(ServiceDiscovery):
+  def __init__(self):
+    self._mlp_env = MLPEnv()
+    self._filters = set()
+
+  def _check(self, name: str, index: int, addr: str):
+    if self._mlp_env is None:
+      return
+    assert name.upper() in self._mlp_env.all_roles
+    assert index < self._mlp_env.num_replicas(name)
+    exp_addr = self._mlp_env.get_addr(name, index=index)
+    exp_host, exp_port = exp_addr.split(':')
+    real_host, real_port = addr.split(':')
+    assert real_host in {'local', 'localhost', '127.0.0.1', '0.0.0.0',
+                         exp_host, self._mlp_env.host,
+                         self._mlp_env.get_host(is_primary=False)}
+    assert exp_port == real_port
+
+  def register(self, name: str, index: int, addr: str):
+    self._check(name, index, addr)
+    self._filters.remove(f'{name.lower()}:{index}')
+
+  def deregister(self, name: str, index: int, addr: str):
+    self._check(name, index, addr)
+    self._filters.add(f'{name.lower()}:{index}')
+
+  def query(self, name, skip_port_check: bool = False) -> Dict[int, str]:
+    assert name is not None and len(name) > 0
+    if self._mlp_env is None:
+      return {}
+    result = {}
+    for idx in range(self._mlp_env.num_replicas(name)):
+      addr = self._mlp_env.get_addr(name, index=idx)
+      assert addr is not None
+      key = f'{name.lower()}:{idx}'
+      if key not in self._filters:
+        result[idx] = addr
+        if name.lower() == 'ps' and not skip_port_check:
+          host, port = addr.split(':')
+          assert check_port(host, int(port), timeout=3600)
+    return result
+
+  def deregister_all(self) -> Dict[str, Dict[int, str]]:
+    if self._mlp_env is None:
+      return {}
+    for name, num in self._mlp_env.all_roles.items():
+      for idx in range(num):
+        key = f'{name.lower()}:{idx}'
+        self._filters.add(key)
+
+  def query_all(self):
+    if self._mlp_env is None:
+      return {}
+    result = {}
+    for name, num in self._mlp_env.all_roles.items():
+      if name.lower() in {'ps', 'worker', 'chief'}:
+        name = name.lower()
+        result[name] = self.query(name, True)
+    return result
+
+  @property
+  def server_type(self):
+    if self._mlp_env is None:
+      return None
+    return self._mlp_env.role.lower()
+
+  @property
+  def index(self):
+    if self._mlp_env is None:
+      return None
+    return self._mlp_env.index
+
+  def close(self):
+    self._mlp_env = None
+    self._filters.clear()
 
   def __del__(self):
     self.close()

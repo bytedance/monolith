@@ -16,6 +16,7 @@ from absl import logging, flags
 from enum import Enum
 import os, sys, six
 import types
+import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Iterable, Callable, Optional, Union
 
@@ -35,6 +36,11 @@ from tensorflow.python.framework import load_library
 from tensorflow.python.data.util import nest
 from tensorflow.python.data.util import structure
 import tensorflow.python.data.experimental.service as dsvc
+from tensorflow.python.ops import gen_experimental_dataset_ops
+from tensorflow.python.data.experimental.ops import compression_ops
+from tensorflow.python.data.experimental.ops.data_service_ops import \
+  _parse_service, _DataServiceDataset, ProcessingMode
+from tensorflow.python.data.experimental.ops.distribute_options import ExternalStatePolicy
 
 from monolith.native_training.hooks import ckpt_hooks
 from monolith.utils import get_libops_path
@@ -48,6 +54,9 @@ from monolith.native_training.runtime.ops import gen_monolith_ops
 from kafka import KafkaConsumer
 from threading import Thread, RLock
 from queue import Queue
+from monolith.native_training.mlp_utils import enable_sync_training
+from tensorflow.core.framework.attr_value_pb2 import AttrValue
+from tensorflow.core.framework.tensor_pb2 import TensorProto
 
 pb_datasource_ops = gen_monolith_ops
 
@@ -359,9 +368,9 @@ class DistributedFilePBDataset(dataset_ops.DatasetSource):
       feature_pruning_type: int = FeaturePruningType.PRUNING_RAW_FEATURE,
       exclude_fn: Callable[[tf.Tensor], bool] = None,
       use_data_service: bool = False,
-      cycle_length=None,
+      cycle_length=2,
       block_length=None,
-      num_parallel_calls=None,
+      num_parallel_calls=tf.data.AUTOTUNE,
       deterministic=None,
       **kwargs):
     if not patterns:
@@ -369,7 +378,9 @@ class DistributedFilePBDataset(dataset_ops.DatasetSource):
     elif isinstance(patterns, str):
       patterns = [patterns]
     else:
-      logging.info(f'patterns: {patterns}')
+      logging.info(
+          f'patterns: len {len(patterns)}, frist is {patterns[0]}, last is {patterns[-1]}'
+      )
     patterns.sort()
     enable_dynamic_sharding = kwargs.get(
         'enable_dynamic_sharding', _get_params('enable_dynamic_sharding',
@@ -385,8 +396,10 @@ class DistributedFilePBDataset(dataset_ops.DatasetSource):
         feature_pruning_type=feature_pruning_type,
         disable_iterator_save_restore=not enable_dynamic_sharding,
         **kwargs)
-    if use_data_service:
+    graph = tf.compat.v1.get_default_graph()
+    if use_data_service and not hasattr(graph, 'dry_run'):
       files_list = DynamicMatchingFilesDataset(patterns)
+      # files_list = tf.data.Dataset.from_tensor_slices(patterns)
       if exclude_fn is not None:
         files_list = files_list.filter(predicate=exclude_fn)
       dataset = files_list.interleave(map_func,
@@ -1020,50 +1033,180 @@ class KafkaDataset(dataset_ops.DatasetSource):
     return self._dataset.element_spec
 
 
+def register_dataset(service, dataset, buffer_size=32):
+  protocol, address = _parse_service(service)
+  external_state_policy = dataset.options().experimental_external_state_policy
+  if external_state_policy is None:
+    external_state_policy = ExternalStatePolicy.WARN
+
+  dataset = dataset.map(lambda *x: compression_ops.compress(x),
+                        num_parallel_calls=dataset_ops.AUTOTUNE)
+  # dataset = dataset.prefetch(buffer_size=buffer_size)
+  dataset = dataset._apply_options()
+
+  dataset_id = gen_experimental_dataset_ops.register_dataset(
+      dataset._variant_tensor,
+      address=address,
+      protocol=protocol,
+      external_state_policy=external_state_policy.value)
+
+  return dataset_id
+
+
+def merged_window(self: tf.data.Dataset,
+                  size: int = 2,
+                  drop_remainder: bool = True):
+  dataset = self.window(size=size, drop_remainder=drop_remainder)
+
+  def re_shape(ts: Union[tf.Tensor, tf.RaggedTensor]):
+    if isinstance(ts, tf.Tensor):
+      shape = ts._shape_as_list()
+      if shape:
+        if shape[0] is None or shape[1] is None:
+          shape[1] = -1
+        else:
+          shape[1] = shape[0] * shape[1]
+        del shape[0]
+        return tf.reshape(ts, shape=shape)
+      else:
+        return ts
+    else:
+      return ts.values
+
+  element_spec = self.element_spec
+  if isinstance(element_spec, (tf.TensorSpec, tf.RaggedTensor)):
+    return dataset.flat_map(map_func=lambda window: window.batch(
+        size, drop_remainder=drop_remainder).map(map_func=re_shape))
+  elif isinstance(element_spec, (tuple, list)):
+    return dataset.flat_map(map_func=lambda *window: tf.data.Dataset.zip(
+        tuple(
+            value.batch(size, drop_remainder=drop_remainder).map(
+                map_func=re_shape) for value in window)))
+  elif isinstance(element_spec, dict):
+    return dataset.flat_map(map_func=lambda window: tf.data.Dataset.zip({
+        key: value.batch(size, drop_remainder=drop_remainder).map(
+            map_func=re_shape) for key, value in window.items()
+    }))
+  else:
+    raise Exception(f"element_spec {element_spec} is not support!")
+
+
 def distribute(self,
                target,
                *,
                job_name: str,
                num_worker: int,
                worker_idx: int,
-               queue_device: str = "/device:CPU:0",
-               max_outstanding_requests: int = None):
+               queue_device: str = "/job:ps/task:0/device:CPU:0",
+               max_outstanding_requests: int = dataset_ops.AUTOTUNE,
+               window_size: int = None):
+  graph = tf.compat.v1.get_default_graph()
+  if max_outstanding_requests is None:
+    max_outstanding_requests = min(num_worker, 8)
+  if hasattr(graph, 'dry_run'):
+    return self
+  elif num_worker is None or num_worker <= 0:
+    logging.warning(f'num_worker is {num_worker}, error')
+    return self
+  elif worker_idx is None or worker_idx < 0:
+    logging.warning(f'worker_idx is {worker_idx}, error')
+    return self
+
   try:
     if FLAGS.kafka_topics is not None and FLAGS.kafka_group_id is not None:
       return self
   except Exception as e:
     pass
 
-  element_spec = self.element_spec
-  with tf.compat.v1.device(queue_device):
-    queue = tf.compat.v1.FIFOQueue(capacity=num_worker - 1,
-                                   dtypes=[tf.int64],
-                                   shared_name=f'{job_name}_queue')
+  tf_config = os.environ.get('TF_CONFIG')
+  if tf_config is not None:
+    tf_config = json.loads(tf_config)
+    roles = set(map(lambda x: x.lower(), tf_config['cluster']))
+    if queue_device is None:
+      if 'ps' in roles:
+        queue_device = "/job:ps/task:0/device:CPU:0"
+      elif 'worker' in roles:
+        queue_device = "/job:worker/task:0/device:CPU:0"
+      else:
+        raise Exception('role error')
 
-  if worker_idx == 0:
-    # data service try to register dataset, if the dataset has been registed, return dataset_id drectily
-    # that means get or register dataset. for data parallel, the data pipeline assure to be identity
-    # here we ues queue to ensure the same data pipeline for a job
-    dataset_id = dsvc.register_dataset(target, self)
-    enqueue_op = queue.enqueue_many(vals=[dataset_id] * (num_worker - 1))
-    with tf.compat.v1.control_dependencies(control_inputs[enqueue_op]):
-      # to share pipeline, job_name must be specified
-      return dsvc.from_dataset_id(
+  element_spec = self.element_spec
+  if tf_config is not None and 'ps' in map(lambda x: x.lower(),
+                                           tf_config['cluster']):
+    logging.info('PS/Worker mode, use queue to broadcast dataset_id')
+    with tf.compat.v1.device(queue_device):
+      queue = tf.compat.v1.FIFOQueue(capacity=num_worker,
+                                     dtypes=[tf.int64],
+                                     shared_name=f'{job_name}_queue',
+                                     shapes=tuple())
+    if worker_idx == 0:
+      # data service try to register dataset, if the dataset has been registed, return dataset_id drectily
+      # that means get or register dataset. for data parallel, the data pipeline assure to be identity
+      # here we ues queue to ensure the same data pipeline for a job
+      dataset_id = register_dataset(target, self)
+      stacked_dids = tf.stack(values=[dataset_id for _ in range(num_worker)],
+                              name='stacked_dids')
+      enqueue_op = queue.enqueue_many(vals=stacked_dids)
+      with tf.compat.v1.control_dependencies(control_inputs=[enqueue_op]):
+        # to share pipeline, job_name must be specified
+        dataset = dsvc.from_dataset_id(
+            processing_mode="distributed_epoch",
+            service=target,
+            dataset_id=dataset_id,
+            job_name=job_name,
+            element_spec=element_spec,
+            max_outstanding_requests=max_outstanding_requests)
+    else:
+      dataset_id = queue.dequeue()
+      dataset = dsvc.from_dataset_id(
           processing_mode="distributed_epoch",
           service=target,
           dataset_id=dataset_id,
           job_name=job_name,
           element_spec=element_spec,
           max_outstanding_requests=max_outstanding_requests)
-  else:
-    dataset_id = queue.dequeue()
-    return dsvc.from_dataset_id(
+    if window_size is not None:
+      dataset = dataset.merged_window(size=window_size)
+  elif enable_sync_training():
+    has_error = False
+    try:
+      enable_bps = int(os.getenv("MONOLITH_WITH_BYTEPS", "0"))
+      if enable_bps:
+        import byteps.tensorflow as hvd
+      else:
+        import horovod.tensorflow as hvd
+    except (ImportError, tf.errors.NotFoundError) as e:
+      logging.info(f'ImportError is {e}')
+      has_error = True
+
+    if has_error:
+      dataset_id = register_dataset(target, self)
+    else:
+      dataset_id = tf.constant(value=1000,
+                               dtype=tf.int64,
+                               shape=tuple(),
+                               name='default_dataset_id')
+      if hvd.rank() == 0:
+        tf.compat.v1.add_to_collection(name="registed_dataset_id",
+                                       value=register_dataset(target, self))
+      else:
+        tf.compat.v1.add_to_collection(name="registed_dataset_id",
+                                       value=dataset_id)
+
+    dataset = dsvc.from_dataset_id(
         processing_mode="distributed_epoch",
         service=target,
         dataset_id=dataset_id,
         job_name=job_name,
         element_spec=element_spec,
         max_outstanding_requests=max_outstanding_requests)
+    if window_size is not None:
+      dataset = dataset.merged_window(size=window_size)
+  else:
+    logging.info(f'enable_sync_training is {enable_sync_training()}')
+    return self
+
+  return dataset
 
 
 Dataset.instance_reweight = instance_reweight
@@ -1071,3 +1214,4 @@ Dataset.negative_gen = negative_gen
 Dataset.split_flow = split_flow
 Dataset.merge_flow = merge_flow
 Dataset.distribute = distribute
+Dataset.merged_window = merged_window

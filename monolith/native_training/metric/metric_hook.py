@@ -366,7 +366,7 @@ class KafkaMetricHook(tf.estimator.SessionRunHook):
 
 def default_parse_fn(obj: Any) -> Any:
   if obj is not None:
-    if isinstance(obj, str):
+    if isinstance(obj, (str, bytes)):
       return json.loads(obj)
   return obj
 
@@ -524,10 +524,10 @@ class FileMetricHook(tf.estimator.SessionRunHook):
 
     metric_values = run_value.results
     msgs = metric_values.get('deep_insight_op')
-    if msgs:
-      if isinstance(msgs, (list, tuple)):
+    if msgs is not None:
+      if isinstance(msgs, (list, tuple, np.ndarray)):
         for msg in msgs:
-          if msg is not None:
+          if msg:
             self._queue.put(msg)
       else:
         self._queue.put(msgs)
@@ -567,7 +567,6 @@ class FileMetricHook(tf.estimator.SessionRunHook):
         self._files[key] = file_and_stat
       else:
         file_and_stat = self._files[key]
-
       file_and_stat.write(item)
 
       if time.time() - last_check_time > 600:

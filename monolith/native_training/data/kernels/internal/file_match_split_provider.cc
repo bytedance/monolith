@@ -22,6 +22,7 @@
 #include "absl/strings/str_split.h"
 
 #include "tensorflow/core/lib/io/path.h"
+#include "tensorflow/core/platform/default/logging.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/errors.h"
 
@@ -56,6 +57,7 @@ Status FileMatchSplitProvider::GetNext(Tensor *split, bool *end_of_splits) {
       std::string info = absl::StrCat(
           "finished_feed is ", finished_feed_.load(), ", and results empty is ",
           results_.empty(), ", get an end_of_splits!");
+      LOG_EVERY_N_SEC(INFO, 300) << info;
       return errors::OutOfRange(info);
     }
   }
@@ -196,8 +198,8 @@ void FileMatchSplitProvider::FeederThread() {
       }
       num_files++;
     }
-    LOG(INFO) << "Pattern " << current_pat_ << " has matched " << num_files
-              << "/" << matched_files.size() << " files";
+    LOG_EVERY_N(INFO, 100) << "Pattern " << current_pat_ << " has matched " << num_files
+                           << "/" << matched_files.size() << " files";
   }
 
   // for the patterns after current_pat_
@@ -226,8 +228,8 @@ void FileMatchSplitProvider::FeederThread() {
       }
       num_files++;
     }
-    LOG(INFO) << "Pattern " << current_pat_ << " has matched " << num_files
-              << "/" << matched_files.size() << " files";
+    LOG_EVERY_N(INFO, 100) << "Pattern " << current_pat_ << " has matched " << num_files
+                           << "/" << matched_files.size() << " files";
   }
 
   finished_feed_ = true;

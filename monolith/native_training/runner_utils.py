@@ -31,11 +31,12 @@ from tensorflow.python.training.checkpoint_state_pb2 import CheckpointState
 
 from monolith.native_training.cpu_training import DistributedCpuTrainingConfig
 from monolith.native_training.service_discovery import ServiceDiscoveryType, \
-  ConsulServiceDiscovery, TfConfigServiceDiscovery, ZKServiceDiscovery
+  ConsulServiceDiscovery, TfConfigServiceDiscovery, ZKServiceDiscovery, MLPServiceDiscovery
 from monolith.native_training import gflags_utils
 from monolith.native_training.monolith_checkpoint_state_pb2 import MonolithCheckpointState
 from monolith.native_training.net_utils import AddressFamily
 from monolith.native_training import save_utils
+from monolith.native_training.mlp_utils import mlp_pass
 
 FLAGS = flags.FLAGS
 old_isabs = os.path.isabs
@@ -216,6 +217,7 @@ class RunnerConfig(DistributedCpuTrainingConfig):
   max_task_num_per_worker: int = 1
 
   def __post_init__(self):
+    mlp_pass()
     try:
       gflags_utils.update(self)
     except:
@@ -342,6 +344,9 @@ def get_discovery(runner_conf: RunnerConfig, psm: str = None):
   elif runner_conf.discovery_type == ServiceDiscoveryType.CONSUL:
     # For async training, PS discovery is inside the process.
     discovery = ConsulServiceDiscovery(psm)
+  elif runner_conf.discovery_type == ServiceDiscoveryType.MLP:
+    # For async training, PS discovery is inside the process.
+    discovery = MLPServiceDiscovery()
   else:
     discovery = ZKServiceDiscovery(runner_conf.deep_insight_name,
                                    runner_conf.zk_server)

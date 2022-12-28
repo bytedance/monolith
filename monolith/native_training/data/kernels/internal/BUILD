@@ -91,8 +91,8 @@ cc_library(
     hdrs = ["file_match_split_provider.h"],
     deps = [
         "//monolith/native_training/runtime/concurrency:queue",
-        "@com_google_glog//:glog",
         "@org_tensorflow//tensorflow/core:framework_headers_lib",
+        "@com_google_glog//:glog",
     ],
 )
 

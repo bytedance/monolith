@@ -481,6 +481,9 @@ class CpuTraining:
       self._serving_feature_configs_do_not_refer_directly = _make_serving_feature_configs_from_training_configs(
           self._feature_configs_do_not_refer_directly)
 
+      self._dummy_merged_table = multi_type_hash_table.MergedMultiTypeHashTable(
+          self.feature_configs[0], lambda *args, **kwargs: None)
+
   @property
   def config(self) -> CpuTrainingConfig:
     if export_context.is_exporting():
@@ -507,12 +510,6 @@ class CpuTraining:
       feature_name_config, _, feature_to_combiner = self.feature_configs
       embedding_feature_names = feature_name_config.keys()
 
-      def dummy_factory(*args, **kwargs):
-        pass
-
-      dummy_merged_table = multi_type_hash_table.MergedMultiTypeHashTable(
-          feature_name_config, dummy_factory)
-
       def wrapped_parse_fn(*args):
         # features = parse_fn(*args, **kwargs)
         features = args[0]
@@ -529,9 +526,9 @@ class CpuTraining:
             k: v.values for k, v in embedding_ragged_ids.items()
         }
         # merged_multi_type_hash_table.fused_lookup
-        merged_slot_to_id, merged_slot_to_sizes = dummy_merged_table._get_merged_to_indexed_tensor(
+        merged_slot_to_id, merged_slot_to_sizes = self._dummy_merged_table._get_merged_to_indexed_tensor(
             name_to_embedding_ids)
-        merged_slot_dims = dummy_merged_table.get_table_dim_sizes()
+        merged_slot_dims = self._dummy_merged_table.get_table_dim_sizes()
         # DistributedMultiTypeHashTableMpi.lookup
         sorted_slot_keys = sorted(merged_slot_to_id.keys())
         sorted_input = [merged_slot_to_id[k] for k in sorted_slot_keys]
@@ -563,7 +560,7 @@ class CpuTraining:
 
       return wrapped_parse_fn
 
-    if (mode == tf.estimator.ModeKeys.TRAIN and
+    if (mode != tf.estimator.ModeKeys.PREDICT and
         self.config.reorder_fids_in_data_pipeline):
       # Assumption: use_reduced_alltoall
       parser_utils.add_extra_parse_step(_create_parse_fn())
@@ -1334,6 +1331,8 @@ class DistributedCpuTrainingConfig(CpuTrainingConfig):
 
   attributes:
     :param model_dir: The directory where the model is load/saved.
+    :param tensorboard_log_path: The logdir of tensorboard, use model_dir
+                                 instead if empty
     :param intra_op_parallelism_threads: intra_op parallelism threads.
     :param inter_op_parallelism_threads: inter_op parallelism threads.
     :param num_extra_ps: The number of extra ps for ps benchmark.
@@ -1352,6 +1351,7 @@ class DistributedCpuTrainingConfig(CpuTrainingConfig):
   """
 
   model_dir: str = ""
+  tensorboard_log_path: str = ""
   intra_op_parallelism_threads: int = 8
   inter_op_parallelism_threads: int = 16
   num_extra_ps: int = 0
@@ -1914,10 +1914,10 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
           # CUPTI doesn't allow multiple callback subscribers.
           # Only a single subscriber can be registered at a time.
           device_tracer_level=0 if config.profile_with_nvprof_from_to else 1)
-      prof_hook = Tf2ProfilerCaptureOnceHook(logdir=config.model_dir,
-                                             capture_step_range=(start_step,
-                                                                 end_step),
-                                             options=options)
+      prof_hook = Tf2ProfilerCaptureOnceHook(
+          logdir=config.tensorboard_log_path or config.model_dir,
+          capture_step_range=(start_step, end_step),
+          options=options)
       run_hooks.append(prof_hook)
 
     if config.profile_with_nvprof_from_to:
@@ -1930,7 +1930,7 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
         sync_training_hooks.ParameterSyncHook(sync_backend, config.index))
   run_hooks.append(sync_training_hooks.SyncTrainingInfoHook())
 
-  estimator.train(training.create_input_fn(tf.estimator.ModeKeys.TRAIN),
+  estimator.train(training.create_input_fn(config.mode),
                   hooks=run_hooks,
                   max_steps=params.train.max_steps)
 

@@ -68,6 +68,8 @@ def clip_by_global_norm(t_list: List[tf.Tensor],
     norm_fn = _global_norm if device_utils.within_placement_context_of(
         "GPU") else tf.linalg.global_norm
     global_norm = norm_fn(t_list) if use_norm is None else use_norm
+    if len(t_list) == 0:
+      return t_list, global_norm
     list_clipped = gen_clip_ops.monolith_clip_by_global_norm(
         t_list, global_norm, clip_norm)
   return list_clipped, global_norm

@@ -33,6 +33,7 @@ class MonolithCreateDeepInsightClientOp
     OP_REQUIRES_OK(
         ctx, ctx->GetAttr("enable_metrics_counter", &enable_metrics_counter_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("is_fake", &is_fake_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("filename", &filename_));
   }
 
   ~MonolithCreateDeepInsightClientOp() override {}
@@ -43,13 +44,16 @@ class MonolithCreateDeepInsightClientOp
     auto deep_insight_client =
         std::make_unique<monolith::deep_insight::DeepInsight>(
             enable_metrics_counter_, is_fake_);
-    *deep_insight_client_bridge =
-        new DeepInsightClientTfBridge(std::move(deep_insight_client));
+    auto file_metric_writer =
+        std::make_unique<monolith::deep_insight::FileMetricWriter>(filename_);
+    *deep_insight_client_bridge = new DeepInsightClientTfBridge(
+        std::move(deep_insight_client), std::move(file_metric_writer));
     return Status::OK();
   }
 
   bool enable_metrics_counter_;
   bool is_fake_;
+  std::string filename_;
 };
 
 class MonolithWriteDeepInsightOp : public OpKernel {
@@ -205,6 +209,7 @@ REGISTER_OP("MonolithCreateDeepInsightClient")
     .Output("handle: resource")
     .Attr("enable_metrics_counter: bool = false")
     .Attr("is_fake: bool = false")
+    .Attr("filename: string = ''")
     .Attr("container: string = ''")
     .Attr("shared_name: string = ''")
     .SetIsStateful()

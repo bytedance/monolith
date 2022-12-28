@@ -77,11 +77,11 @@ REGISTER_KERNEL_BUILDER(Name("MonolithClipByGlobalNorm").Device(DEVICE_CPU),
 REGISTER_OP("MonolithClipByGlobalNorm")
     .Input("grad_list: N * float")
     .Input("global_norm: float")
+    .Input("clip_norm: float")
     .Output("clip_grad_list: N * float")
-    .Attr("clip_norm: float")
     .Attr("N: int")
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
-      int input_n = c->num_inputs() - 1;
+      int input_n = c->num_inputs() - 2;
       for (int i = 0; i < input_n; ++i) {
         c->set_output(i, c->input(i));
       }

@@ -317,6 +317,26 @@ Status ExampleBatchToExample(ExampleBatch *example_batch, int index,
                              FeatureNameMapper *mapper) {
   profiler::TraceMe activity([]() { return "ExampleBatchToExample"; });
   for (const auto &named_feature : example_batch->named_feature_list()) {
+    if (named_feature.type() != FeatureListType::SHARED) {
+      if (example_batch->batch_size() != named_feature.feature_size()) {
+        return errors::OutOfRange(absl::StrFormat(
+            "ExampleBatch batch_size should be equal to named_feature size, "
+            "while got %d vs %d",
+            example_batch->batch_size(), named_feature.feature_size()));
+      }
+      if (index >= named_feature.feature_size()) {
+        return errors::OutOfRange(
+            absl::StrFormat("index should be less than named_feature size, "
+                            "while got %d vs %d",
+                            index, named_feature.feature_size()));
+      }
+    } else {
+      if (named_feature.feature_size() == 0) {
+        return errors::OutOfRange(absl::StrFormat(
+            "named_feature size should be positive while got %d",
+            named_feature.feature_size()));
+      }
+    }
     const auto &efeat = named_feature.type() == FeatureListType::SHARED
                             ? named_feature.feature(0)
                             : named_feature.feature(index);
@@ -358,6 +378,7 @@ Status ExampleBatchToExample(ExampleBatch *example_batch, int index,
           out->mutable_feature()->MergeFrom(efeat);
         }
       } else {
+        LOG_FIRST_N(INFO, 1) << "FeatureNameMapper is not available!";
         auto *out = example->add_named_feature();
         out->set_name(named_feature.name());
         out->set_id(named_feature.id());

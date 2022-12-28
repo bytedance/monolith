@@ -33,7 +33,8 @@ def write_deep_insight(features: Dict[str, tf.Tensor],
                        sample_rates_list: List[tf.Tensor] = None,
                        extra_fields_keys: List[str] = [],
                        enable_deep_insight_metrics=True,
-                       enable_kafka_metrics=False) -> tf.Tensor:
+                       enable_kafka_metrics=False,
+                       dump_filename=None) -> tf.Tensor:
   """ Writes the data into deepinsight
   Requires 'uid', 'req_time', and 'sample_rate' in features. 
   sample_ratio is deepinsight sample ratio, set value like 0.01.
@@ -50,8 +51,9 @@ def write_deep_insight(features: Dict[str, tf.Tensor],
     logging.info("Disabling deep_insight because req_time is absent")
     return tf.no_op()
 
+  is_fake = enable_kafka_metrics or (dump_filename is not None and len(dump_filename) > 0)
   deep_insight_client = deep_insight_ops.deep_insight_client(
-      enable_deep_insight_metrics, enable_kafka_metrics)
+      enable_deep_insight_metrics, is_fake, dump_filename=dump_filename)
   req_times = tf.reshape(features["req_time"], [-1])
 
   if not targets:
