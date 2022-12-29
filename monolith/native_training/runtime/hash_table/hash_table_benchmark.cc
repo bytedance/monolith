@@ -17,10 +17,12 @@
 //
 
 #include <unordered_map>
+
 #include "absl/container/flat_hash_map.h"
 #include "absl/random/random.h"
 #include "absl/strings/str_format.h"
 #include "benchmark/benchmark.h"
+#include "glog/logging.h"
 #include "google/protobuf/text_format.h"
 #include "monolith/native_training/runtime/concurrency/thread_pool.h"
 #include "monolith/native_training/runtime/hash_table/cuckoohash/cuckoo_embedding_hash_table.h"

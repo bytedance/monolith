@@ -6,40 +6,32 @@ py_binary(
     name = "kafka_producer",
     srcs = ["kafka_producer.py"],
     deps = [
-        "@org_tensorflow//tensorflow:tensorflow_py"
-    ]
+        "@org_tensorflow//tensorflow:tensorflow_py",
+    ],
 )
 
 py_binary(
     name = "kafka_receiver",
     srcs = ["kafka_receiver.py"],
     deps = [
-        "//monolith/native_training:native_model"
-    ]
+        "//monolith/native_training:native_model",
+    ],
 )
 
 py_binary(
     name = "demo_model",
     srcs = ["demo_model.py"],
     deps = [
-        "//monolith/native_training:native_model",
         ":kafka_producer",
-        ":kafka_receiver"
-    ]
+        ":kafka_receiver",
+        "//monolith/native_training:native_model",
+    ],
 )
 
 py_binary(
     name = "demo_local_runner",
     srcs = ["demo_local_runner.py"],
     deps = [
-        ":demo_model"
-    ]
-)
-
-py_binary(
-    name = "preprocess_data",
-    srcs = ["preprocess_data.py"],
-    deps = [
-        ":demo_model"
-    ]
+        ":demo_model",
+    ],
 )
