@@ -201,6 +201,7 @@ REGISTER_OP("MonolithHashTableSave")
     .Attr("random_sleep_ms: int=0")
     .Attr("slot_expire_time_config: string = ''")
     .SetShapeFn(shape_inference::ScalarShape);
+
 REGISTER_KERNEL_BUILDER(Name("MonolithHashTableSave").Device(DEVICE_CPU),
                         HashTableSaveOp);
 }  // namespace monolith_tf

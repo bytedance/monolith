@@ -226,6 +226,7 @@ REGISTER_OP("MonolithDummySyncClient")
     .Attr("shared_name: string = ''")
     .SetIsStateful()
     .SetShapeFn(shape_inference::ScalarShape);
+
 REGISTER_KERNEL_BUILDER(Name("MonolithDummySyncClient").Device(DEVICE_CPU),
                         DummySyncClientOp);
 REGISTER_OP("MonolithParameterSync")

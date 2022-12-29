@@ -143,109 +143,101 @@ class HashTableLookupGradientOp : public OpKernel {
   }
 };
 
+template <bool cpu>
 class HashTableFusedLookupOp : public OpKernel {
  public:
   explicit HashTableFusedLookupOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("N", &num_tables_));
-    OP_REQUIRES_OK(ctx, ctx->GetAttr("num_of_shards", &num_of_shards_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("num_of_shards", &num_shards_));
   }
 
-  void Compute(OpKernelContext* ctx) override {
-    const Tensor& ids = ctx->input(num_tables_ + 0);
-    // [num_of_tables*num_of_shards_]
-    const Tensor& fused_slot_size = ctx->input(num_tables_ + 1);
-    const int64 slot_size_cnt = fused_slot_size.NumElements();
-    const int64 num_of_tables = slot_size_cnt / num_of_shards_;
-    OP_REQUIRES(
-        ctx, num_of_tables == num_tables_,
-        errors::InvalidArgument(
-            "len(fused_slot_size) / num_of_shards != len(table_handles)"));
-    const auto& fused_slot_size_vec = fused_slot_size.vec<int>();
+  void ComputeH(OpKernelContext* ctx);
+  void Compute(OpKernelContext* ctx) override { ComputeH(ctx); }
 
-    std::vector<EmbeddingHashTableTfBridge*> hash_tables(num_of_tables,
-                                                         nullptr);
-    std::vector<int> hash_table_dims(num_of_tables, 0);
-
-    for (int table_id = 0; table_id < num_of_tables; table_id++) {
-      EmbeddingHashTableTfBridge* hash_table = nullptr;
-      OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, table_id),
-                                         &hash_table));
-      core::ScopedUnref unref(hash_table);
-      hash_tables[table_id] = hash_table;
-      hash_table_dims[table_id] = hash_table->dim_size();
-    }
-
-    Tensor *embeddings, *embedding_splits, *id_offsets, *embedding_offsets,
-        *embedding_sizes;
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_output(1, {num_of_shards_}, &embedding_splits));
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_output(2, {slot_size_cnt + 1}, &id_offsets));
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_output(3, {slot_size_cnt + 1}, &embedding_offsets));
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_output(4, {slot_size_cnt}, &embedding_sizes));
-
-    int output_dim = 0;
-    int prev_output_dim = 0;
-    // [num_of_tables*num_of_shards_] for offsets for different shards and
-    // tables.
-    std::vector<int> input_offsets(slot_size_cnt + 1, 0);
-    std::vector<int> output_offsets(slot_size_cnt + 1, 0);
-    auto segment_embedding_dims = embedding_sizes->flat<int32>().data();
-    // [num_of_shards_] for splits
-    // embedding_splits and embedding_offsets are used as a metadata for later
-    // stages.
-    auto output_splits = embedding_splits->flat<int32>().data();
-    for (int shard_id = 0; shard_id < num_of_shards_; shard_id++) {
-      for (int table_id = 0; table_id < num_of_tables; table_id++) {
-        int curr_idx = num_of_tables * shard_id + table_id;
-        int segment_dim =
-            hash_table_dims[table_id] * fused_slot_size_vec(curr_idx);
-        output_dim += segment_dim;
-        segment_embedding_dims[curr_idx] = segment_dim;
-        output_offsets[curr_idx + 1] = output_offsets[curr_idx] + segment_dim;
-        input_offsets[curr_idx + 1] =
-            input_offsets[curr_idx] + fused_slot_size_vec(curr_idx);
-      }
-      output_splits[shard_id] = output_dim - prev_output_dim;
-      prev_output_dim = output_dim;
-    }
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, {output_dim}, &embeddings));
-    auto embeddings_vec = embeddings->vec<float>();
-    auto ids_flat = ids.flat<int64_t>();
-
-    std::memcpy(id_offsets->flat<int32>().data(), input_offsets.data(),
-                sizeof(int32) * (slot_size_cnt + 1));
-    std::memcpy(embedding_offsets->flat<int32>().data(), output_offsets.data(),
-                sizeof(int32) * (slot_size_cnt + 1));
-    auto lookup = [&](const int begin, const int end) {
-      for (int shard_id = begin; shard_id < end; shard_id++) {
-        for (int table_id = 0; table_id < num_of_tables; table_id++) {
-          int curr_idx = shard_id * num_of_tables + table_id;
-          int index_begin = input_offsets[curr_idx];
-          int embedding_offset = output_offsets[curr_idx];
-          int64_t hit_fid_count = 0;
-          hash_tables[table_id]->BatchLookup(
-              ctx, fused_slot_size_vec(curr_idx),
-              const_cast<int64_t*>(ids_flat.data()) + index_begin,
-              static_cast<float*>(embeddings_vec.data()) + embedding_offset,
-              &hit_fid_count);
-        }
-      }
-    };
-
-    // TODO(zouxuan): tweak this number for optimization.
-    const int64 kCostPerUnit = 1000000;
-    const DeviceBase::CpuWorkerThreads& worker_threads =
-        *ctx->device()->tensorflow_cpu_worker_threads();
-    Shard(worker_threads.num_threads, worker_threads.workers, num_of_shards_,
-          kCostPerUnit, lookup);
-  }
-
-  int32 num_of_shards_;
-  int32 num_tables_;
+ private:
+  int num_shards_;
+  int num_tables_;
 };
+
+template <>
+void HashTableFusedLookupOp<true>::ComputeH(OpKernelContext* ctx) {
+  auto ids_flat = ctx->input(num_tables_ + 0).flat<int64_t>();
+  auto slot_size_cnt = num_tables_ * num_shards_;
+  auto fused_slot_size_vec = ctx->input(num_tables_ + 1).vec<int>();
+
+  std::vector<EmbeddingHashTableTfBridge*> hash_tables(num_tables_, nullptr);
+  std::vector<int> hash_table_dims(num_tables_, 0);
+
+  for (int table_id = 0; table_id < num_tables_; table_id++) {
+    EmbeddingHashTableTfBridge* hash_table = nullptr;
+    OP_REQUIRES_OK(
+        ctx, LookupResource(ctx, HandleFromInput(ctx, table_id), &hash_table));
+    core::ScopedUnref unref(hash_table);
+    hash_tables[table_id] = hash_table;
+    hash_table_dims[table_id] = hash_table->dim_size();
+  }
+
+  Tensor *embeddings, *embedding_splits, *id_offsets, *embedding_offsets;
+  OP_REQUIRES_OK(ctx,
+                 ctx->allocate_output(1, {num_shards_}, &embedding_splits));
+  OP_REQUIRES_OK(ctx,
+                 ctx->allocate_output(2, {slot_size_cnt + 1}, &id_offsets));
+  OP_REQUIRES_OK(
+      ctx, ctx->allocate_output(3, {slot_size_cnt + 1}, &embedding_offsets));
+  int output_dim = 0;
+  int prev_output_dim = 0;
+  // [num_tables_*num_shards_] for offsets for different shards and
+  // tables.
+  std::vector<int> input_offsets(slot_size_cnt + 1, 0);
+  std::vector<int> output_offsets(slot_size_cnt + 1, 0);
+  // [num_shards_] for splits
+  // embedding_splits and embedding_offsets are used as a metadata for later
+  // stages.
+  auto output_splits = embedding_splits->flat<int32>().data();
+  for (int shard_id = 0; shard_id < num_shards_; shard_id++) {
+    for (int table_id = 0; table_id < num_tables_; table_id++) {
+      int curr_idx = num_tables_ * shard_id + table_id;
+      int segment_dim =
+          hash_table_dims[table_id] * fused_slot_size_vec(curr_idx);
+      output_dim += segment_dim;
+      output_offsets[curr_idx + 1] = output_offsets[curr_idx] + segment_dim;
+      input_offsets[curr_idx + 1] =
+          input_offsets[curr_idx] + fused_slot_size_vec(curr_idx);
+    }
+    output_splits[shard_id] = output_dim - prev_output_dim;
+    prev_output_dim = output_dim;
+  }
+  OP_REQUIRES_OK(ctx, ctx->allocate_output(0, {output_dim}, &embeddings));
+  auto embeddings_vec = embeddings->vec<float>();
+
+  std::memcpy(id_offsets->flat<int32>().data(), input_offsets.data(),
+              sizeof(int32) * (slot_size_cnt + 1));
+  std::memcpy(embedding_offsets->flat<int32>().data(), output_offsets.data(),
+              sizeof(int32) * (slot_size_cnt + 1));
+  auto lookup = [&](const int begin, const int end) {
+    for (int shard_id = begin; shard_id < end; shard_id++) {
+      for (int table_id = 0; table_id < num_tables_; table_id++) {
+        int curr_idx = shard_id * num_tables_ + table_id;
+        int index_begin = input_offsets[curr_idx];
+        int embedding_offset = output_offsets[curr_idx];
+        int64_t hit_fid_count = 0;
+        hash_tables[table_id]->BatchLookup(
+            ctx, fused_slot_size_vec(curr_idx),
+            const_cast<int64_t*>(ids_flat.data()) + index_begin,
+            static_cast<float*>(embeddings_vec.data()) + embedding_offset,
+            &hit_fid_count);
+      }
+    }
+  };
+
+  // TODO(zouxuan): tweak this number for optimization.
+  const int64 kCostPerUnit = 1000000;
+  const DeviceBase::CpuWorkerThreads& worker_threads =
+      *ctx->device()->tensorflow_cpu_worker_threads();
+  Shard(worker_threads.num_threads, worker_threads.workers, num_shards_,
+        kCostPerUnit, lookup);
+}
+
 
 REGISTER_OP("MonolithHashTableLookup")
     .Input("table_handle: resource")
@@ -260,6 +252,7 @@ REGISTER_OP("MonolithHashTableLookup")
       c->set_output(0, c->Matrix(len_ids, dim_size));
       return Status::OK();
     });
+
 REGISTER_KERNEL_BUILDER(Name("MonolithHashTableLookup").Device(DEVICE_CPU),
                         HashTableLookupOp);
 
@@ -302,26 +295,26 @@ REGISTER_OP("MonolithHashTableFusedLookup")
     .Output("embedding_splits: int32")
     .Output("id_offsets: int32")
     .Output("embedding_offsets: int32")
-    .Output("embedding_sizes: int32")
     .Attr("N: int")
     .Attr("num_of_shards: int")
     .SetDoNotOptimize()  // Crash with grappler.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
-      int64 num_of_shards;
-      int num_tables_;
-      TF_RETURN_IF_ERROR(c->GetAttr("num_of_shards", &num_of_shards));
-      TF_RETURN_IF_ERROR(c->GetAttr("N", &num_tables_));
-      std::vector<shape_inference::DimensionHandle> dim_handles;
-      dim_handles.push_back(c->UnknownDim());
-      c->set_output(0, c->MakeShape(dim_handles));
-      c->set_output(1, c->Vector(num_of_shards));
-      c->set_output(2, c->Vector(num_tables_ * num_of_shards + 1));
-      c->set_output(3, c->Vector(num_tables_ * num_of_shards + 1));
-      c->set_output(4, c->input(num_tables_ + 1));
+      int num_tables, num_shards;
+      TF_RETURN_IF_ERROR(c->GetAttr("num_of_shards", &num_shards));
+      TF_RETURN_IF_ERROR(c->GetAttr("N", &num_tables));
+      c->set_output(0, c->Vector(c->UnknownDim()));
+      c->set_output(1, c->Vector(num_shards));
+      c->set_output(2, c->Vector(num_tables * num_shards + 1));
+      c->set_output(3, c->Vector(num_tables * num_shards + 1));
+      auto shape = c->input(num_tables + 1);
+      TF_RETURN_IF_ERROR(c->WithRank(shape, 1, &shape));
+      auto dim = c->Dim(shape, 0);
+      TF_RETURN_IF_ERROR(c->WithValue(dim, num_tables * num_shards, &dim));
       return Status::OK();
     });
+
 REGISTER_KERNEL_BUILDER(Name("MonolithHashTableFusedLookup").Device(DEVICE_CPU),
-                        HashTableFusedLookupOp);
+                        HashTableFusedLookupOp<true>);
 
 }  // namespace monolith_tf
 }  // namespace tensorflow

@@ -25,13 +25,12 @@ namespace hash_table {
 
 std::unique_ptr<EmbeddingHashTableInterface> NewEmbeddingHashTableFromConfig(
     EmbeddingHashTableConfig config, GpuExtraArgs args) {
-  std::unique_ptr<EntryAccessorInterface> accessor =
-      NewEntryAccessor(config.entry_config());
   switch (config.type_case()) {
     case EmbeddingHashTableConfig::kCuckoo:
       return NewCuckooEmbeddingHashTable(
-          config.cuckoo(), std::move(accessor), config.entry_type(),
-          config.initial_capacity(), config.slot_expire_time_config());
+          config.cuckoo(), NewEntryAccessor(config.entry_config()),
+          config.entry_type(), config.initial_capacity(),
+          config.slot_expire_time_config());
     default:
       throw std::invalid_argument(absl::StrFormat(
           "Unknown type of hash table. %s", config.ShortDebugString()));

@@ -214,7 +214,7 @@ class DistributedMultiTypeHashTableMpi(
     # fused_embeddings: [E], fused_splits: [N]
     # id_offsets: [K*N], emb_offsets: [K*N]
     with tf.device("/GPU:0"):
-      fused_embeddings, embedding_splits, id_offsets, emb_offsets, fused_emb_sizes = \
+      fused_embeddings, embedding_splits, id_offsets, emb_offsets = \
           self._table.fused_lookup(id_flat_t, id_size_flat_t, self._shard_num)
     if FLAGS.enable_alltoall_metrics:
       with tf.device("/CPU:0"):
@@ -348,7 +348,7 @@ class DistributedMultiTypeHashTableMpi(
   # Apply_gradients uses fused update.
   def apply_gradients(
       self,
-      slot_to_grad: Dict[str, Tensor],
+      slot_to_grad: Dict[str, tf.Tensor],
       auxiliary_bundle: Dict[str, tf.Tensor],
       global_step: tf.Tensor,
       req_time: tf.Tensor = None) -> DistributedMultiTypeHashTableMpi:

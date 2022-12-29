@@ -32,11 +32,13 @@ using ::monolith::hash_table::GpuExtraArgs;
 // using ::monolith::hopscotch::HopscotchHashSet;
 using ::monolith::parameter_sync::ParameterSyncClient;
 
+template <bool cpu>
 class HashTableOp : public OpKernel {
  public:
   explicit HashTableOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
-    OP_REQUIRES_OK(ctx, ctx->GetAttr("config", &config_serialized_));
-    OP_REQUIRES(ctx, config_.ParseFromString(config_serialized_),
+    std::string config_serialized;
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("config", &config_serialized));
+    OP_REQUIRES(ctx, config_.ParseFromString(config_serialized),
                 errors::InvalidArgument("Unable to parse config. Make sure it "
                                         "is serialized version of "
                                         "EmbeddingHashTableConfig."));
@@ -60,6 +62,8 @@ class HashTableOp : public OpKernel {
     }
   }
 
+  void ComputeH(OpKernelContext* ctx);
+
   void Compute(OpKernelContext* ctx) override {
     absl::MutexLock l(&mu_);
     if (hash_filter_ == nullptr) {
@@ -67,35 +71,7 @@ class HashTableOp : public OpKernel {
           ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &hash_filter_));
     }
     if (hash_table_ == nullptr) {
-      ResourceMgr* rmgr = ctx->resource_manager();
-      OP_REQUIRES_OK(ctx, cinfo_.Init(rmgr, def()));
-
-      core::RefCountPtr<ParameterSyncClientTfBridge> sync_client = nullptr;
-      OP_REQUIRES_OK(
-          ctx, LookupResource(ctx, HandleFromInput(ctx, 1), &sync_client));
-      auto sync_client_ptr = sync_client.get();
-
-      auto creator = [&, this](EmbeddingHashTableTfBridge** out_hash_table) {
-        TF_RETURN_IF_ERROR(EmbeddingHashTableTfBridge::New(
-            config_, hash_filter_, out_hash_table, cinfo_.name()));
-        if (sync_client_ptr->IsDummySyncClient()) {
-          LOG(INFO) << absl::StrFormat(
-              "Hash table %s will not be attached to the sync client",
-              cinfo_.name());
-        } else {
-          // TODO(zhangbiao.david) Make hopscotch hash set configurable
-          auto* touched_key_set = sync_client_ptr->GetTouchedKeySet();
-          (*out_hash_table)->SetHopscotchHashSet(touched_key_set);
-          sync_client_ptr->AddHashTableResource(cinfo_.name(), *out_hash_table);
-          LOG(INFO) << absl::StrFormat(
-              "Hash table %s will be attached to the sync client",
-              cinfo_.name());
-        }
-        return Status::OK();
-      };
-      OP_REQUIRES_OK(
-          ctx, rmgr->LookupOrCreate<EmbeddingHashTableTfBridge>(
-                   cinfo_.container(), cinfo_.name(), &hash_table_, creator));
+      ComputeH(ctx);
     }
     OP_REQUIRES_OK(ctx, MakeResourceHandleToOutput(
                             ctx, 0, cinfo_.container(), cinfo_.name(),
@@ -103,13 +79,46 @@ class HashTableOp : public OpKernel {
   }
 
  private:
-  std::string config_serialized_;
   EmbeddingHashTableConfig config_;
   absl::Mutex mu_;
   EmbeddingHashTableTfBridge* hash_table_ ABSL_GUARDED_BY(mu_) = nullptr;
   HashFilterTfBridge* hash_filter_ ABSL_GUARDED_BY(mu_) = nullptr;
   ContainerInfo cinfo_ ABSL_GUARDED_BY(mu_);
 };
+
+template <>
+void HashTableOp<true>::ComputeH(OpKernelContext* ctx) {
+  ResourceMgr* rmgr = ctx->resource_manager();
+  OP_REQUIRES_OK(ctx, cinfo_.Init(rmgr, def()));
+
+  core::RefCountPtr<ParameterSyncClientTfBridge> sync_client = nullptr;
+  OP_REQUIRES_OK(ctx,
+                 LookupResource(ctx, HandleFromInput(ctx, 1), &sync_client));
+  auto sync_client_ptr = sync_client.get();
+
+  auto creator = [&, this](EmbeddingHashTableTfBridge** out_hash_table) {
+    TF_RETURN_IF_ERROR(EmbeddingHashTableTfBridge::New(
+        config_, hash_filter_, out_hash_table, cinfo_.name()));
+
+    if (sync_client_ptr->IsDummySyncClient()) {
+      LOG(INFO) << absl::StrFormat(
+          "Hash table %s will not be attached to the sync client",
+          cinfo_.name());
+    } else {
+      // TODO(zhangbiao.david) Make hopscotch hash set configurable
+      auto* touched_key_set = sync_client_ptr->GetTouchedKeySet();
+      (*out_hash_table)->SetHopscotchHashSet(touched_key_set);
+      sync_client_ptr->AddHashTableResource(cinfo_.name(), *out_hash_table);
+      LOG(INFO) << absl::StrFormat(
+          "Hash table %s will be attached to the sync client", cinfo_.name());
+    }
+    return Status::OK();
+  };
+  OP_REQUIRES_OK(ctx,
+                 rmgr->LookupOrCreate<EmbeddingHashTableTfBridge>(
+                     cinfo_.container(), cinfo_.name(), &hash_table_, creator));
+}
+
 
 REGISTER_OP("MonolithHashTable")
     .Input("filter_handle: resource")
@@ -120,8 +129,9 @@ REGISTER_OP("MonolithHashTable")
     .Attr("shared_name: string = ''")
     .SetIsStateful()
     .SetShapeFn(shape_inference::ScalarShape);
+
 REGISTER_KERNEL_BUILDER(Name("MonolithHashTable").Device(DEVICE_CPU),
-                        HashTableOp);
+                        HashTableOp<true>);
 
 }  // namespace monolith_tf
 }  // namespace tensorflow

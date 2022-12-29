@@ -39,8 +39,10 @@ REGISTER_OP("MonolithHashTableSize")
     .Input("table_handle: resource")
     .Output("size: int64")
     .SetShapeFn(shape_inference::ScalarShape);
+
 REGISTER_KERNEL_BUILDER(Name("MonolithHashTableSize").Device(DEVICE_CPU),
                         HashTableSizeOp);
+
 class SaveAsTensorOp : public OpKernel {
  public:
   explicit SaveAsTensorOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}

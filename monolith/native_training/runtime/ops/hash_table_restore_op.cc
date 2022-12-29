@@ -162,6 +162,7 @@ REGISTER_OP("MonolithHashTableRestore")
     .Input("basename: string")
     .Output("output_handle: resource")
     .SetShapeFn(shape_inference::ScalarShape);
+
 REGISTER_KERNEL_BUILDER(Name("MonolithHashTableRestore").Device(DEVICE_CPU),
                         HashTableRestoreOp);
 }  // namespace tensorflow

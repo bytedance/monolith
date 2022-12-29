@@ -141,13 +141,12 @@ class GpuHashTableOpsTest(tf.test.TestCase):
             fused_slot_size=tf.constant([1, 2, 1, 1, 1, 1]),
             num_of_shards=2)
 
-        embeddings, recv_splits, id_offsets, emb_offsets, emb_dims = sess.run(
+        embeddings, recv_splits, id_offsets, emb_offsets = sess.run(
             embeddings)
     self.assertAllEqual(embeddings, [1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1])
     self.assertAllEqual(recv_splits, [8, 6])
     self.assertAllEqual(id_offsets, [0, 1, 3, 4, 5, 6])
     self.assertAllEqual(emb_offsets, [0, 1, 5, 8, 9, 11])
-    self.assertAllEqual(emb_dims, [1, 4, 3, 1, 2, 3])
 
   @test_util.run_gpu_only
   def test_fused_optimize(self):
@@ -169,7 +168,7 @@ class GpuHashTableOpsTest(tf.test.TestCase):
           hash_tables.append(hash_table)
         hash_table_resource = [hash_table.table for hash_table in hash_tables]
         #embeddings=[1, 0, 0, 1, 0, 0]
-        embeddings, recv_splits, id_offsets, emb_offsets, emb_dims = ops.fused_lookup(
+        embeddings, recv_splits, id_offsets, emb_offsets = ops.fused_lookup(
             hash_table_resource, ids, fused_slot_size, num_of_shards=2)
         new_tables = ops.fused_apply_gradient(hash_table_resource,
                                               ids,
@@ -191,7 +190,7 @@ class GpuHashTableOpsTest(tf.test.TestCase):
                                        ids,
                                        fused_slot_size,
                                        num_of_shards=2)
-        embeddings, recv_splits, id_offsets, emb_offsets, emb_dims = sess.run(
+        embeddings, recv_splits, id_offsets, emb_offsets = sess.run(
             lookup_op)
     self.assertAllClose(
         embeddings,
@@ -199,7 +198,6 @@ class GpuHashTableOpsTest(tf.test.TestCase):
     self.assertAllEqual(recv_splits, [3, 3])
     self.assertAllEqual(id_offsets, [0, 1, 2, 3])
     self.assertAllEqual(emb_offsets, [0, 1, 3, 4])
-    self.assertAllEqual(emb_dims, [1, 2, 1, 2])
 
 
 if __name__ == '__main__':
