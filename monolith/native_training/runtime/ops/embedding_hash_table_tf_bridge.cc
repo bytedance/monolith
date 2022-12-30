@@ -342,6 +342,15 @@ Status EmbeddingHashTableTfBridge::Optimize(
   }
 }
 
+Status EmbeddingHashTableTfBridge::LockAll(std::unique_ptr<LockCtx>* ctx) {
+  try {
+    *ctx = table_->LockAll();
+    return Status::OK();
+  } catch (const std::exception& e) {
+    return errors::ResourceExhausted(e.what());
+  }
+}
+
 Status EmbeddingHashTableTfBridge::Save(OpKernelContext* ctx, DumpShard shard,
                                         WriteFn write_fn,
                                         DumpIterator* iter) const {

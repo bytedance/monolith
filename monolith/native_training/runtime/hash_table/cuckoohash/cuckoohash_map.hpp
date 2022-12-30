@@ -754,10 +754,7 @@ class cuckoohash_map {
       return bucket * this->slot_per_bucket() + slot;
     };
     const int64_t begin_bucket_idx = begin + bucket_offset;
-    // TODO(yijie.zhu): Add a new op to lock the whole table during dump process
-
     for (size_type i = begin_bucket_idx; i < end; ++i) {
-      const auto lock_manager = lock_one(hashpower(), i, normal_mode());
       auto &bucket = buckets_[i];
       for (size_type j = slot_offset; j < slot_per_bucket(); ++j) {
         if (bucket.occupied(j)) {
@@ -774,52 +771,6 @@ class cuckoohash_map {
     // Using +1 here since end might equal to begin.
     iter->offset = get_offset(end - begin + 1, 0);
   }
-
-  // TODO(leqi.zou): Remove this method.
-  /**
-   * The hashtable is equally partitioned into total_shards number of
-   * partitions.
-   * Calling partial_dump with shard_idx value i dumps ith parition using
-   * dump_fn.
-   *
-   * @param shard
-   * @param dump_fn
-   *
-   */
-  void partial_dump(int shard_idx, int shard_num, int64_t shard_limit,
-                    std::function<bool(const Key &, const T &)> dump_fn,
-                    int *offset) const {
-    const size_type hash_size = hashsize(hashpower());
-    int Q = hash_size / shard_num;
-    int R = hash_size % shard_num;
-    int begin = (shard_idx * Q) + std::min(shard_idx, R);
-    int end = begin + Q + (shard_idx < R ? 1 : 0);
-    int64_t count = 0;
-    const int64_t bucket_offset = *offset / slot_per_bucket();
-    int64_t slot_offset = *offset % slot_per_bucket();
-    auto get_offset = [this](size_type bucket, size_type slot) {
-      return bucket * this->slot_per_bucket() + slot;
-    };
-    const int64_t begin_bucket_idx = begin + bucket_offset;
-
-    for (size_type i = begin_bucket_idx; i < end; ++i) {
-      const auto lock_manager = lock_one(hashpower(), i, normal_mode());
-      auto &bucket = buckets_[i];
-      for (size_type j = slot_offset; j < slot_per_bucket(); ++j) {
-        if (bucket.occupied(j)) {
-          ++count;
-          const bool result = dump_fn(bucket.key(j), bucket.mapped(j));
-          if (!result || count >= shard_limit) {
-            *offset = get_offset((i - begin), j + 1);
-            return;
-          }
-        }
-      }
-      slot_offset = 0;
-    }
-    *offset = get_offset(end - begin, 0);
-  }
-  /**@}*/
 
   void evict(std::function<bool(const Key &, const T &)> should_be_evict_fn) {
     locks_t &locks = get_current_locks();

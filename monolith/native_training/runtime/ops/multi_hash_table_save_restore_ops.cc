@@ -43,11 +43,14 @@ namespace {
 // Carries the data through async process.
 struct AsyncPack {
   AsyncPack(OpKernelContext* p_ctx, core::RefCountPtr<MultiHashTable> p_mtable,
-            std::string p_basename, std::function<void()> p_done,
-            int p_thread_num)
+            std::string p_basename,
+            std::vector<std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx>>
+                p_lock_ctxs,
+            std::function<void()> p_done, int p_thread_num)
       : ctx(p_ctx),
         basename(p_basename),
         mtable(std::move(p_mtable)),
+        lock_ctxs(std::move(p_lock_ctxs)),
         done(std::move(p_done)),
         status(p_thread_num) {}
 
@@ -61,6 +64,7 @@ struct AsyncPack {
   OpKernelContext* ctx;
   std::string basename;
   core::RefCountPtr<MultiHashTable> mtable;
+  std::vector<std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx>> lock_ctxs;
   std::function<void()> done;
   mutable std::vector<Status> status;
 };
@@ -130,8 +134,15 @@ class MultiHashTableSaveOp : public AsyncOpKernel {
     OP_REQUIRES_OK_ASYNC(ctx, ctx->env()->RecursivelyCreateDir(dirname), done);
 
     int real_nshards = PickNshards(*mtable);
+    std::vector<std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx>> lock_ctxs;
+    for (int i = 0; i < mtable->size(); ++i) {
+      std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx> lock_ctx;
+      OP_REQUIRES_OK_ASYNC(ctx, mtable->table(i)->LockAll(&lock_ctx), done);
+      lock_ctxs.push_back(std::move(lock_ctx));
+    }
     auto pack = std::make_shared<const AsyncPack>(
-        ctx, std::move(mtable), basename, std::move(done), real_nshards);
+        ctx, std::move(mtable), basename, std::move(lock_ctxs), std::move(done),
+        real_nshards);
     for (int i = 0; i < real_nshards; ++i) {
       ctx->device()->tensorflow_cpu_worker_threads()->workers->Schedule(
           [this, pack, i, real_nshards] {
@@ -254,7 +265,9 @@ class MultiHashTableRestoreOp : public AsyncOpKernel {
 
     int nshards = files.size();
     auto pack = std::make_shared<const AsyncPack>(
-        ctx, std::move(mtable), basename, std::move(done), nshards);
+        ctx, std::move(mtable), basename,
+        std::vector<std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx>>(),
+        std::move(done), nshards);
     for (int i = 0; i < nshards; ++i) {
       ctx->device()->tensorflow_cpu_worker_threads()->workers->Schedule(
           [this, pack, i, nshards] {

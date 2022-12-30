@@ -113,6 +113,7 @@ struct Params {
 template <class EntryType>
 class CuckooEmbeddingHashTable : public EmbeddingHashTableInterface {
  public:
+  using MapType = libcuckoo::cuckoohash_map<int64_t, WithInitFn<EntryType>>;
   explicit CuckooEmbeddingHashTable(Params p,
                                     EntryHelper<EntryType> entry_helper)
       : config_(std::move(p.config)),
@@ -239,6 +240,20 @@ class CuckooEmbeddingHashTable : public EmbeddingHashTableInterface {
   // Check if a given id exists in the hashtable
   bool Contains(const int64_t id) { return m_.contains(id); }
 
+  class CuckooLockCtx : public LockCtx {
+   public:
+    explicit CuckooLockCtx(typename MapType::locked_table table)
+        : table_(std::move(table)) {}
+    ~CuckooLockCtx() override = default;
+
+   private:
+    typename MapType::locked_table table_;
+  };
+
+  std::unique_ptr<LockCtx> LockAll() override {
+    return std::make_unique<CuckooLockCtx>(m_.lock_table());
+  }
+
   // Saves the data. The implementation should guarantee that different shard
   // can be dumped in the parallel.
   void Save(DumpShard shard, WriteFn write_fn,
@@ -299,7 +314,7 @@ class CuckooEmbeddingHashTable : public EmbeddingHashTableInterface {
   EntryHelper<EntryType> entry_helper_;
   std::unique_ptr<absl::flat_hash_map<int64_t, int>> slot_to_expire_time_;
   int64_t default_expire_time_;
-  libcuckoo::cuckoohash_map<int64_t, WithInitFn<EntryType>> m_;
+  MapType m_;
 };
 
 template <int64_t length>
@@ -321,9 +336,7 @@ std::unique_ptr<EmbeddingHashTableInterface> NewCuckooEmbeddingHashTable(
     const SlotExpireTimeConfig& slot_expire_time_config) {
   const int64_t size_bytes = accessor->SizeBytes();
   Params p = {
-      std::move(config),
-      std::move(accessor),
-      initial_capacity,
+      std::move(config), std::move(accessor), initial_capacity,
       slot_expire_time_config,
   };
   if (type == EmbeddingHashTableConfig::PACKED) {

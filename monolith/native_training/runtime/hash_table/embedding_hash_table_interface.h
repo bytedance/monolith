@@ -95,6 +95,14 @@ class EmbeddingHashTableInterface {
 
   using WriteFn = std::function<bool(EntryDump)>;
 
+  class LockCtx {
+   public:
+    virtual ~LockCtx() = default;
+  };
+  // Locks all entries in the table. This is used together with Save to prevent
+  // concurrent updates.
+  virtual std::unique_ptr<LockCtx> LockAll() = 0;
+
   // Saves the data. The implementation should guarantee that different shard
   // can be dumped in the parallel.
   virtual void Save(DumpShard shard, WriteFn write_fn,
@@ -175,6 +183,8 @@ class DefaultEmbeddingHashTableDecorator : public EmbeddingHashTableInterface {
                 const int64_t global_step = 0) override {
     return base_->Optimize(id, grad, learning_rates, update_time);
   }
+
+  std::unique_ptr<LockCtx> LockAll() override { return base_->LockAll(); }
 
   void Save(DumpShard shard, WriteFn write_fn,
             DumpIterator* iter) const override {

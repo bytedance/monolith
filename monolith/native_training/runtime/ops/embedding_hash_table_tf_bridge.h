@@ -80,8 +80,10 @@ class EmbeddingHashTableTfBridge : public ResourceBase {
   using DumpIterator =
       monolith::hash_table::EmbeddingHashTableInterface::DumpIterator;
   using WriteFn = monolith::hash_table::EmbeddingHashTableInterface::WriteFn;
+  using LockCtx = monolith::hash_table::EmbeddingHashTableInterface::LockCtx;
 
   // For the functor injected, it is ok to throw exceptions.
+  Status LockAll(std::unique_ptr<LockCtx>* ctx);
   Status Save(OpKernelContext* ctx, DumpShard shard, WriteFn write_fn,
               DumpIterator* iter) const;
   Status Restore(OpKernelContext* ctx, DumpShard shard,

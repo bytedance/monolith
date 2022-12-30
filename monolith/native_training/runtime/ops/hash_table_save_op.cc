@@ -38,11 +38,13 @@ namespace {
 // It will ref and unref |p_hash_table|.
 struct AsyncPack {
   AsyncPack(OpKernelContext* p_ctx, EmbeddingHashTableTfBridge* p_hash_table,
-            std::string p_basename, std::function<void()> p_done,
-            int p_thread_num)
+            std::string p_basename,
+            std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx> p_lock_ctx,
+            std::function<void()> p_done, int p_thread_num)
       : ctx(p_ctx),
         basename(p_basename),
         hash_table(p_hash_table),
+        lock_ctx(std::move(p_lock_ctx)),
         done(std::move(p_done)),
         thread_num(p_thread_num),
         finish_num(0),
@@ -55,6 +57,7 @@ struct AsyncPack {
   OpKernelContext* ctx;
   std::string basename;
   EmbeddingHashTableTfBridge* hash_table;
+  std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx> lock_ctx;
   std::function<void()> done;
   const int thread_num;
   std::atomic_int finish_num;
@@ -74,9 +77,8 @@ class HashTableSaveOp : public AsyncOpKernel {
                                      &slot_expire_time_config_serialized_));
     if (!slot_expire_time_config_serialized_.empty()) {
       OP_REQUIRES(
-          ctx,
-          slot_expire_time_config_.ParseFromString(
-              slot_expire_time_config_serialized_),
+          ctx, slot_expire_time_config_.ParseFromString(
+                   slot_expire_time_config_serialized_),
           errors::InvalidArgument("Unable to parse config. Make sure it "
                                   "is serialized version of "
                                   "SlotExpireTimeConfig."));
@@ -102,8 +104,10 @@ class HashTableSaveOp : public AsyncOpKernel {
     OP_REQUIRES_OK_ASYNC(ctx, ctx->env()->RecursivelyCreateDir(dirname), done);
     ctx->set_output(0, ctx->input(0));
     int real_nshards = PickNshards(hash_table);
-    auto pack =
-        new AsyncPack(ctx, hash_table, basename, std::move(done), real_nshards);
+    std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx> lock_ctx;
+    OP_REQUIRES_OK_ASYNC(ctx, hash_table->LockAll(&lock_ctx), done);
+    auto pack = new AsyncPack(ctx, hash_table, basename, std::move(lock_ctx),
+                              std::move(done), real_nshards);
     for (int i = 0; i < real_nshards; ++i) {
       // !important: When using GPU, tensorflow_cpu_worker_threads' are bound to
       // device 0 regardless of the correct device id of the current process.
@@ -148,7 +152,7 @@ class HashTableSaveOp : public AsyncOpKernel {
     Status write_status;
     int64_t max_update_ts_sec = p->hash_table->max_update_ts_sec();
     auto write_fn = [this, &max_update_ts_sec, &writer, &write_status](
-                        EmbeddingHashTableTfBridge::EntryDump dump) {
+        EmbeddingHashTableTfBridge::EntryDump dump) {
       int64_t slot_id = slot_id_v2(dump.id());
       // Elements of slot_to_expire_time_ are in days.
       // last_update_ts_sec is seconds since the Epoch.
