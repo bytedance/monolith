@@ -146,13 +146,13 @@ cc_library(
 tf_gpu_kernel_library_allow_except(
     name = "hash_table_ops",
     srcs = [
+        "gpu_multi_hash_table.h",
         "hash_table/misc_ops.cc",
         "hash_table_lookup_op.cc",
         "hash_table_op.cc",
         "hash_table_restore_op.cc",
         "hash_table_save_op.cc",
         "hash_table_update_op.cc",
-        "gpu_multi_hash_table.h",
         "multi_hash_table.h",
         "multi_hash_table_lookup_op.cc",
         "multi_hash_table_op.cc",
@@ -189,7 +189,7 @@ cc_library(
 )
 
 cc_library(
-    name = "monolith_ops_no_remote_predict",
+    name = "monolith_ops",
     deps = [
         ":clip_ops",
         ":deep_insight_ops",
@@ -203,20 +203,12 @@ cc_library(
         ":monolith_internal_ops",
         ":monolith_ops_additional_deps",
         ":parameter_sync_ops",
+        ":remote_predict_op",
         ":touched_key_set_ops",
         "//monolith/native_training/data:pb_data_ops",
         "//monolith/native_training/data/training_instance:pb_datasource_ops",
         "//monolith/native_training/layers:layer_tf_ops",
         "//monolith/native_training/optimizers:training_ops",
-    ],
-    alwayslink = 1,
-)
-
-cc_library(
-    name = "monolith_ops",
-    deps = [
-        ":monolith_ops_no_remote_predict",
-        ":remote_predict_op_grpc",
     ],
     alwayslink = 1,
 )
@@ -280,7 +272,7 @@ tf_kernel_library(
     gpu_srcs = [
         "map_id_to_embedding.cu.cc",
         "reduce_op.cu.cc",
-        "alloc_utils.h"
+        "alloc_utils.h",
     ],
     # TODO: Figure out how to link "@org_tensorflow//tensorflow/core/kernels:cwise_lib_hdrs" for fill_functor.h
     deps = [
@@ -312,7 +304,7 @@ tf_gpu_kernel_library_allow_except(
         "//monolith/native_training/runtime/hash_filter:probabilistic_filter",
         "//monolith/native_training/runtime/hash_filter:sliding_hash_filter",
         "@org_tensorflow//tensorflow/core:framework_headers_lib",
-    ]
+    ],
 )
 
 cc_library(
@@ -412,7 +404,7 @@ tf_gpu_kernel_library_allow_except(
         ":parameter_sync_tf_bridge",
         "@com_github_grpc_grpc//:grpc++_reflection",
         "@org_tensorflow//tensorflow/core:framework_headers_lib",
-    ]
+    ],
 )
 
 proto_library(
@@ -537,11 +529,11 @@ cc_library(
     srcs = ["file_metric_writer.cc"],
     hdrs = ["file_metric_writer.h"],
     deps = [
+        "//monolith/native_training/runtime/concurrency:queue",
+        "//monolith/native_training/runtime/concurrency:thread_pool",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_glog//:glog",
         "@org_tensorflow//tensorflow/core:framework_headers_lib",
-        "//monolith/native_training/runtime/concurrency:queue",
-        "//monolith/native_training/runtime/concurrency:thread_pool",
     ],
 )
 
@@ -553,11 +545,10 @@ tf_cc_test(
         "@com_google_glog//:glog",
         "@com_google_googletest//:gtest_main",
         "@org_tensorflow//tensorflow/core:framework",
-        "@org_tensorflow//tensorflow/core:tensorflow",
         "@org_tensorflow//tensorflow/core:lib",
+        "@org_tensorflow//tensorflow/core:tensorflow",
     ],
 )
-
 
 # Expose monolith ops for tf serving
 # we may need to change it to tf_gpu_kernel_library_allow_except later
@@ -569,8 +560,7 @@ cc_library(
         "//visibility:public",
     ],
     deps = [
-        ":monolith_ops_no_remote_predict",
-        ":remote_predict_op",
+        ":monolith_ops",
     ] + select({
         "@org_tensorflow//tensorflow:framework_shared_object": [":serving_deps_with_framework_shared_object"],
         "//conditions:default": [],
