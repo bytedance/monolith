@@ -25,6 +25,7 @@ from threading import Thread, RLock
 
 from absl import logging
 from datetime import datetime
+from tensorflow.python.profiler.internal import _pywrap_traceme
 from tensorflow.python.training import basic_session_run_hooks
 from tensorflow.python.training import session_run_hook
 from tensorflow.python.training import training_util
@@ -150,6 +151,7 @@ class Tf2ProfilerHook(tf.estimator.SessionRunHook):
     self._timer = tf.estimator.SecondOrStepTimer(every_steps=save_steps,
                                                  every_secs=save_secs)
     self._global_step_tensor = tf.compat.v1.train.get_global_step()
+    self._current_step = 0
 
     self._profiling = False
 
@@ -158,14 +160,20 @@ class Tf2ProfilerHook(tf.estimator.SessionRunHook):
 
   def before_run(self, run_context):
     del run_context
+    # fix step-time graph, related issue: https://github.com/tensorflow/profiler/issues/282
+    # TODO(huangruiteng): remove this after updating tensorflow
+    if self._profiling:
+      self._trace_me = _pywrap_traceme.TraceMe("TraceContext", graph_type="train", step_num=self._current_step)
     return tf.estimator.SessionRunArgs(self._global_step_tensor)
 
   def after_run(self, run_context, run_values: tf.estimator.SessionRunValues):
     del run_context
-    global_step = run_values.results
-    if self._timer.should_trigger_for_step(global_step):
+    self._current_step = run_values.results
+    if self._profiling:
+      self._trace_me.Stop()
+    if self._timer.should_trigger_for_step(self._current_step):
       self._stop_profiling()
-      self._timer.update_last_triggered_step(global_step)
+      self._timer.update_last_triggered_step(self._current_step)
       self._start_profiling()
 
   def end(self, sess):
@@ -201,6 +209,7 @@ class Tf2ProfilerCaptureOnceHook(tf.estimator.SessionRunHook):
     self._logdir = logdir
     self._start_step, self._end_step = capture_step_range
     self._options = options
+    self._current_step = 0
 
     self._profiling = False
 
@@ -211,17 +220,24 @@ class Tf2ProfilerCaptureOnceHook(tf.estimator.SessionRunHook):
           "Global step should be created to use Tf2ProfilerCaptureOnceHook.")
 
   def before_run(self, run_context):
+    # fix step-time graph, related issue: https://github.com/tensorflow/profiler/issues/282
+    # TODO(huangruiteng): remove this after updating tensorflow
+    if self._profiling:
+      self._trace_me = _pywrap_traceme.TraceMe("TraceContext", graph_type="train", step_num=self._current_step)
     return tf.estimator.SessionRunArgs(self._global_step_tensor)
 
   def after_run(self, run_context, run_values: tf.estimator.SessionRunValues):
-    current_step = run_values.results
+    self._current_step = run_values.results
     if self._start_step is None:
-      self._start_step = current_step + 10
+      self._start_step = self._current_step + 10
       self._end_step = self._start_step + 10
+      
+    if self._profiling:
+      self._trace_me.Stop()
 
-    if not self._profiling and current_step >= self._start_step - 1 and current_step < self._end_step - 1:
+    if not self._profiling and self._current_step >= self._start_step - 1 and self._current_step < self._end_step - 1:
       self._start_profiling()
-    if self._profiling and current_step >= self._end_step - 1:
+    if self._profiling and self._current_step >= self._end_step - 1:
       self._stop_profiling()
 
   def end(self, sess):
