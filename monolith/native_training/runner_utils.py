@@ -61,6 +61,14 @@ def gen_get_checkpoint_state():
     with _lock:
       checkpoint_state = old_get_checkpoint_state(checkpoint_dir,
                                                   latest_filename)
+      cur_cnt, max_retry = 0, 5
+      coord_checkpoint_filename = checkpoint_management._GetCheckpointFilename(checkpoint_dir, latest_filename)
+      while checkpoint_state is None and tf.io.gfile.exists(coord_checkpoint_filename) and cur_cnt < max_retry:
+        checkpoint_state = old_get_checkpoint_state(checkpoint_dir, latest_filename)
+        cur_cnt += 1
+      if cur_cnt >= max_retry:
+        raise Exception("read ckpt error!")
+
       try:
         if FLAGS.restore_ckpt is not None:
           if latest_filename != 'checkpoint' or checkpoint_state is None:
