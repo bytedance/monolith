@@ -404,14 +404,16 @@ class PBDatasetOp : public DatasetOpKernel {
         std::unique_ptr<BaseStreamReader> stream_reader;
         if (dataset()->file_name_.empty()) {
           stream_reader =
-              std::make_unique<StdinStreamReader>(dataset()->options_);
+              std::make_unique<StdinStreamReader>(
+                  dataset()->options_, dataset()->options_.buffer_size);
         } else {
           std::unique_ptr<RandomAccessFile> f;
           TF_RETURN_IF_ERROR(
               env->NewRandomAccessFile(dataset()->file_name_, &f));
           stream_reader = std::make_unique<FileStreamReader>(
               dataset()->options_, std::move(f),
-              dataset()->options_.use_snappy);
+              dataset()->options_.use_snappy,
+              dataset()->options_.buffer_size);
         }
         if (dataset()->input_pb_type_ == "instance" ||
             dataset()->input_pb_type_ == "example") {

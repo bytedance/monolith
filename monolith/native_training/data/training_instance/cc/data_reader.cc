@@ -476,6 +476,7 @@ Status InputStreamReader::SetOffset(uint64 *offset) {
 StdinStreamReader::StdinStreamReader(const DataFormatOptions &options,
                                      int64 buffer_size)
     : BaseStreamReader(options), buffer_size_(buffer_size) {
+  LOG_FIRST_N(INFO, 1) << "Init stdin read buffer_size: " << buffer_size_;
   input_stream_.reset(&std::cin, [](...) {});
   buffer_.reset(new char[buffer_size]);
 }
