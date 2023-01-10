@@ -62,12 +62,8 @@ class FusedAlignedOutputAllocator {
     OP_REQUIRES_OK(ctx_, ctx_->allocate_temp(dtype, {aligned_total_}, &flat_out_));
     aligned_total_ = 0;
   }
-  Tensor get_slice(std::initializer_list<int64> shape) {
-    int64 num_elements = 1;
-#pragma unroll
-    for (auto dim : shape) {
-      num_elements *= dim;
-    }
+  Tensor get_slice(const TensorShape& shape) {
+    int64 num_elements = shape.num_elements();
     Tensor reshaped;
     // note: CopyFrom and Slice doesn't copy the underlying memory
     (void)reshaped.CopyFrom(flat_out_.Slice(aligned_total_, aligned_total_ + num_elements), shape);

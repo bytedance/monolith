@@ -298,12 +298,9 @@ def apply_gradients_with_var_optimizer(
 
     if grads is not None and len(grads) > 0:
       if clip_type == GradClipType.ClipByGlobalNorm and clip_norm is not None:
-        norm_fn = clip_ops._global_norm if device_utils.within_placement_context_of(
-            "GPU") else tf.linalg.global_norm
-        global_norm = norm_fn(grads)
         if sparse_norm_warmup_steps is None:
           clipped_grads, global_g_norm = clip_ops.clip_by_global_norm(
-              grads, clip_norm, use_norm=global_norm)
+              grads, clip_norm)
         else:
           sparse_clip_norm = sparse_clip_norm or clip_norm
           sparse_clip_norm = _gen_norm_warmup(sparse_clip_norm, global_step,
@@ -311,6 +308,9 @@ def apply_gradients_with_var_optimizer(
           logging.info('sparse_norm_warmup_steps: %s', sparse_norm_warmup_steps)
           logging.info('dense_grads: %s', len(dense_grads))
           logging.info('embedding_grads: %s', len(emb_grads))
+          norm_fn = clip_ops._global_norm if device_utils.within_placement_context_of(
+            "GPU") else tf.linalg.global_norm
+          global_norm = norm_fn(grads)
           dense_clipped_grads, global_g_norm = clip_ops.clip_by_global_norm(
               dense_grads, clip_norm, use_norm=global_norm)
           embedding_clipped_grads, global_g_norm = clip_ops.clip_by_global_norm(
@@ -332,19 +332,13 @@ def apply_gradients_with_var_optimizer(
         clipped_grads = [tf.clip_by_norm(g, clip_norm) for g in grads]
       elif clip_type == GradClipType.ClipByDenseAndSparse:
         logging.info("Grads are: {}".format(grads))
-        global_emb_norm = tf.linalg.global_norm(emb_grads)
-        global_dense_norm = tf.linalg.global_norm(dense_grads)
-        if len(dense_grads) > 0:
-          dense_clipped_grads, _ = clip_ops.clip_by_global_norm(
-              dense_grads, clip_norm, use_norm=global_dense_norm)
+        dense_clipped_grads, global_dense_norm = clip_ops.clip_by_global_norm(
+            dense_grads, clip_norm)
+        if sparse_clip_norm != None:
+          embedding_clipped_grads, global_emb_norm = clip_ops.clip_by_global_norm(
+              emb_grads, sparse_clip_norm)
         else:
-          dense_clipped_grads = dense_grads
-
-        if len(emb_grads) > 0 and sparse_clip_norm != None:
-          embedding_clipped_grads, _ = clip_ops.clip_by_global_norm(
-              emb_grads, sparse_clip_norm, use_norm=global_emb_norm)
-        else:
-          embedding_clipped_grads = emb_grads
+          embedding_clipped_grads, global_emb_norm = emb_grads, 0
         clipped_grads = dense_clipped_grads + embedding_clipped_grads
         with tf.device('/device:CPU:0'):
           tf.compat.v1.summary.scalar("global_gradient_norm/dense",

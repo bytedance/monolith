@@ -124,6 +124,8 @@ tf_kernel_library(
         "clip_by_global_norm.h",
         "clip_by_global_norm.cu.cc",
         "global_norm.cu.cc",
+        "clip_by_global_norm_fused.cu.cc",
+        "alloc_utils.h",
     ],
     linkopts = [],
     deps = [

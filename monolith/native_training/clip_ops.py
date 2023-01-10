@@ -65,11 +65,16 @@ def clip_by_global_norm(t_list: List[tf.Tensor],
   with tf.name_scope('clip_by_global_norm'):
     if not isinstance(t_list, list):
       raise TypeError("t_list should be a list")
+    if len(t_list) == 0:
+      return t_list, 0
+    if use_norm is not None:
+      return gen_clip_ops.monolith_clip_by_global_norm(
+        t_list, use_norm, clip_norm), use_norm
+    if device_utils.within_placement_context_of("GPU"):
+      return gen_clip_ops.monolith_clip_by_global_norm_fused(t_list, clip_norm)
     norm_fn = _global_norm if device_utils.within_placement_context_of(
         "GPU") else tf.linalg.global_norm
-    global_norm = norm_fn(t_list) if use_norm is None else use_norm
-    if len(t_list) == 0:
-      return t_list, global_norm
+    global_norm = norm_fn(t_list)
     list_clipped = gen_clip_ops.monolith_clip_by_global_norm(
         t_list, global_norm, clip_norm)
   return list_clipped, global_norm
