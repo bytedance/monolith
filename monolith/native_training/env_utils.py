@@ -21,6 +21,9 @@ import socket
 from absl import logging
 def setup_hdfs_env():
   pass
+  
+def generate_psm_from_uuid(s):
+  return s
 def get_zk_auth_data():
   ZK_AUTH = os.getenv('ZK_AUTH', None)
   if ZK_AUTH:
