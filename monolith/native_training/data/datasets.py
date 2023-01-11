@@ -48,6 +48,7 @@ from monolith.native_training.monolith_export import monolith_export
 from monolith.native_training.data.feature_utils import create_item_pool, string_to_variant, \
   has_variant, kafka_resource_init, kafka_read_next
 from monolith.native_training.data.feature_list import FeatureList
+from monolith.native_training.data.parsers import get_default_parser_ctx
 from monolith.native_training import native_task_context
 from monolith.native_training.distribute import distributed_dataset
 from monolith.native_training.runtime.ops import gen_monolith_ops
@@ -142,13 +143,18 @@ class DatasetMetaclass(type):
       elif 'topics' in kwargs and 'group_id' in kwargs and 'servers' in kwargs:
         logging.info('use KafkaDataset!')
         return KafkaDataset(**kwargs)
+      elif kwargs.get('use_parquet'):
+        return ParquetDataset(**kwargs)
       elif 'file_name' in kwargs or len(kwargs) == 0:
         return FilePBDataset(*args, **kwargs)
       else:
         return super(DatasetMetaclass, cls).__call__(*args, **kwargs)
     elif isinstance(args[0], str):
-      logging.info('use FilePBDataset!')
-      return FilePBDataset(*args, **kwargs)
+      if kwargs.get('use_parquet'):
+        return ParquetDataset(*args, **kwargs)
+      else:
+        logging.info('use FilePBDataset!')
+        return FilePBDataset(*args, **kwargs)
     elif isinstance(args[0], (list, tuple)):
       if len(args) > 1:
         if isinstance(args[1], str):
@@ -189,6 +195,7 @@ class PBDataset(metaclass=DatasetMetaclass):
       container: str = '',
       shared_name: str = '',
       use_data_service: bool = False,
+      use_parquet: bool = False,
       cycle_length=None,
       block_length=None,
       num_parallel_calls=None,
@@ -257,6 +264,44 @@ class DynamicMatchingFilesDataset(dataset_ops.DatasetSource):
   @property
   def element_spec(self):
     return tensor_spec.TensorSpec([], dtypes.string)
+
+
+class ParquetDataset(dataset_ops.DatasetSource):
+  def __init__(
+      self,
+      file_name,
+      output_pb_type: PbType,
+      select_columns: List[str],
+      select_columns_type: List[str],
+      batch_size = 512,
+      drop_remainder = True,
+      **kwargs):
+    # assert isinstance(file_name, str)
+    assert output_pb_type in [PbType.EXAMPLE, PbType.EXAMPLEBATCH, PbType.PLAINTEXT]
+    assert output_pb_type != 'example_batch' or (isinstance(batch_size, int) and batch_size > 0)
+    batch_size = 0 if output_pb_type == 'example' else batch_size
+    assert isinstance(select_columns, list) and all(isinstance(c, str) for c in select_columns)
+    assert isinstance(select_columns_type, list) and all(t in ["int", "fid_v1", "fid_v2", "float"] for t in select_columns_type)
+
+    if output_pb_type == PbType.EXAMPLEBATCH and batch_size > 0 and drop_remainder:
+      get_default_parser_ctx().set('batch_size', batch_size)
+
+    self._out_type = tf.string if output_pb_type == PbType.PLAINTEXT else tf.variant
+
+    variant_tensor = pb_datasource_ops.parquet_dataset(
+        file_name=file_name,
+        output_pb_type=output_pb_type.to_name(),
+        batch_size=batch_size,
+        select_columns=select_columns,
+        select_columns_type=select_columns_type,
+        drop_remainder=drop_remainder
+    )
+
+    super().__init__(variant_tensor)
+
+  @property
+  def element_spec(self):
+    return tensor_spec.TensorSpec([], self._out_type)
 
 
 @monolith_export
@@ -372,6 +417,7 @@ class DistributedFilePBDataset(dataset_ops.DatasetSource):
       block_length=None,
       num_parallel_calls=tf.data.AUTOTUNE,
       deterministic=None,
+      use_parquet: bool = False,
       **kwargs):
     if not patterns:
       patterns = [""]
@@ -387,15 +433,21 @@ class DistributedFilePBDataset(dataset_ops.DatasetSource):
                                                False))
     logging.info(f"enable_dynamic_sharding: {enable_dynamic_sharding}")
 
-    map_func = lambda file_name: FilePBDataset(
-        file_name=file_name,
-        use_snappy=use_snappy,
-        buffer_size=buffer_size,
-        input_pb_type=input_pb_type,
-        output_pb_type=output_pb_type,
-        feature_pruning_type=feature_pruning_type,
-        disable_iterator_save_restore=not enable_dynamic_sharding,
-        **kwargs)
+    if use_parquet:
+      map_func = lambda file_name: ParquetDataset(
+          file_name=file_name,
+          output_pb_type=output_pb_type,
+          **kwargs)
+    else:
+      map_func = lambda file_name: FilePBDataset(
+          file_name=file_name,
+          use_snappy=use_snappy,
+          buffer_size=buffer_size,
+          input_pb_type=input_pb_type,
+          output_pb_type=output_pb_type,
+          feature_pruning_type=feature_pruning_type,
+          disable_iterator_save_restore=not enable_dynamic_sharding,
+          **kwargs)
     graph = tf.compat.v1.get_default_graph()
     if use_data_service and not hasattr(graph, 'dry_run'):
       files_list = DynamicMatchingFilesDataset(patterns)

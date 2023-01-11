@@ -105,3 +105,16 @@ tf_cc_test(
         "@org_tensorflow//tensorflow/core:test",
     ],
 )
+
+cc_library(
+    name = "parquet_example_reader",
+    srcs = [
+        "arrow_random_access_file.h",
+        "sized_random_access_file.h",
+        "parquet_column_buffer.h",
+        "parquet_example_reader.h",
+    ],
+    deps = [
+        "@arrow",
+    ]
+)

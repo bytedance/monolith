@@ -59,6 +59,7 @@ cc_library(
         "kernels/split_flow_dataset_kernel.cc",
         "kernels/string_to_variant.cc",
         "kernels/variant_filter_kernel.cc",
+        "kernels/parquet_dataset_kernel.cc",
     ],
     deps = [
         ":data_op_config_cc_proto",
@@ -68,6 +69,7 @@ cc_library(
         "//monolith/native_training/data/kernels/internal:file_match_split_provider",
         "//monolith/native_training/data/kernels/internal:label_utils",
         "//monolith/native_training/data/kernels/internal:relational_utils",
+        "//monolith/native_training/data/kernels/internal:parquet_example_reader",
         "//monolith/native_training/data/training_instance:data_reader",
         "//monolith/native_training/data/training_instance:instance_utils",
         "//monolith/native_training/data/training_instance:parse_instance_lib",
@@ -107,6 +109,8 @@ py_library(
     ],
     deps = [
         ":feature_list",
+        ":feature_utils_py",
+        ":parsers_py",
         "//monolith:utils",
         "//monolith/native_training:monolith_export",
         "//monolith/native_training/distribute:distributed_dataset",
@@ -280,6 +284,17 @@ py_binary(
     ],
 )
 
+py_binary(
+    name = "data_service_parquet_test",
+    srcs = [
+        "data_service_parquet_test.py",
+    ],
+    deps = [
+        ":datasets_py",
+        ":feature_utils_py",
+    ]
+)
+
 exports_files([
     "kernels/add_action_kernel.cc",
     "kernels/instance_reweight_dataset_kernel.cc",
@@ -296,6 +311,7 @@ exports_files([
     "kernels/pb_dataset_kernel.cc",
     "kernels/ragged_feature_kernel.cc",
     "kernels/variant_filter_kernel.cc",
+    "kernels/parquet_dataset_kernel.cc",
     "kernels/item_pool_kernels.h",
     "kernels/item_pool_kernels.cc",
     "ops/feature_utils_ops.cc",

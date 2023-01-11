@@ -41,6 +41,24 @@ REGISTER_OP("PBDataset")
       return shape_inference::ScalarShape(c);
     });
 
+REGISTER_OP("ParquetDataset")
+    // basic
+    .Input("file_name: string")
+    .Input("output_pb_type: string")  // example or example_batch
+    .Attr("batch_size: int")  // valid when output_pb_type is 'example_batch'
+    // select cols
+    .Attr("select_columns: list(string)")
+    .Attr("select_columns_type: list(string)")
+    .Attr("drop_remainder: bool")
+    // output
+    .Output("handle: variant")
+    .SetDoNotOptimize()
+    .SetShapeFn([](shape_inference::InferenceContext* c) {
+      shape_inference::ShapeHandle unused;
+      TF_RETURN_IF_ERROR(c->WithRankAtMost(c->input(0), 1, &unused));
+      return shape_inference::ScalarShape(c);
+    });
+
 REGISTER_OP("InstanceReweightDataset")
     .Input("input: variant")
     .Attr("method: int")

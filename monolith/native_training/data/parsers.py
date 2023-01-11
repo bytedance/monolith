@@ -31,6 +31,8 @@ from monolith.native_training.data.feature_list import get_feature_name_and_slot
 from monolith.native_training.data.data_op_config_pb2 import LabelConf, TaskLabelConf
 from monolith.native_training.runtime.ops import gen_monolith_ops
 from monolith.native_training.utils import add_to_collections
+from tensorflow.python.framework import ops
+from tensorflow.python.framework import common_shapes
 
 parse_instance_ops = gen_monolith_ops
 
@@ -45,6 +47,7 @@ class ParserCtx(object):
     self._old_parser_ctx = None
     self.parser_type = None
     self.enable_fused_layout = enable_fused_layout
+    self._ctx_kv = {}
 
   def __enter__(self):
     global _default_parser_ctx
@@ -56,6 +59,12 @@ class ParserCtx(object):
     global _default_parser_ctx
     _default_parser_ctx = self._old_parser_ctx
     self._old_parser_ctx = None
+
+  def set(self, key, value):
+    self._ctx_kv[key] = value
+
+  def get(self, key, default_value=None):
+    return self._ctx_kv.get(key, default_value)
 
 
 def get_default_parser_ctx() -> ParserCtx:
@@ -147,13 +156,17 @@ def _add_extra_features(names: List[str], shapes: List[int],
   types.extend(extra_dtypes)
 
 
-def _assemble(sparse_features, names, shapes, types, out_list):
+def _assemble(sparse_features, names, shapes, types, out_list, batch_size: int = None):
   assert len(out_list) == len(types)
   features = {}
   for i, name in enumerate(names):
     if name in sparse_features:
-      split = out_list[i]
       value = out_list[i + len(names)]
+      if batch_size:
+        batch_size = batch_size[0] if isinstance(batch_size, (list, tuple)) else batch_size
+        split = tf.reshape(out_list[i], shape=(batch_size+1,))
+      else:
+        split = out_list[i]
       features[name] = tf.RaggedTensor.from_row_splits(value,
                                                        split,
                                                        validate=False)
@@ -401,7 +414,7 @@ def parse_example_batch(
   if extra_features is not None:
     _add_extra_features(names, shapes, types, extra_features,
                         extra_feature_shapes)
-
+  batch_size = get_default_parser_ctx().get('batch_size')
   assert len(names) == len(set(names)), "deplicate names, pls check!"
   if get_default_parser_ctx().enable_fused_layout:
     if len(names) == 0:
@@ -410,7 +423,7 @@ def parse_example_batch(
       types.append(tf.float32)
     out_list, example_batch = parse_instance_ops.parse_example_batch_v2(
         tensor, names, shapes, types, extra_features or [])
-    features = _assemble([], names, shapes, types, out_list)
+    features = _assemble([], names, shapes, types, out_list, batch_size=batch_size)
     features["sparse_features"] = example_batch
     if "__FAKE_FEATURE__" in features:
       del features["__FAKE_FEATURE__"]
@@ -420,7 +433,7 @@ def parse_example_batch(
     out_list = parse_instance_ops.parse_example_batch(tensor, names, shapes,
                                                       types, extra_features or
                                                       [])
-    return _assemble(sparse_features, names, shapes, types, out_list)
+    return _assemble(sparse_features, names, shapes, types, out_list, batch_size=batch_size)
 
 
 @monolith_export

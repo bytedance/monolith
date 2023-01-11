@@ -274,3 +274,70 @@ tf_http_archive(
 #        "https://github.com/NVIDIA/cuCollections/archive/0446d73eadb0478ddd4016c0d2eb04b9312dc53d.zip",
 #    ],
 #)
+
+http_archive(
+    name = "arrow",
+    build_file = "//third_party:arrow.BUILD",
+    sha256 = "57e13c62f27b710e1de54fd30faed612aefa22aa41fa2c0c3bacd204dd18a8f3",
+    strip_prefix = "arrow-apache-arrow-7.0.0",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/apache/arrow/archive/apache-arrow-7.0.0.tar.gz",
+        "https://github.com/apache/arrow/archive/apache-arrow-7.0.0.tar.gz",
+    ],
+)
+
+# extra dependencies of arrow begin 
+http_archive(
+    name = "rapidjson",
+    build_file = "//third_party:rapidjson.BUILD",
+    sha256 = "30bd2c428216e50400d493b38ca33a25efb1dd65f79dfc614ab0c957a3ac2c28",
+    strip_prefix = "rapidjson-418331e99f859f00bdc8306f69eba67e8693c55e",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/miloyip/rapidjson/archive/418331e99f859f00bdc8306f69eba67e8693c55e.tar.gz",
+        "https://github.com/miloyip/rapidjson/archive/418331e99f859f00bdc8306f69eba67e8693c55e.tar.gz",
+    ],
+)
+
+http_archive(
+    name = "xsimd",
+    build_file = "//third_party:xsimd.BUILD",
+    sha256 = "21b4700e9ef70f6c9a86952047efd8272317df4e6fee35963de9394fd9c5677f",
+    strip_prefix = "xsimd-8.0.1",
+    urls = [
+        "https://github.com/xtensor-stack/xsimd/archive/refs/tags/8.0.1.tar.gz",
+    ],
+)
+
+http_archive(
+    name = "brotli",
+    build_file = "//third_party:brotli.BUILD",
+    sha256 = "4c61bfb0faca87219ea587326c467b95acb25555b53d1a421ffa3c8a9296ee2c",
+    strip_prefix = "brotli-1.0.7",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/google/brotli/archive/v1.0.7.tar.gz",
+        "https://github.com/google/brotli/archive/v1.0.7.tar.gz",
+    ],
+)
+
+http_archive(
+    name = "bzip2",
+    build_file = "//third_party:bzip2.BUILD",
+    sha256 = "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269",
+    strip_prefix = "bzip2-1.0.8",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz",
+        "https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz",
+    ],
+)
+
+http_archive(
+    name = "thrift",
+    build_file = "//third_party:thrift.BUILD",
+    sha256 = "5da60088e60984f4f0801deeea628d193c33cec621e78c8a43a5d8c4055f7ad9",
+    strip_prefix = "thrift-0.13.0",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/apache/thrift/archive/v0.13.0.tar.gz",
+        "https://github.com/apache/thrift/archive/v0.13.0.tar.gz",
+    ],
+)
+# extra dependencies of arrow end
