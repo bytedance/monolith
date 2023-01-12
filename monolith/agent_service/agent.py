@@ -38,6 +38,12 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('tfs_log', '/var/log/tfs.std.log',
                     'The tfs log file path')
 def main(_):
+  try:
+    env_utils.setup_hdfs_env()
+  except Exception as e:
+    logging.error('setup_hdfs_env fail {}!'.format(e))
+  logging.info(f'environ is : {os.environ!r}')
+
   if FLAGS.conf is None:
     print(FLAGS.get_help())
     return
@@ -67,9 +73,4 @@ def main(_):
 
 
 if __name__ == '__main__':
-  try:
-    env_utils.setup_hdfs_env()
-  except Exception as e:
-    logging.error('setup_hdfs_env fail {}!'.format(e))
-  logging.info(f'environ is : {os.environ!r}')
   app.run(main)

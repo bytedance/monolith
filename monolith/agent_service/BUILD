@@ -271,7 +271,7 @@ py_binary(
         "//idl:line_id_py_proto",
         "//idl:proto_parser_py_proto",
         "//monolith/native_training/data:feature_list",
-        "//monolith/native_training/model_export",
+        "//monolith/native_training/model_export:data_gen_utils",
     ],
 )
 
@@ -446,6 +446,17 @@ py_binary(
         ":agent_v3",
         ":mocked_zkclient",
         ":model_manager",
+    ],
+)
+
+py_binary(
+    name = "run",
+    srcs = ["run.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+       ":tfs_client",
+       ":agent_client",
+       ":agent",
     ],
 )
 
