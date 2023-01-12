@@ -340,4 +340,15 @@ http_archive(
         "https://github.com/apache/thrift/archive/v0.13.0.tar.gz",
     ],
 )
+
+http_archive(
+    name = "io_snappy",
+    build_file = "//third_party:snappy.BUILD",
+    sha256 = "16b677f07832a612b0836178db7f374e414f94657c138e6993cbfc5dcc58651f",
+    strip_prefix = "snappy-1.1.8",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/google/snappy/archive/1.1.8.tar.gz",
+        "https://github.com/google/snappy/archive/1.1.8.tar.gz",
+    ],
+)
 # extra dependencies of arrow end

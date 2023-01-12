@@ -121,7 +121,7 @@ cc_library(
         "@double_conversion//:double-conversion",
         "@lz4",
         "@rapidjson",
-        "@cpp3rdlib_google-snappy_1.1.8-gcc8//:snappy",
+        "@io_snappy//:snappy",
         "@thrift",
         "@xsimd",
         "@zlib",
