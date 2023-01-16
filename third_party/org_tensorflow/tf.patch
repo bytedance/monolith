@@ -383,3 +383,16 @@ index 03c23f32..fe3304db 100644
      propagator_.MaybeMarkStarted(tagged_node);
  
      params.track_allocations = false;
+
+diff --git a/third_party/snappy.BUILD b/third_party/snappy.BUILD
+index a2ab4924f29..77cb7ea0dff 100644
+--- a/third_party/snappy.BUILD
++++ b/third_party/snappy.BUILD
+@@ -27,6 +27,7 @@ cc_library(
+             "-Wno-implicit-function-declaration",
+         ],
+     }),
++    includes = ["."],
+     defines = select({
+         "@org_tensorflow//tensorflow:windows": [],
+         "//conditions:default": ["HAVE_SYS_UIO_H"],
