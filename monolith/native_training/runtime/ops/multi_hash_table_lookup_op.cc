@@ -16,6 +16,7 @@
 
 #include "absl/strings/str_format.h"
 #include "monolith/native_training/runtime/common/metrics.h"
+#include "monolith/native_training/runtime/hash_table/utils.h"
 #include "monolith/native_training/runtime/ops/embedding_hash_table_tf_bridge.h"
 #include "monolith/native_training/runtime/ops/multi_hash_table.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -28,6 +29,7 @@
 namespace tensorflow {
 namespace monolith_tf {
 
+using CPUDevice = Eigen::ThreadPoolDevice;
 class MultiHashTableLookupOp : public OpKernel {
  public:
   explicit MultiHashTableLookupOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
@@ -110,6 +112,77 @@ class MultiHashTableLookupEntryOp : public OpKernel {
   int64 cost_per_table_;
 };
 
+template <typename Device>
+class MultiHashTableFusedLookupOp : public OpKernel {
+ public:
+  explicit MultiHashTableFusedLookupOp(OpKernelConstruction* ctx)
+      : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("num_of_shards", &num_shards_));
+  }
+
+  void ComputeH(OpKernelContext* ctx);
+  void Compute(OpKernelContext* ctx) override { ComputeH(ctx); }
+
+ private:
+  int num_shards_;
+};
+
+template <>
+void MultiHashTableFusedLookupOp<CPUDevice>::ComputeH(OpKernelContext* ctx) {
+  auto ids_flat = ctx->input(1).flat<int64_t>().data();
+  auto slot_size_vec = ctx->input(2).vec<int>().data();
+  auto slot_size_cnt = ctx->input(2).NumElements();
+
+  Tensor *embeddings_ts, *emb_splits_ts, *key_offsets_ts, *emb_offsets_ts;
+  OP_REQUIRES_OK(ctx, ctx->allocate_output(1, {num_shards_}, &emb_splits_ts));
+  OP_REQUIRES_OK(ctx,
+                 ctx->allocate_output(2, {slot_size_cnt + 1}, &key_offsets_ts));
+  OP_REQUIRES_OK(ctx,
+                 ctx->allocate_output(3, {slot_size_cnt + 1}, &emb_offsets_ts));
+  auto key_offsets = key_offsets_ts->vec<int>().data();
+  auto emb_offsets = emb_offsets_ts->vec<int>().data();
+  auto emb_splits = emb_splits_ts->vec<int>().data();
+
+  core::RefCountPtr<MultiHashTable> mtable;
+  OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &mtable));
+
+  int num_tables_ = mtable->size();
+  std::vector<int> hash_table_dims(num_tables_, 0);
+  for (int table_id = 0; table_id < num_tables_; table_id++) {
+    hash_table_dims[table_id] = mtable->table(table_id)->dim_size();
+  }
+
+  int total_keys, total_embs;
+  std::tie(total_keys, total_embs) =
+      monolith::hash_table::ComputeFusedOffsets<false>(
+          slot_size_vec, hash_table_dims.data(), num_tables_, num_shards_,
+          key_offsets, emb_offsets, nullptr, emb_splits);
+
+  OP_REQUIRES_OK(ctx, ctx->allocate_output(0, {total_embs}, &embeddings_ts));
+  auto embeddings = embeddings_ts->vec<float>().data();
+
+  auto lookup = [&](const int begin, const int end) {
+    for (int shard_id = begin; shard_id < end; shard_id++) {
+      for (int table_id = 0; table_id < num_tables_; table_id++) {
+        int curr_idx = shard_id * num_tables_ + table_id;
+        int64_t hit_fid_count = 0;
+        mtable->table(table_id)->BatchLookup(
+            ctx, slot_size_vec[curr_idx],
+            const_cast<int64_t*>(ids_flat) + key_offsets[curr_idx],
+            embeddings + emb_offsets[curr_idx], &hit_fid_count);
+      }
+    }
+  };
+
+  // TODO(zouxuan): tweak this number for optimization.
+  const int64 kCostPerUnit = 1000000;
+  const DeviceBase::CpuWorkerThreads& worker_threads =
+      *ctx->device()->tensorflow_cpu_worker_threads();
+  Shard(worker_threads.num_threads, worker_threads.workers, num_shards_,
+        kCostPerUnit, lookup);
+}
+
+
 REGISTER_OP("MonolithMultiHashTableLookup")
     .Input("mtable: resource")
     .Input("id: int64")
@@ -138,6 +211,35 @@ REGISTER_OP("MonolithMultiHashTableLookupEntry")
 REGISTER_KERNEL_BUILDER(
     Name("MonolithMultiHashTableLookupEntry").Device(DEVICE_CPU),
     MultiHashTableLookupEntryOp);
+
+REGISTER_OP("MonolithMultiHashTableFusedLookup")
+    .Input("mtable: resource")
+    .Input("ids: int64")
+    .Input("fused_slot_size: int32")
+    .Output("embeddings: float32")
+    .Output("embedding_splits: int32")
+    .Output("id_offsets: int32")
+    .Output("embedding_offsets: int32")
+    .Attr("num_of_shards: int")
+    .SetShapeFn([](shape_inference::InferenceContext* c) {
+      int num_shards;
+      TF_RETURN_IF_ERROR(c->GetAttr("num_of_shards", &num_shards));
+      c->set_output(0, c->Vector(c->UnknownDim()));
+      c->set_output(1, c->Vector(num_shards));
+
+      auto shape = c->input(2);
+      TF_RETURN_IF_ERROR(c->WithRank(shape, 1, &shape));
+      auto dim = c->Dim(shape, 0);
+      shape_inference::DimensionHandle out;
+      TF_RETURN_IF_ERROR(c->Add(dim, 1, &out));
+      c->set_output(2, c->Vector(out));
+      c->set_output(3, c->Vector(out));
+      return Status::OK();
+    });
+
+REGISTER_KERNEL_BUILDER(
+    Name("MonolithMultiHashTableFusedLookup").Device(DEVICE_CPU),
+    MultiHashTableFusedLookupOp<CPUDevice>);
 
 }  // namespace monolith_tf
 }  // namespace tensorflow

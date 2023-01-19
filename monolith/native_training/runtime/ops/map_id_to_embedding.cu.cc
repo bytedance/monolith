@@ -14,7 +14,7 @@
 
 #if GOOGLE_CUDA
 #define EIGEN_USE_GPU
-
+#include "monolith/native_training/runtime/ops/alloc_utils.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor_shape.h"
@@ -136,43 +136,43 @@ class FusedGatherEmbeddingsByInputOpGPU : public OpKernel {
 
   void Compute(OpKernelContext* ctx) override {
     auto fused_embeddings_flat = ctx->input(0).flat<T>();
-
     OpInputList inputs;
     OP_REQUIRES_OK(ctx, ctx->input_list("embedding_offsets", &inputs));
-    OpOutputList outputs;
-    OP_REQUIRES_OK(ctx, ctx->output_list("output", &outputs));
 
-    DCHECK_EQ(num_of_inputs_, outputs.size());
     GpuDeviceArrayOnHost<const int32*> input_ptrs(ctx, num_of_inputs_);
-    GpuDeviceArrayOnHost<T*> output_ptrs(ctx, outputs.size());
-    OP_REQUIRES_OK(ctx, input_ptrs.Init());
-    OP_REQUIRES_OK(ctx, output_ptrs.Init());
-
     GpuDeviceArrayOnHost<int32> embedding_dims(ctx, num_of_inputs_);
-    OP_REQUIRES_OK(ctx, embedding_dims.Init());
-    int32 offset = 0;
     GpuDeviceArrayOnHost<int32> offsets(ctx, num_of_inputs_ + 1);
+    OP_REQUIRES_OK(ctx, input_ptrs.Init());
+    OP_REQUIRES_OK(ctx, embedding_dims.Init());
     OP_REQUIRES_OK(ctx, offsets.Init());
     int smem_usage = sizeof(int32) * (num_of_inputs_ + 1 + num_of_inputs_);
     // smem: offsets + embedding_dims
+    FusedAlignedOutputAllocator<EIGEN_MAX_ALIGN_BYTES / sizeof(T)> fao_alloc(
+    ctx);
     for (int i = 0; i < num_of_inputs_; ++i) {
       auto dim = embedding_dims_[i];
-      embedding_dims.Set(i, dim);
       auto s = inputs[i].NumElements();  // == input[i].shape().dim_size(0)
-      offsets.Set(i, offset);
-      offset += s * dim;
+      embedding_dims.Set(i, dim);
+      offsets.Set(i, fao_alloc.get_unaligned_total());
       input_ptrs.Set(i, inputs[i].flat<int32>().data());
-      TensorShape output_shape = inputs[i].shape();
-      output_shape.AddDim(dim);
-      Tensor* out;
-      OP_REQUIRES_OK(ctx, outputs.allocate(i, output_shape, &out));
-      output_ptrs.Set(i, out->flat<T>().data());
+      fao_alloc.add_slice(s * dim);
     }
-    offsets.Set(num_of_inputs_, offset);  // offset val here is total workload
+    offsets.Set(num_of_inputs_, fao_alloc.get_unaligned_total());  // offset val here is total workload
     OP_REQUIRES_OK(ctx, offsets.Finalize());
     OP_REQUIRES_OK(ctx, input_ptrs.Finalize());
-    OP_REQUIRES_OK(ctx, output_ptrs.Finalize());
     OP_REQUIRES_OK(ctx, embedding_dims.Finalize());
+
+    GpuDeviceArrayOnHost<T*> output_ptrs(ctx, num_of_inputs_);
+    OP_REQUIRES_OK(ctx, output_ptrs.Init());
+    fao_alloc.allocate(ctx->expected_output_dtype(0));
+    for (int i = 0; i < num_of_inputs_; ++i) {
+      auto dim = embedding_dims_[i];
+      auto s = inputs[i].NumElements();  // == input[i].shape().dim_size(0)
+      Tensor out = fao_alloc.get_slice({s, dim});
+      output_ptrs.Set(i, out.flat<T>().data());
+      ctx->set_output(i, std::move(out));
+    }
+    OP_REQUIRES_OK(ctx, output_ptrs.Finalize());
 
     GPUDevice gpu_device = ctx->eigen_device<GPUDevice>();
 
@@ -192,12 +192,12 @@ class FusedGatherEmbeddingsByInputOpGPU : public OpKernel {
     // The chosen implementation is to distribute the output workload balanced
     // on threads,
     // while searching the idx input bucket to which the output val belongs to.
-    auto config = GetGpuLaunchConfig(offset, gpu_device);
+    auto config = GetGpuLaunchConfig(fao_alloc.get_unaligned_total(), gpu_device);
     GpuLaunchKernel(
         FusedGatherKernel<T>, config.block_count, config.thread_per_block,
         /*shared_memory_size_bytes=*/smem_usage, gpu_device.stream(),
         fused_embeddings_flat.data(), input_ptrs.data(), output_ptrs.data(),
-        embedding_dims.data(), offsets.data(), offset);
+        embedding_dims.data(), offsets.data(), fao_alloc.get_unaligned_total());
   }
 
  private:

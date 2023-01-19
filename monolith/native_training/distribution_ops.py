@@ -240,8 +240,8 @@ def fused_reorder_by_indices(
       output => [0,2,6,1,3,5,7]
       shard_sizes => [3,4]
       sharded_slot_sizes => [1,1,1,1,1,2]
-      fused_embedding_offsets => [[0,6,0],[7,1,7],[9,3,12]]
-  
+      fused_embedding_offsets => [0,6,0,7,1,7,9,3,12]
+
   Args:
     inputs: List of 1-D int64 tensors.
     num_of_shards: a int32 scalar, representing the number of shards.
@@ -249,26 +249,15 @@ def fused_reorder_by_indices(
     output: reordered 1-D int64 tensor.
     shard_sizes: 1-D int32 tensor with shape (num_of_shards).
     sharded_slot_sizes: 1-D int32 tensor with shape (num_of_shards * len(inputs)).
-    fused_embedding_offsets: List of 1-d int32 tensor with shape as corresponding inputs.
+    fused_embedding_offsets: 1-D int32 tensor
   """
-  # shard_indicies: List of 1-D int32 tensors, shard_indicies[i] represents for inputs[i]
   # We only trigger this N-1 sharding scheme when it is beyond single host mode.
   rank0_empty_shard = os.environ.get('MONOLITH_SYNC_EMPTY_RANK0_PS_SHARD',
-                                     '1') == '1'
-  if num_of_shards > 4 and rank0_empty_shard:
-    # We add 1 as an offset for the index numbers, so shard 0 is free from this.
-    shard_indicies = [
-        tf.cast(tf.math.add(tf.ones(tf.shape(ids), dtype=tf.int64),
-                            tf.math.floormod(ids, num_of_shards - 1)),
-                dtype=tf.int32) for ids in inputs
-    ]
-  else:
-    shard_indicies = [
-        tf.cast(tf.math.floormod(ids, num_of_shards), dtype=tf.int32)
-        for ids in inputs
-    ]
-  return gen_distribution_ops.fused_reorder_by_indices(inputs, shard_indicies,
-                                                       num_of_shards, dim_sizes)
+                                     '1') == '1' and num_of_shards > 4
+  return gen_distribution_ops.fused_reorder_by_indices(inputs,
+                                                       num_of_shards,
+                                                       dim_sizes,
+                                                       rank0_empty_shard)
   # # An Alternative Implementation based on TensorFlow Builtin Ops:
   # with tf.name_scope('fused_reorder_by_indicies'):
   #   inputs = [tf.unique(ids)[0] for ids in inputs]

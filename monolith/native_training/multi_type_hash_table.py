@@ -113,7 +113,6 @@ class MultiTypeHashTable(BaseMultiTypeHashTable):
     self._hash_tables = {}
     self._hash_table_resources = []
     learning_rate_tensors = []
-    learning_rate_lengths = []
     for slot in sorted(self._slot_to_config.keys()):
       # We need to keep the order here.
       config = self._slot_to_config[slot]
@@ -122,11 +121,9 @@ class MultiTypeHashTable(BaseMultiTypeHashTable):
       # self._slot_to_config.keys()
       self._hash_table_resources.append(self._hash_tables[slot].as_op())
       learning_rate_tensors.append(config.call_learning_rate_fns())
-      learning_rate_lengths.append(tf.size(learning_rate_tensors[-1]))
 
     # Build flattened learning rate tensor for fused apply gradient.
     self._learning_rate_tensors = tf.concat(learning_rate_tensors, 0)
-    self._learning_rate_lengths = tf.stack(learning_rate_lengths)
 
   def lookup(self, slot_to_id: Dict[str, tf.Tensor]) -> Dict[str, tf.Tensor]:
     slot_to_embedding = {}
@@ -206,7 +203,7 @@ class MultiTypeHashTable(BaseMultiTypeHashTable):
       enable_grad_accumulation: bool = False) -> MultiTypeHashTable:
     table_handles_output = hash_table_ops.fused_apply_gradient(
         self._hash_table_resources, ids, fused_slot_size, id_grads, id_offsets,
-        grad_offsets, self._learning_rate_tensors, self._learning_rate_lengths,
+        grad_offsets, self._learning_rate_tensors,
         req_time, global_step, num_of_shards, enable_grad_accumulation)
     copied = copy.copy(self)
     updated_tables = dict(self._hash_tables)

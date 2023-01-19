@@ -35,3 +35,9 @@ Temporarily solution for tensorflow deps.
 Add tf_gpu_kernel_library_allow_except to compile cpu/gpu version hash table
 # Diff 11 & 12:
 Add allow_except rules to compile cpu/gpu version hash table
+
+# Diff executor.cc
+This patch provides more detailed profiling
+
+# Diff regarding split ops
+This patch fixes the issue of split ops still using CPU execution path when it's explicitly placed on the GPU for int32 value type. 

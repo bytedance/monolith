@@ -41,8 +41,9 @@ namespace monolith_tf {
 namespace {
 
 // Carries the data through async process.
+template <typename TableType>
 struct AsyncPack {
-  AsyncPack(OpKernelContext* p_ctx, core::RefCountPtr<MultiHashTable> p_mtable,
+  AsyncPack(OpKernelContext* p_ctx, core::RefCountPtr<TableType> p_mtable,
             std::string p_basename,
             std::vector<std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx>>
                 p_lock_ctxs,
@@ -63,7 +64,7 @@ struct AsyncPack {
 
   OpKernelContext* ctx;
   std::string basename;
-  core::RefCountPtr<MultiHashTable> mtable;
+  core::RefCountPtr<TableType> mtable;
   std::vector<std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx>> lock_ctxs;
   std::function<void()> done;
   mutable std::vector<Status> status;
@@ -99,6 +100,7 @@ std::string GetShardedMetadataFileName(absl::string_view basename, int shard,
 
 }  // namespace
 
+template <typename TableType>
 class MultiHashTableSaveOp : public AsyncOpKernel {
  public:
   explicit MultiHashTableSaveOp(OpKernelConstruction* ctx)
@@ -108,8 +110,9 @@ class MultiHashTableSaveOp : public AsyncOpKernel {
                                      &slot_expire_time_config_serialized_));
     if (!slot_expire_time_config_serialized_.empty()) {
       OP_REQUIRES(
-          ctx, slot_expire_time_config_.ParseFromString(
-                   slot_expire_time_config_serialized_),
+          ctx,
+          slot_expire_time_config_.ParseFromString(
+              slot_expire_time_config_serialized_),
           errors::InvalidArgument("Unable to parse config. Make sure it "
                                   "is serialized version of "
                                   "SlotExpireTimeConfig."));
@@ -125,7 +128,7 @@ class MultiHashTableSaveOp : public AsyncOpKernel {
   }
 
   void ComputeAsync(OpKernelContext* ctx, DoneCallback done) override {
-    core::RefCountPtr<MultiHashTable> mtable;
+    core::RefCountPtr<TableType> mtable;
     OP_REQUIRES_OK_ASYNC(
         ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &mtable), done);
     const Tensor& basename_tensor = ctx->input(1);
@@ -140,7 +143,7 @@ class MultiHashTableSaveOp : public AsyncOpKernel {
       OP_REQUIRES_OK_ASYNC(ctx, mtable->table(i)->LockAll(&lock_ctx), done);
       lock_ctxs.push_back(std::move(lock_ctx));
     }
-    auto pack = std::make_shared<const AsyncPack>(
+    auto pack = std::make_shared<const AsyncPack<TableType>>(
         ctx, std::move(mtable), basename, std::move(lock_ctxs), std::move(done),
         real_nshards);
     for (int i = 0; i < real_nshards; ++i) {
@@ -154,12 +157,12 @@ class MultiHashTableSaveOp : public AsyncOpKernel {
 
  private:
   void WorkerThread(EmbeddingHashTableTfBridge::DumpShard shard,
-                    std::shared_ptr<const AsyncPack> p) {
+                    std::shared_ptr<const AsyncPack<TableType>> p) {
     p->status[shard.idx] = SaveOneShard(shard, p.get());
   }
 
   Status SaveOneShard(EmbeddingHashTableTfBridge::DumpShard shard,
-                      const AsyncPack* p) {
+                      const AsyncPack<TableType>* p) {
     const std::string filename =
         GetShardedFileName(p->basename, shard.idx, shard.total);
     const std::string meta_filename =
@@ -224,7 +227,7 @@ class MultiHashTableSaveOp : public AsyncOpKernel {
     return Status::OK();
   }
 
-  int PickNshards(const MultiHashTable& mtable) {
+  int PickNshards(const TableType& mtable) {
     if (nshards_ >= 0) return nshards_;
     int64 total_size = 0;
     const int64 kBaseline = 1000000ll;
@@ -240,13 +243,14 @@ class MultiHashTableSaveOp : public AsyncOpKernel {
   std::vector<int64_t> slot_to_expire_time_;
 };
 
+template <typename TableType>
 class MultiHashTableRestoreOp : public AsyncOpKernel {
  public:
   explicit MultiHashTableRestoreOp(OpKernelConstruction* ctx)
       : AsyncOpKernel(ctx) {}
 
   void ComputeAsync(OpKernelContext* ctx, DoneCallback done) override {
-    core::RefCountPtr<MultiHashTable> mtable;
+    core::RefCountPtr<TableType> mtable;
     OP_REQUIRES_OK_ASYNC(
         ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &mtable), done);
 
@@ -264,7 +268,7 @@ class MultiHashTableRestoreOp : public AsyncOpKernel {
                       done);
 
     int nshards = files.size();
-    auto pack = std::make_shared<const AsyncPack>(
+    auto pack = std::make_shared<const AsyncPack<TableType>>(
         ctx, std::move(mtable), basename,
         std::vector<std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx>>(),
         std::move(done), nshards);
@@ -279,12 +283,12 @@ class MultiHashTableRestoreOp : public AsyncOpKernel {
 
  private:
   void WorkerThread(EmbeddingHashTableTfBridge::DumpShard shard,
-                    std::shared_ptr<const AsyncPack> p) {
+                    std::shared_ptr<const AsyncPack<TableType>> p) {
     p->status[shard.idx] = RestoreOneShard(shard, p.get());
   }
 
   Status RestoreOneShard(EmbeddingHashTableTfBridge::DumpShard shard,
-                         const AsyncPack* p) {
+                         const AsyncPack<TableType>* p) {
     std::string filename =
         GetShardedFileName(p->basename, shard.idx, shard.total);
     std::string meta_filename =
@@ -417,21 +421,24 @@ class MultiHashTableFeatureStatOp : public OpKernel {
         feature_count[meta.table_name()] += meta.num_entries();
       }
 
-      OP_REQUIRES(ctx, eof, errors::DataLoss(
-                                "Couldn't read all of checkpoint shard ", idx));
+      OP_REQUIRES(
+          ctx, eof,
+          errors::DataLoss("Couldn't read all of checkpoint shard ", idx));
     }
 
     int num_tables = feature_count.size();
     Tensor* features;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({
-                                                    num_tables,
-                                                }),
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0,
+                                             TensorShape({
+                                                 num_tables,
+                                             }),
                                              &features));
     auto features_vec = features->vec<tstring>();
     Tensor* counts;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(1, TensorShape({
-                                                    num_tables,
-                                                }),
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(1,
+                                             TensorShape({
+                                                 num_tables,
+                                             }),
                                              &counts));
     auto counts_vec = counts->vec<uint64_t>();
     int feature_iter = 0;
@@ -452,7 +459,7 @@ REGISTER_OP("MonolithMultiHashTableSave")
     .SetShapeFn(shape_inference::ScalarShape);
 
 REGISTER_KERNEL_BUILDER(Name("MonolithMultiHashTableSave").Device(DEVICE_CPU),
-                        MultiHashTableSaveOp);
+                        MultiHashTableSaveOp<MultiHashTable>);
 
 REGISTER_OP("MonolithMultiHashTableRestore")
     .Input("mtable: resource")
@@ -462,7 +469,8 @@ REGISTER_OP("MonolithMultiHashTableRestore")
 
 REGISTER_KERNEL_BUILDER(
     Name("MonolithMultiHashTableRestore").Device(DEVICE_CPU),
-    MultiHashTableRestoreOp);
+    MultiHashTableRestoreOp<MultiHashTable>);
+
 
 REGISTER_OP("MonolithMultiHashTableFeatureStat")
     .Input("basename: string")

@@ -1133,7 +1133,6 @@ class HashTableOpsTest(tf.test.TestCase):
                                             emb_offsets,
                                             tf.constant([0.1, 0.1],
                                                         dtype=tf.float32),
-                                            tf.constant([1, 1], dtype=tf.int32),
                                             tf.constant(0, dtype=tf.int64),
                                             tf.constant(0, dtype=tf.int64),
                                             num_of_shards=2)

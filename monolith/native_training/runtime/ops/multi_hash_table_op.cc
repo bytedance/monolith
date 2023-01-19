@@ -14,7 +14,6 @@
 
 #include <cstring>
 #include <string>
-
 #include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
 #include "monolith/native_training/runtime/hash_table/embedding_hash_table.pb.h"
@@ -36,17 +35,19 @@ namespace monolith_tf {
 using ::monolith::hash_table::MultiEmbeddingHashTableConfig;
 using ::monolith::parameter_sync::ParameterSyncClient;
 
-class CreateMultiHashTableOp : public ResourceOpKernel<MultiHashTable> {
+template <typename T>
+class CreateMultiHashTableOp : public ResourceOpKernel<T> {
  public:
   explicit CreateMultiHashTableOp(OpKernelConstruction* ctx)
-      : ResourceOpKernel(ctx) {}
+      : ResourceOpKernel<T>(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
     absl::MutexLock l(&mu_);
-    if (resource_ == nullptr) {
+    if (ResourceOpKernel<T>::resource_ == nullptr) {
       const tstring& serialized_config = ctx->input(0).scalar<tstring>()();
-      OP_REQUIRES(ctx, config_.ParseFromArray(serialized_config.data(),
-                                              serialized_config.size()),
+      OP_REQUIRES(ctx,
+                  config_.ParseFromArray(serialized_config.data(),
+                                         serialized_config.size()),
                   errors::InvalidArgument("Unable to parse config."));
       n_ = config_.names_size();
       OP_REQUIRES(
@@ -61,27 +62,14 @@ class CreateMultiHashTableOp : public ResourceOpKernel<MultiHashTable> {
       const auto& sync_client_handle = ctx->input(2).scalar<ResourceHandle>()();
       OP_REQUIRES_OK(ctx,
                      LookupResource(ctx, sync_client_handle, &sync_client_));
+      SetupStream(ctx);
     }
-    ResourceOpKernel::Compute(ctx);
+    ResourceOpKernel<T>::Compute(ctx);
   }
 
-  Status CreateResource(MultiHashTable** resource)
-      TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) override {
-    auto* mtable = new MultiHashTable(cinfo_.name());
-    for (int i = 0; i < n_; i++) {
-      EmbeddingHashTableTfBridge* hash_table;
-      TF_RETURN_IF_ERROR(EmbeddingHashTableTfBridge::New(
-          config_.configs(i), hash_filter_.get(), &hash_table,
-          config_.names(i)));
-      hash_table->SetHopscotchHashSet(sync_client_->GetTouchedKeySet());
-      mtable->add_table(
-          config_.names(i),
-          core::RefCountPtr<EmbeddingHashTableTfBridge>(hash_table));
-    }
-    sync_client_->SetMultiHashTableResource(mtable);
-    *resource = mtable;
-    return Status::OK();
-  }
+  void SetupStream(OpKernelContext* ctx);
+
+  Status CreateResource(T** resource) TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) override;
 
  private:
   absl::Mutex mu_;
@@ -91,6 +79,28 @@ class CreateMultiHashTableOp : public ResourceOpKernel<MultiHashTable> {
   core::RefCountPtr<ParameterSyncClientTfBridge> sync_client_
       ABSL_GUARDED_BY(mu_);
 };
+
+template <>
+void CreateMultiHashTableOp<MultiHashTable>::SetupStream(OpKernelContext* ctx) {
+}
+
+template <>
+Status CreateMultiHashTableOp<MultiHashTable>::CreateResource(
+    MultiHashTable** resource) {
+  auto* mtable = new MultiHashTable(cinfo_.name());
+  for (int i = 0; i < n_; i++) {
+    EmbeddingHashTableTfBridge* hash_table;
+    TF_RETURN_IF_ERROR(EmbeddingHashTableTfBridge::New(
+        config_.configs(i), hash_filter_.get(), &hash_table, config_.names(i)));
+    hash_table->SetHopscotchHashSet(sync_client_->GetTouchedKeySet());
+    mtable->add_table(
+        config_.names(i),
+        core::RefCountPtr<EmbeddingHashTableTfBridge>(hash_table));
+  }
+  sync_client_->SetMultiHashTableResource(mtable);
+  *resource = mtable;
+  return Status::OK();
+}
 
 REGISTER_OP("CreateMonolithMultiHashTable")
     .Input("config: string")
@@ -103,8 +113,9 @@ REGISTER_OP("CreateMonolithMultiHashTable")
     .SetShapeFn(shape_inference::ScalarShape);
 
 REGISTER_KERNEL_BUILDER(Name("CreateMonolithMultiHashTable").Device(DEVICE_CPU),
-                        CreateMultiHashTableOp);
+                        CreateMultiHashTableOp<MultiHashTable>);
 
+template <typename T>
 class ReadMultiHashTableOp : public OpKernel {
  public:
   explicit ReadMultiHashTableOp(OpKernelConstruction* c) : OpKernel(c) {}
@@ -114,9 +125,9 @@ class ReadMultiHashTableOp : public OpKernel {
     if (cinfo_.name().empty()) {
       OP_REQUIRES_OK(ctx, cinfo_.Init(ctx->resource_manager(), def()));
     }
-    OP_REQUIRES_OK(ctx, MakeResourceHandleToOutput(
-                            ctx, 0, cinfo_.container(), cinfo_.name(),
-                            TypeIndex::Make<MultiHashTable>()));
+    OP_REQUIRES_OK(
+        ctx, MakeResourceHandleToOutput(ctx, 0, cinfo_.container(),
+                                        cinfo_.name(), TypeIndex::Make<T>()));
   }
 
  private:
@@ -132,7 +143,8 @@ REGISTER_OP("ReadMonolithMultiHashTable")
     .SetShapeFn(shape_inference::ScalarShape);
 
 REGISTER_KERNEL_BUILDER(Name("ReadMonolithMultiHashTable").Device(DEVICE_CPU),
-                        ReadMultiHashTableOp);
+                        ReadMultiHashTableOp<MultiHashTable>);
+
 
 }  // namespace monolith_tf
 }  // namespace tensorflow

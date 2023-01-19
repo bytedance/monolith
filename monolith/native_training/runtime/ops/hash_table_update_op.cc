@@ -24,7 +24,7 @@ namespace tensorflow {
 namespace monolith_tf {
 
 using monolith::concurrency::Queue;
-
+using CPUDevice = Eigen::ThreadPoolDevice;
 class HashTableAssignOp : public OpKernel {
  public:
   explicit HashTableAssignOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
@@ -171,7 +171,7 @@ class HashTableOptimizeOp : public OpKernel {
       queue_;
 };
 
-template <bool cpu>
+template <typename Device>
 class HashTableFusedOptimizeOp : public OpKernel {
  public:
   explicit HashTableFusedOptimizeOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -196,51 +196,37 @@ class HashTableFusedOptimizeOp : public OpKernel {
 };
 
 template <>
-void HashTableFusedOptimizeOp<true>::ComputeH(OpKernelContext* ctx) {
-  const Tensor& ids = ctx->input(num_tables_);
-  const auto& fused_slot_size_vec = ctx->input(num_tables_ + 1).vec<int32>();
-  const Tensor& id_grads = ctx->input(num_tables_ + 2);
-  const auto& id_offsets_flat = ctx->input(num_tables_ + 3).vec<int32>();
-  const auto& grad_offsets_flat = ctx->input(num_tables_ + 4).vec<int32>();
-  const Tensor& learning_rate_tensors = ctx->input(num_tables_ + 5);
-  absl::Span<const float> learning_rate_values =
-      absl::MakeSpan(static_cast<float*>(learning_rate_tensors.data()),
-                     learning_rate_tensors.NumElements());
-  const auto& learning_rate_lengths_flat =
-      ctx->input(num_tables_ + 6).vec<int32>();
-  auto update_time = ctx->input(num_tables_ + 7).scalar<int64_t>()();
-  auto global_step_value = ctx->input(num_tables_ + 8).scalar<int64_t>()();
+void HashTableFusedOptimizeOp<CPUDevice>::ComputeH(OpKernelContext* ctx) {
+  auto ids = ctx->input(num_tables_).vec<int64_t>().data();
+  auto slot_size_vec = ctx->input(num_tables_ + 1).vec<int32>().data();
+  auto id_grads = ctx->input(num_tables_ + 2).vec<float>().data();
+  auto key_offsets = ctx->input(num_tables_ + 3).vec<int32>().data();
+  auto emb_offsets = ctx->input(num_tables_ + 4).vec<int32>().data();
+  auto learning_rates = ctx->input(num_tables_ + 5).vec<float>().data();
+  auto update_time = ctx->input(num_tables_ + 6).scalar<int64_t>()();
+  auto global_step = ctx->input(num_tables_ + 7).scalar<int64_t>()();
 
   std::vector<EmbeddingHashTableTfBridge*> hash_tables(num_tables_, nullptr);
-  std::vector<int> learning_rate_offsets_flat(num_tables_, 0);
-
   for (int table_id = 0; table_id < num_tables_; table_id++) {
     EmbeddingHashTableTfBridge* hash_table = nullptr;
     OP_REQUIRES_OK(
         ctx, LookupResource(ctx, HandleFromInput(ctx, table_id), &hash_table));
     core::ScopedUnref unref(hash_table);
     hash_tables[table_id] = hash_table;
-    if (table_id > 0) {
-      learning_rate_offsets_flat[table_id] =
-          learning_rate_offsets_flat[table_id - 1] +
-          learning_rate_lengths_flat(table_id - 1);
-    }
   }
   auto optimize = [&](const int begin, const int end) {
     for (int shard_id = begin; shard_id < end; shard_id++) {
+      int learning_rate_offset = 0;
       for (int table_id = 0; table_id < num_tables_; table_id++) {
         int curr_idx = shard_id * num_tables_ + table_id;
-        int index_offset = id_offsets_flat(curr_idx);
-        int gradient_offset = grad_offsets_flat(curr_idx);
-        int learning_rate_offset = learning_rate_offsets_flat[table_id];
-        int learning_rate_length = learning_rate_lengths_flat(table_id);
-        hash_tables[table_id]->BatchOptimize(
-            ctx, fused_slot_size_vec(curr_idx),
-            static_cast<int64_t*>(ids.data()) + index_offset,
-            static_cast<float*>(id_grads.data()) + gradient_offset,
-            learning_rate_values.subspan(learning_rate_offset,
-                                         learning_rate_length),
-            update_time, enable_grad_accumulation_, global_step_value);
+        auto table = hash_tables[table_id];
+        auto learning_rate = absl::MakeConstSpan(
+            learning_rates + learning_rate_offset, table->slice_size());
+        learning_rate_offset += table->slice_size();
+        table->BatchOptimize(
+            ctx, slot_size_vec[curr_idx], ids + key_offsets[curr_idx],
+            id_grads + emb_offsets[curr_idx], learning_rate, update_time,
+            enable_grad_accumulation_, global_step);
       }
     }
   };
@@ -299,14 +285,12 @@ REGISTER_OP("MonolithHashTableFusedOptimize")
     .Input("id_offsets: int32")
     .Input("grad_offsets: int32")
     .Input("learning_rate_tensors: float")
-    .Input("learning_rate_lengths: int32")
     .Input("req_time: int64")
     .Input("global_step: int64")
     .Output("table_handles_output: N * resource")
     .Attr("N: int")
     .Attr("num_of_shards: int")
     .Attr("enable_grad_accumulation: bool = false")
-    .SetDoNotOptimize()  // Crash with grappler.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       int num_tables, num_shards;
       TF_RETURN_IF_ERROR(c->GetAttr("N", &num_tables));
@@ -323,7 +307,7 @@ REGISTER_OP("MonolithHashTableFusedOptimize")
 
 REGISTER_KERNEL_BUILDER(
     Name("MonolithHashTableFusedOptimize").Device(DEVICE_CPU),
-    HashTableFusedOptimizeOp<true>);
+    HashTableFusedOptimizeOp<CPUDevice>);
 
 }  // namespace monolith_tf
 }  // namespace tensorflow

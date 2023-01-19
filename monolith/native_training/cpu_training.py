@@ -30,7 +30,7 @@ import timeit
 import sys
 import traceback
 from datetime import datetime
-from typing import Callable, Dict, Iterable, List, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Set, Tuple, Union
 from urllib.parse import urlparse
 
 import time
@@ -49,6 +49,7 @@ from monolith.native_training import basic_restore_hook
 from monolith.native_training import cluster_manager
 from monolith.native_training import device_utils
 from monolith.native_training import distributed_ps_factory
+from monolith.native_training import distributed_ps_sync
 from monolith.native_training import distribution_ops
 from monolith.native_training import embedding_combiners
 from monolith.native_training import entry
@@ -223,16 +224,20 @@ class _CpuFeatureFactory(feature.FeatureFactoryFromEmbeddings):
 
 class _FusedCpuFeatureFactory(feature.FeatureFactoryFromEmbeddings):
 
-  def __init__(self, hash_table: multi_type_hash_table.BaseMultiTypeHashTable,
+  def __init__(self, hash_table: Union[
+                multi_type_hash_table.MergedMultiTypeHashTable, # when use_native_multi_hash_table=False
+                distributed_ps_sync.DistributedMultiTypeHashTableMpi # when use_native_multi_hash_table=True
+               ],
                name_to_embeddings: Dict[str, tf.Tensor],
                name_to_embedding_slices: Dict[str, tf.Tensor],
-               req_time: tf.Tensor, auxiliary_bundle: Dict[str,
-                                                           tf.RaggedTensor]):
+               req_time: tf.Tensor, auxiliary_bundle: Dict[str, tf.RaggedTensor],
+               use_native_multi_hash_table: bool):
     super().__init__(name_to_embeddings, name_to_embedding_slices)
     self._hash_table = hash_table
     self._embeddings = name_to_embeddings
     self._auxiliary_bundle = auxiliary_bundle
     self._req_time = req_time
+    self.use_native_multi_hash_table = use_native_multi_hash_table
 
   def apply_gradients(self,
                       grads_and_vars: Iterable[Tuple[tf.Tensor, tf.Tensor]],
@@ -245,12 +250,18 @@ class _FusedCpuFeatureFactory(feature.FeatureFactoryFromEmbeddings):
     slot_to_emb_grads = dict(zip(self._embeddings.keys(), emb_grads))
     global_step = tf.identity(tf.compat.v1.train.get_or_create_global_step())
     # Restore back to ID/Embedding mapping and flatten.
-    apply_op = self._hash_table.apply_gradients(slot_to_emb_grads,
-                                                self._auxiliary_bundle,
-                                                global_step,
-                                                req_time=req_time,
-                                                skip_merge_id=True).as_op()
-    return apply_op
+    if self.use_native_multi_hash_table:
+      apply_op = self._hash_table.apply_gradients(slot_to_emb_grads,
+                                                  self._auxiliary_bundle,
+                                                  global_step,
+                                                  req_time=req_time)
+    else:
+      apply_op = self._hash_table.apply_gradients(slot_to_emb_grads,
+                                                  self._auxiliary_bundle,
+                                                  global_step,
+                                                  req_time=req_time,
+                                                  skip_merge_id=True)
+    return apply_op.as_op()
 
 
 @dataclasses.dataclass
@@ -434,9 +445,6 @@ class CpuTraining:
       if config.dense_only_save_checkpoints_secs is None and config.dense_only_save_checkpoints_steps is None:
         config.dense_only_save_checkpoints_secs = 30 * 60
     if config.use_native_multi_hash_table is None:
-      if config.enable_sync_training:
-        config.use_native_multi_hash_table = False
-      else:
         config.use_native_multi_hash_table = True
 
     get_default_parser_ctx().enable_fused_layout = config.enable_fused_layout
@@ -481,7 +489,8 @@ class CpuTraining:
       self._serving_feature_configs_do_not_refer_directly = _make_serving_feature_configs_from_training_configs(
           self._feature_configs_do_not_refer_directly)
 
-      self._dummy_merged_table = multi_type_hash_table.MergedMultiTypeHashTable(
+      if not self.config.use_native_multi_hash_table:
+        self._dummy_merged_table = multi_type_hash_table.MergedMultiTypeHashTable(
           self.feature_configs[0], lambda *args, **kwargs: None)
 
   @property
@@ -507,7 +516,7 @@ class CpuTraining:
       # TODO: Create real hash table earlier before inputfn, instead of dummy table here
       logging.info(
           'Wrapping parser to dedup and reorder fids in data pipeline...')
-      feature_name_config, _, feature_to_combiner = self.feature_configs
+      feature_name_config = self.feature_configs[0]
       embedding_feature_names = feature_name_config.keys()
 
       def wrapped_parse_fn(*args):
@@ -522,20 +531,29 @@ class CpuTraining:
             for k, v in features.items()
             if k not in embedding_feature_names
         }
-        name_to_embedding_ids = {
-            k: v.values for k, v in embedding_ragged_ids.items()
-        }
-        # merged_multi_type_hash_table.fused_lookup
-        merged_slot_to_id, merged_slot_to_sizes = self._dummy_merged_table._get_merged_to_indexed_tensor(
-            name_to_embedding_ids)
-        merged_slot_dims = self._dummy_merged_table.get_table_dim_sizes()
-        # DistributedMultiTypeHashTableMpi.lookup
-        sorted_slot_keys = sorted(merged_slot_to_id.keys())
-        sorted_input = [merged_slot_to_id[k] for k in sorted_slot_keys]
-        all_fids, shard_sizes, sharded_slot_sizes, fused_embbedding_offsets = \
-        distribution_ops.fused_reorder_by_indices(
+        if self.config.use_native_multi_hash_table:
+          # when multi hash table is used, this is unmerged
+          merged_slot_dims = multi_hash_table_ops.infer_dims(feature_name_config)
+          sorted_slot_keys = sorted(embedding_feature_names)
+          sorted_input = [embedding_ragged_ids[k].values for k in sorted_slot_keys]
+        else:
+          merged_slot_to_id, merged_slot_to_sizes = self._dummy_merged_table._get_merged_to_indexed_tensor(
+            { k: v.values for k, v in embedding_ragged_ids.items() })
+          merged_slot_dims = self._dummy_merged_table.get_table_dim_sizes()
+          sorted_slot_keys = sorted(merged_slot_to_id.keys())
+          sorted_input = [merged_slot_to_id[k] for k in sorted_slot_keys]
+        reordered_pack = distribution_ops.fused_reorder_by_indices(
             sorted_input, self.config.num_workers, merged_slot_dims
         )
+        if self.config.use_native_multi_hash_table:
+          # DistributedMultiTypeHashTableMpi.lookup
+          lookup_args = reordered_pack
+        else:
+          # merged_multi_type_hash_table.lookup
+          lookup_args = (
+            merged_slot_to_sizes,
+            # DistributedMultiTypeHashTableMpi.lookup
+            reordered_pack)
         # Results include the following intermediate tensors
         res = (
             dense_features,  # Dense features
@@ -549,12 +567,7 @@ class CpuTraining:
                     # are not using value_rowids anymore,
                     # we choose not to precompute it here.
                 ),
-                # merged_multi_type_hash_table.lookup
-                (
-                    merged_slot_to_sizes,
-                    # DistributedMultiTypeHashTableMpi.lookup
-                    (all_fids, shard_sizes, sharded_slot_sizes,
-                     tuple(fused_embbedding_offsets)))))
+                lookup_args))
         # None here to prevent tf.Estimator from automatically treating the second in the return tuple as labels
         return res, None
 
@@ -678,8 +691,13 @@ class CpuTraining:
               hash_filters=hash_filters,
               sync_clients=sync_clients), hash_filters
         elif self.config.use_native_multi_hash_table:
-          raise NotImplementedError(
-              "Multi hash table for sync training is not implemented yet.")
+          return distributed_ps_factory.create_in_worker_native_multi_hash_table(
+              self.config.num_workers,
+              feature_name_config,
+              hash_filter=hash_filters[0],
+              sync_client=sync_clients[0],
+              queue_configs=queue_configs
+          ), hash_filters
         else:
           return distributed_ps_factory.create_in_worker_multi_type_hash_table(
               self.config.num_workers,
@@ -1212,7 +1230,8 @@ class CpuTraining:
                 dequeued_embeddings,
                 args[1],
                 get_req_time(args[0]),
-                auxiliary_bundle=auxiliary_bundle)
+                auxiliary_bundle=auxiliary_bundle,
+                use_native_multi_hash_table=self.config.use_native_multi_hash_table)
           else:
             self._task.ctx.feature_factory = _CpuFeatureFactory(
                 hash_table,
@@ -1908,7 +1927,7 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
       start_step = config.profile_some_steps_from
       end_step = start_step + 10
       options = tf.profiler.experimental.ProfilerOptions(
-          host_tracer_level=2,
+          host_tracer_level=3,
           python_tracer_level=1,
           # CUPTI_ERROR_MULTIPLE_SUBSCRIBERS_NOT_SUPPORTED:
           # CUPTI doesn't allow multiple callback subscribers.

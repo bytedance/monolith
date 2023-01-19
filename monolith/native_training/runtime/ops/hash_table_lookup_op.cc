@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "absl/strings/str_format.h"
+#include "monolith/native_training/runtime/hash_table/utils.h"
 #include "monolith/native_training/runtime/ops/embedding_hash_table_tf_bridge.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/resource_mgr.h"
@@ -23,6 +24,8 @@
 
 namespace tensorflow {
 namespace monolith_tf {
+
+using CPUDevice = Eigen::ThreadPoolDevice;
 
 class HashTableLookupOp : public OpKernel {
  public:
@@ -143,7 +146,7 @@ class HashTableLookupGradientOp : public OpKernel {
   }
 };
 
-template <bool cpu>
+template <typename Device>
 class HashTableFusedLookupOp : public OpKernel {
  public:
   explicit HashTableFusedLookupOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -160,14 +163,23 @@ class HashTableFusedLookupOp : public OpKernel {
 };
 
 template <>
-void HashTableFusedLookupOp<true>::ComputeH(OpKernelContext* ctx) {
-  auto ids_flat = ctx->input(num_tables_ + 0).flat<int64_t>();
+void HashTableFusedLookupOp<CPUDevice>::ComputeH(OpKernelContext* ctx) {
+  auto ids_flat = ctx->input(num_tables_ + 0).flat<int64_t>().data();
+  auto slot_size_vec = ctx->input(num_tables_ + 1).vec<int>().data();
   auto slot_size_cnt = num_tables_ * num_shards_;
-  auto fused_slot_size_vec = ctx->input(num_tables_ + 1).vec<int>();
+
+  Tensor *embeddings_ts, *emb_splits_ts, *key_offsets_ts, *emb_offsets_ts;
+  OP_REQUIRES_OK(ctx, ctx->allocate_output(1, {num_shards_}, &emb_splits_ts));
+  OP_REQUIRES_OK(ctx,
+                 ctx->allocate_output(2, {slot_size_cnt + 1}, &key_offsets_ts));
+  OP_REQUIRES_OK(ctx,
+                 ctx->allocate_output(3, {slot_size_cnt + 1}, &emb_offsets_ts));
+  auto key_offsets = key_offsets_ts->vec<int>().data();
+  auto emb_offsets = emb_offsets_ts->vec<int>().data();
+  auto emb_splits = emb_splits_ts->vec<int>().data();
 
   std::vector<EmbeddingHashTableTfBridge*> hash_tables(num_tables_, nullptr);
   std::vector<int> hash_table_dims(num_tables_, 0);
-
   for (int table_id = 0; table_id < num_tables_; table_id++) {
     EmbeddingHashTableTfBridge* hash_table = nullptr;
     OP_REQUIRES_OK(
@@ -177,55 +189,24 @@ void HashTableFusedLookupOp<true>::ComputeH(OpKernelContext* ctx) {
     hash_table_dims[table_id] = hash_table->dim_size();
   }
 
-  Tensor *embeddings, *embedding_splits, *id_offsets, *embedding_offsets;
-  OP_REQUIRES_OK(ctx,
-                 ctx->allocate_output(1, {num_shards_}, &embedding_splits));
-  OP_REQUIRES_OK(ctx,
-                 ctx->allocate_output(2, {slot_size_cnt + 1}, &id_offsets));
-  OP_REQUIRES_OK(
-      ctx, ctx->allocate_output(3, {slot_size_cnt + 1}, &embedding_offsets));
-  int output_dim = 0;
-  int prev_output_dim = 0;
-  // [num_tables_*num_shards_] for offsets for different shards and
-  // tables.
-  std::vector<int> input_offsets(slot_size_cnt + 1, 0);
-  std::vector<int> output_offsets(slot_size_cnt + 1, 0);
-  // [num_shards_] for splits
-  // embedding_splits and embedding_offsets are used as a metadata for later
-  // stages.
-  auto output_splits = embedding_splits->flat<int32>().data();
-  for (int shard_id = 0; shard_id < num_shards_; shard_id++) {
-    for (int table_id = 0; table_id < num_tables_; table_id++) {
-      int curr_idx = num_tables_ * shard_id + table_id;
-      int segment_dim =
-          hash_table_dims[table_id] * fused_slot_size_vec(curr_idx);
-      output_dim += segment_dim;
-      output_offsets[curr_idx + 1] = output_offsets[curr_idx] + segment_dim;
-      input_offsets[curr_idx + 1] =
-          input_offsets[curr_idx] + fused_slot_size_vec(curr_idx);
-    }
-    output_splits[shard_id] = output_dim - prev_output_dim;
-    prev_output_dim = output_dim;
-  }
-  OP_REQUIRES_OK(ctx, ctx->allocate_output(0, {output_dim}, &embeddings));
-  auto embeddings_vec = embeddings->vec<float>();
+  int total_keys, total_embs;
+  std::tie(total_keys, total_embs) =
+      monolith::hash_table::ComputeFusedOffsets<false>(
+          slot_size_vec, hash_table_dims.data(), num_tables_, num_shards_,
+          key_offsets, emb_offsets, nullptr, emb_splits);
 
-  std::memcpy(id_offsets->flat<int32>().data(), input_offsets.data(),
-              sizeof(int32) * (slot_size_cnt + 1));
-  std::memcpy(embedding_offsets->flat<int32>().data(), output_offsets.data(),
-              sizeof(int32) * (slot_size_cnt + 1));
+  OP_REQUIRES_OK(ctx, ctx->allocate_output(0, {total_embs}, &embeddings_ts));
+  auto embeddings = embeddings_ts->vec<float>().data();
+
   auto lookup = [&](const int begin, const int end) {
     for (int shard_id = begin; shard_id < end; shard_id++) {
       for (int table_id = 0; table_id < num_tables_; table_id++) {
         int curr_idx = shard_id * num_tables_ + table_id;
-        int index_begin = input_offsets[curr_idx];
-        int embedding_offset = output_offsets[curr_idx];
         int64_t hit_fid_count = 0;
         hash_tables[table_id]->BatchLookup(
-            ctx, fused_slot_size_vec(curr_idx),
-            const_cast<int64_t*>(ids_flat.data()) + index_begin,
-            static_cast<float*>(embeddings_vec.data()) + embedding_offset,
-            &hit_fid_count);
+            ctx, slot_size_vec[curr_idx],
+            const_cast<int64_t*>(ids_flat) + key_offsets[curr_idx],
+            embeddings + emb_offsets[curr_idx], &hit_fid_count);
       }
     }
   };
@@ -297,7 +278,6 @@ REGISTER_OP("MonolithHashTableFusedLookup")
     .Output("embedding_offsets: int32")
     .Attr("N: int")
     .Attr("num_of_shards: int")
-    .SetDoNotOptimize()  // Crash with grappler.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       int num_tables, num_shards;
       TF_RETURN_IF_ERROR(c->GetAttr("num_of_shards", &num_shards));
@@ -314,7 +294,7 @@ REGISTER_OP("MonolithHashTableFusedLookup")
     });
 
 REGISTER_KERNEL_BUILDER(Name("MonolithHashTableFusedLookup").Device(DEVICE_CPU),
-                        HashTableFusedLookupOp<true>);
+                        HashTableFusedLookupOp<CPUDevice>);
 
 }  // namespace monolith_tf
 }  // namespace tensorflow

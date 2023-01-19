@@ -13,13 +13,22 @@
 # limitations under the License.
 
 import numpy as np
-
 import tensorflow as tf
+import itertools
 
 from monolith.native_training import distribution_ops
 
 
 class DistributionOpsTest(tf.test.TestCase):
+  
+  def test_benchmark(self):
+    num_tables = 128
+    
+    with tf.compat.v1.Session() as sess:
+      ids_list = [tf.random.uniform((10240,), 0, 1<<31, dtype=tf.int64) for i in range(num_tables)]
+      reorder_op = distribution_ops.fused_reorder_by_indices(
+          ids_list, num_of_shards=8, dim_sizes=[16 for _ in range(len(ids_list))])
+      sess.run(reorder_op)
 
   def _test_fused_reorder_by_indices(self,
                                      ids_list,
@@ -36,18 +45,16 @@ class DistributionOpsTest(tf.test.TestCase):
       ids_list = [tf.convert_to_tensor(ids, dtype=tf.int64) for ids in ids_list]
       reorder_op = distribution_ops.fused_reorder_by_indices(
           ids_list, num_of_shards=shard_num, dim_sizes=dim_sizes)
-      print('>>>', reorder_op[3])
-      output, split_sizes, sharded_slot_sizes, embedding_offsets = sess.run(
+      print('>>>', reorder_op[4])
+      output, split_sizes, sharded_slot_sizes, _, embedding_offsets = sess.run(
           reorder_op)
-      # print(output, split_sizes, sharded_slot_sizes)
 
       self.assertAllEqual(output, expected_output)
       self.assertAllEqual(split_sizes, expected_split_sizes)
       self.assertAllEqual(sharded_slot_sizes, expected_sharded_slot_sizes)
-      # print(embedding_offsets)
+
     if expected_embedding_offsets:
-      for r, e in zip(embedding_offsets, expected_embedding_offsets):
-        self.assertAllEqual(r, e)
+      self.assertAllEqual(embedding_offsets, list(itertools.chain(*expected_embedding_offsets)))
 
   def test_fused_reorder_by_indices(self):
 

@@ -368,6 +368,7 @@ class NoFirstSaveCheckpointSaverHook(tf.estimator.CheckpointSaverHook):
           self._last_triggered_step = step
           self._create_or_update_monolith_ckpt_state(do_update=True)
           end_time = time.time()
+          logging.info("saving checkpoint took %f seconds", end_time - start_time)
           self._mcli.emit_counter("save_checkpoint", 1, tags)
           self._mcli.emit_timer("save_checkpoint_time", end_time - start_time,
                                 tags)

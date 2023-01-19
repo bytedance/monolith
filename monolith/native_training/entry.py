@@ -590,3 +590,18 @@ class HashTableConfigInstance():
         raise Exception("Learning_rate_fns must be not empty.")
 
       return learning_rate_tensor
+
+  def call_learning_rate_fns_fewer_ops(self) -> List[tf.Tensor]:
+    """Call learning rate function if callable and return a tf.Tensor"""
+    with tf.name_scope("learning_rate"):
+      learning_rates = list()
+      for learning_rate_fn in self._learning_rate_fns:
+        if not callable(learning_rate_fn):
+          learning_rate = learning_rate_fn
+        else:
+          learning_rate = learning_rate_fn()
+        learning_rates.append(learning_rate)
+
+      if len(learning_rates) == 0:
+        raise Exception("Learning_rate_fns must be not empty.")
+      return learning_rates

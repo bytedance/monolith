@@ -67,6 +67,16 @@ class CachedConfig(NamedTuple):
   slot_expire_time_config: bytes
 
 
+def infer_dims(configs: Dict[str, entry.HashTableConfigInstance]):
+  table_names = tuple(sorted(configs.keys()))
+  dims = []
+  for table_name in table_names:
+    config = configs[table_name]
+    table_config = config.table_config
+    dims.append(infer_dim_size(table_config))
+  return dims
+
+
 def convert_to_cached_config(configs: Dict[str, entry.HashTableConfigInstance]):
   mconfig = embedding_hash_table_pb2.MultiEmbeddingHashTableConfig()
   table_names = tuple(sorted(configs.keys()))
@@ -186,30 +196,34 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
                name_suffix: str = "",
                saver_parallel: int = -1,
                table_proto: multi_hash_table_ops_pb2.MultiHashTableProto = None,
-               import_scope: str = None):
+               import_scope: str = None,
+               device='/device:CPU:0'):
     if table_proto is not None:
       self._init_from_proto(table_proto, import_scope)
       return
     self._dims = cc.dims
     self._slot_expire_time_config = cc.slot_expire_time_config
     self._table_names = cc.table_names
-    self._learning_rate = tf.concat(learning_rate_list, axis=0)
+    self._learning_rate = tf.cast(tf.stack(learning_rate_list), tf.float32)
     self._saver_parallel = saver_parallel
     self._shared_name = "_".join([MultiHashTable.NAME_PREFIX, name_suffix])
     self._check_and_insert_name(self._shared_name)
 
-    # We separate the table creation and use by using a dummy var.
-    # TODO(leqi.zou): we can use register_resource mechanism to solve this problem.
-    self._initializer = hash_table_ops.create_monolith_multi_hash_table(
-        filter_handle=hash_filter,
-        sync_client_handle=sync_client,
-        config=cc.mconfig_tensor,
-        shared_name=self._shared_name).op
-    with tf.control_dependencies([self._initializer]):
-      tf.Variable(initial_value=tf.constant(0), trainable=False)
+    with tf.device(device):
+      # We separate the table creation and use by using a dummy var.
+      # TODO(leqi.zou): we can use register_resource mechanism to solve this problem.
+      self._initializer = hash_table_ops.create_monolith_multi_hash_table(
+          filter_handle=hash_filter,
+          sync_client_handle=sync_client,
+          config=cc.mconfig_tensor,
+          shared_name=self._shared_name).op
+      with tf.control_dependencies([self._initializer]):
+        # var initializer op cannot be placed on the GPU
+        with tf.device("/device:CPU:0"):
+          tf.Variable(initial_value=tf.constant(0), trainable=False)
 
-    self._handle = hash_table_ops.read_monolith_multi_hash_table(
-        shared_name=self._shared_name)
+      self._handle = hash_table_ops.read_monolith_multi_hash_table(
+          shared_name=self._shared_name)
 
     tf.compat.v1.get_collection_ref(_MULTI_HASH_TABLE_GRAPH_KEY).append(self)
 
@@ -238,12 +252,17 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
                          sync_client: tf.Tensor = None,
                          name_suffix: str = "",
                          saver_parallel: int = -1):
-    hash_filter = hash_filter if hash_filter is not None else hash_filter_ops.create_dummy_hash_filter(
-        name_suffix=name_suffix)
-
-    sync_client = sync_client if sync_client is not None else distributed_serving_ops.create_dummy_sync_client(
-    )
-    dummy_sync_client = None
+    table_config = next(iter(cc.configs.values())).table_config
+    assert table_config.HasField("type")
+    table_type = table_config.WhichOneof("type")
+    logging.info("Hash table type: {}".format(table_type))
+    use_gpu = table_type == "gpucuco"
+    d = "/device:GPU:0" if use_gpu else "/device:CPU:0"
+    with tf.device(d):
+      hash_filter = hash_filter if hash_filter is not None else hash_filter_ops.create_dummy_hash_filter(
+          name_suffix=name_suffix)
+      sync_client = sync_client if sync_client is not None else distributed_serving_ops.create_dummy_sync_client(
+      )
 
     learning_rate_list = []
 
@@ -255,7 +274,7 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
           config.table_config.entry_config.segments):
         raise ValueError(
             "Size of learning_rate_fns and size of segments must be equal.")
-      learning_rate_list.append(config.call_learning_rate_fns())
+      learning_rate_list.extend(config.call_learning_rate_fns_fewer_ops())
 
     if tf.compat.v1.get_default_graph() != cc.mconfig_tensor.graph:
       # In this case, we can't reuse mconfig_tensor
@@ -266,7 +285,8 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
                sync_client=sync_client,
                learning_rate_list=learning_rate_list,
                name_suffix=name_suffix,
-               saver_parallel=saver_parallel)
+               saver_parallel=saver_parallel,
+               device=d)
 
   @classmethod
   def from_configs(cls, configs: Dict[str, entry.HashTableConfigInstance],
@@ -411,7 +431,11 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
   # IDs to its slots.
   def fused_lookup(self, ids: tf.Tensor, fused_slot_size: tf.Tensor,
                    num_of_shards: int) -> Tuple[tf.Tensor]:
-    raise NotImplementedError("")
+    return hash_table_ops.monolith_multi_hash_table_fused_lookup(
+        mtable=self._handle,
+        ids=ids,
+        fused_slot_size=fused_slot_size, 
+        num_of_shards=num_of_shards)
 
   # This is a very concise API that supports fused optimize, without mapping the
   # IDs to its slots.
@@ -426,7 +450,19 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
       req_time: tf.Tensor,
       num_of_shards: int,
       enable_grad_accumulation: bool = False) -> "MultiHashTable":
-    raise NotImplementedError("")
+    handle = hash_table_ops.monolith_multi_hash_table_fused_optimize(
+        mtable=self._handle, 
+        ids=ids,
+        fused_slot_size=fused_slot_size,
+        id_grads=id_grads,
+        id_offsets=id_offsets,
+        grad_offsets=grad_offsets,
+        learning_rate_tensors=self._learning_rate,
+        req_time=req_time,
+        global_step=global_step,
+        num_of_shards=num_of_shards,
+        enable_grad_accumulation=enable_grad_accumulation)
+    return self._copy_with_new_table(handle)
 
   def get_table_dim_sizes(self):
     return self._dims

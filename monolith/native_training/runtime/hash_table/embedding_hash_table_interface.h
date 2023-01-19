@@ -20,14 +20,13 @@
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "monolith/native_training/runtime/hash_table/embedding_hash_table.pb.h"
-using cudaStream_t = void*;
+
 namespace monolith {
 namespace hash_table {
 
 class CucoMultiHashTableOp;
 struct GpuExtraArgs {
   CucoMultiHashTableOp* shared_state;
-  cudaStream_t stream;
 };
 
 // Hash table maps int64 to a float array with fixed length.

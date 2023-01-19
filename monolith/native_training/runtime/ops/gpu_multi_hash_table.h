@@ -16,24 +16,21 @@
 #define MONOLITH_NATIVE_TRAINING_RUNTIME_OPS_GPU_MULTI_HASH_TABLE
 #ifdef GOOGLE_CUDA
 #define EIGEN_USE_GPU
-#include <vector>
-
 #include "monolith/native_training/runtime/hash_table/GPUcucohash/cuco_multi_table_ops.cuh.h"
-#include "tensorflow/core/framework/resource_mgr.h"
+#include "monolith/native_training/runtime/ops/multi_hash_table.h"
 
 namespace tensorflow {
 namespace monolith_tf {
 
-class GpuMultiHashTable : public ResourceBase {
+class GpuMultiHashTable : public MultiHashTable {
  public:
   ::monolith::hash_table::CucoMultiHashTableOp op;
   explicit GpuMultiHashTable(
-      std::vector<int> slot_occ = {},
-      ::monolith::hash_table::GpucucoEmbeddingHashTableConfig config_ = {})
-      : op(std::move(slot_occ), std::move(config_)) {}
-  std::string DebugString() const override {
-    return "This is a GPU multi hash table";
-  }
+      absl::string_view shared_name, std::vector<int> slot_occ = {},
+      ::monolith::hash_table::GpucucoEmbeddingHashTableConfig config = {},
+      cudaStream_t stream = 0)
+      : MultiHashTable(shared_name),
+        op(std::move(slot_occ), std::move(config), stream) {}
 };
 
 }  // namespace monolith_tf

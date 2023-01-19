@@ -357,32 +357,6 @@ index 5f307a6..198b211 100644
  )
  
  alias(
-diff --git a/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc b/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
-index 2bcc2b6e..d438ff6b 100644
---- a/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
-+++ b/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
-@@ -479,6 +479,7 @@ class DynamicPartitionOpGPU : public AsyncOpKernel {
- 
- TF_CALL_GPU_NUMBER_TYPES(REGISTER_DYNAMIC_PARTITION_GPU);
- TF_CALL_COMPLEX_TYPES(REGISTER_DYNAMIC_PARTITION_GPU);
-+TF_CALL_int32(REGISTER_DYNAMIC_PARTITION_GPU);
- #undef REGISTER_DYNAMIC_PARTITION_GPU
- 
- }  // namespace tensorflow
-
-diff --git a/tensorflow/core/common_runtime/executor.cc b/tensorflow/core/common_runtime/executor.cc
-index 03c23f32..fe3304db 100644
---- a/tensorflow/core/common_runtime/executor.cc
-+++ b/tensorflow/core/common_runtime/executor.cc
-@@ -742,7 +742,7 @@ void ExecutorState<PropagatorStateType>::Process(TaggedNode tagged_node,
-     inline_ready.pop_front();
-     const NodeItem& item = tagged_node.get_node_item();
-     const int id = item.node_id;
--
-+    profiler::TraceMe activity([&]() { return item.kernel->def().name() + "_execstate"; });
-     propagator_.MaybeMarkStarted(tagged_node);
- 
-     params.track_allocations = false;
 
 diff --git a/third_party/snappy.BUILD b/third_party/snappy.BUILD
 index a2ab4924f29..77cb7ea0dff 100644
@@ -396,3 +370,113 @@ index a2ab4924f29..77cb7ea0dff 100644
      defines = select({
          "@org_tensorflow//tensorflow:windows": [],
          "//conditions:default": ["HAVE_SYS_UIO_H"],
+
+diff --git a/tensorflow/core/common_runtime/executor.cc b/tensorflow/core/common_runtime/executor.cc
+index 03c23f32..91738f85 100644
+--- a/tensorflow/core/common_runtime/executor.cc
++++ b/tensorflow/core/common_runtime/executor.cc
+@@ -742,7 +742,7 @@ void ExecutorState<PropagatorStateType>::Process(TaggedNode tagged_node,
+     inline_ready.pop_front();
+     const NodeItem& item = tagged_node.get_node_item();
+     const int id = item.node_id;
+-
++    profiler::TraceMe activity([&item]() { return item.kernel->def().name() + "_execstate"; });
+     propagator_.MaybeMarkStarted(tagged_node);
+ 
+     params.track_allocations = false;
+diff --git a/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc b/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
+index 2bcc2b6e..9062b568 100644
+--- a/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
++++ b/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
+@@ -479,6 +479,8 @@ class DynamicPartitionOpGPU : public AsyncOpKernel {
+ 
+ TF_CALL_GPU_NUMBER_TYPES(REGISTER_DYNAMIC_PARTITION_GPU);
+ TF_CALL_COMPLEX_TYPES(REGISTER_DYNAMIC_PARTITION_GPU);
++TF_CALL_int32(REGISTER_DYNAMIC_PARTITION_GPU);
++TF_CALL_int64(REGISTER_DYNAMIC_PARTITION_GPU);
+ #undef REGISTER_DYNAMIC_PARTITION_GPU
+ 
+ }  // namespace tensorflow
+diff --git a/tensorflow/core/kernels/split_lib_gpu.cu.cc b/tensorflow/core/kernels/split_lib_gpu.cu.cc
+index b4379a01..99cdfa79 100644
+--- a/tensorflow/core/kernels/split_lib_gpu.cu.cc
++++ b/tensorflow/core/kernels/split_lib_gpu.cu.cc
+@@ -55,6 +55,7 @@ TF_CALL_int64(DEFINE_GPU_KERNELS);
+ TF_CALL_bfloat16(DEFINE_GPU_KERNELS);
+ TF_CALL_uint8(DEFINE_GPU_KERNELS);
+ TF_CALL_GPU_ALL_TYPES(DEFINE_GPU_KERNELS);
++TF_CALL_int32(DEFINE_GPU_KERNELS);
+ 
+ #undef DEFINE_GPU_KERNELS
+ #define DEFINE_GPU_KERNELS(T) template struct SplitCustom<Eigen::GpuDevice, T>;
+@@ -62,6 +63,7 @@ TF_CALL_GPU_ALL_TYPES(DEFINE_GPU_KERNELS);
+ TF_CALL_GPU_NUMBER_TYPES(DEFINE_GPU_KERNELS);
+ TF_CALL_COMPLEX_TYPES(DEFINE_GPU_KERNELS);
+ TF_CALL_bfloat16(DEFINE_GPU_KERNELS);
++TF_CALL_int32(DEFINE_GPU_KERNELS);
+ 
+ #undef DEFINE_GPU_KERNELS
+ 
+@@ -246,6 +248,7 @@ void SplitVOpGPULaunch<T, IntType>::Run(
+ TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU_KERNEL);
+ TF_CALL_COMPLEX_TYPES(REGISTER_GPU_KERNEL);
+ TF_CALL_bfloat16(REGISTER_GPU_KERNEL);
++TF_CALL_int32(REGISTER_GPU_KERNEL);
+ #undef REGISTER_GPU_KERNEL
+ #define REGISTER_GPU_KERNEL(T)                 \
+   template struct SplitVOpGPULaunch<T, int32>; \
+@@ -254,6 +257,7 @@ TF_CALL_bfloat16(REGISTER_GPU_KERNEL);
+ TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU_KERNEL);
+ TF_CALL_COMPLEX_TYPES(REGISTER_GPU_KERNEL);
+ TF_CALL_bfloat16(REGISTER_GPU_KERNEL);
++TF_CALL_int32(REGISTER_GPU_KERNEL);
+ #undef REGISTER_GPU_KERNEL
+ 
+ }  // namespace tensorflow
+diff --git a/tensorflow/core/kernels/split_op.cc b/tensorflow/core/kernels/split_op.cc
+index 6f2cd965..641ee45e 100644
+--- a/tensorflow/core/kernels/split_op.cc
++++ b/tensorflow/core/kernels/split_op.cc
+@@ -347,6 +347,7 @@ REGISTER_SPLIT(quint8);
+ TF_CALL_bfloat16(REGISTER_GPU);
+ TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU);
+ TF_CALL_COMPLEX_TYPES(REGISTER_GPU);
++TF_CALL_int32(REGISTER_GPU);
+ #undef REGISTER_GPU
+ 
+ #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+diff --git a/tensorflow/core/kernels/split_v_op.cc b/tensorflow/core/kernels/split_v_op.cc
+index fc070610..24a5f869 100644
+--- a/tensorflow/core/kernels/split_v_op.cc
++++ b/tensorflow/core/kernels/split_v_op.cc
+@@ -474,27 +474,12 @@ TF_CALL_ALL_TYPES(REGISTER_SPLIT_LEN);
+ TF_CALL_bfloat16(REGISTER_GPU_LEN);
+ TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU_LEN);
+ TF_CALL_COMPLEX_TYPES(REGISTER_GPU_LEN);
++// see https://github.com/tensorflow/tensorflow/pull/28051
++TF_CALL_int32(REGISTER_GPU_LEN);
++
+ #undef REGISTER_GPU_LEN
+ #undef REGISTER_GPU
+ 
+-// special GPU kernel for int32
+-
+-#define REGISTER_GPU_int32(len_type)                            \
+-  REGISTER_KERNEL_BUILDER(Name("SplitV")                        \
+-                              .Device(DEVICE_GPU)               \
+-                              .TypeConstraint<int32>("T")       \
+-                              .TypeConstraint<len_type>("Tlen") \
+-                              .HostMemory("size_splits")        \
+-                              .HostMemory("split_dim")          \
+-                              .HostMemory("value")              \
+-                              .HostMemory("output"),            \
+-                          SplitVOpCPU<int32, len_type>);
+-
+-REGISTER_GPU_int32(int32);
+-REGISTER_GPU_int32(int64);
+-
+-#undef REGISTER_GPU_int32
+-
+ #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+ 
+ }  // end namespace tensorflow

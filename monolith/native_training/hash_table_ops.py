@@ -407,7 +407,6 @@ def fused_apply_gradient(
     id_offsets: tf.Tensor,
     grad_offsets: tf.Tensor,
     learning_rate_tensors: tf.Tensor,
-    learning_rate_lengths: tf.Tensor,
     req_time: tf.Tensor,
     global_step: tf.Tensor,
     num_of_shards: int,
@@ -427,7 +426,6 @@ def fused_apply_gradient(
     id_offsets = [0, 1, 2, 3]
     grad_offsets = [0, 1, 3, 4]
     learning_rate_tensors = [1, 1]
-    learning_rate_lengths = [1, 1]
     req_time = time_in_seconds
     global_step = 1
     num_of_shards = 2
@@ -443,7 +441,6 @@ def fused_apply_gradient(
     id_offsets: A 1-D flattened tensor wih shape [K*N], it is an intermediate artifact from fused_lookup.
     grad_offsets: A 1-D flattened tensor with shape [K*N], it is an intermediate artifact from fused_lookup.
     learning_rate_tensors: A 1-D flattened tensor wih shape [L], L=sum(learning_rate_lengths).
-    learning_rate_lengths: A 1-D flattened tensor wih shape [K].
     req_time: A scalar tensor with type tf.int64.
     global_step: A scalar tensor with type tf.int64.
     num_of_shards: a integer N.
@@ -453,7 +450,7 @@ def fused_apply_gradient(
   """
   return hash_table_ops.monolith_hash_table_fused_optimize(
       tables, ids, fused_slot_size, id_grads, id_offsets, grad_offsets,
-      learning_rate_tensors, learning_rate_lengths, req_time, global_step,
+      learning_rate_tensors, req_time, global_step,
       num_of_shards, enable_grad_accumulation)
 
 

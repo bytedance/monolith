@@ -32,7 +32,9 @@ using ::monolith::hash_table::GpuExtraArgs;
 // using ::monolith::hopscotch::HopscotchHashSet;
 using ::monolith::parameter_sync::ParameterSyncClient;
 
-template <bool cpu>
+using CPUDevice = Eigen::ThreadPoolDevice;
+
+template <typename Device>
 class HashTableOp : public OpKernel {
  public:
   explicit HashTableOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -87,7 +89,7 @@ class HashTableOp : public OpKernel {
 };
 
 template <>
-void HashTableOp<true>::ComputeH(OpKernelContext* ctx) {
+void HashTableOp<CPUDevice>::ComputeH(OpKernelContext* ctx) {
   ResourceMgr* rmgr = ctx->resource_manager();
   OP_REQUIRES_OK(ctx, cinfo_.Init(rmgr, def()));
 
@@ -131,7 +133,7 @@ REGISTER_OP("MonolithHashTable")
     .SetShapeFn(shape_inference::ScalarShape);
 
 REGISTER_KERNEL_BUILDER(Name("MonolithHashTable").Device(DEVICE_CPU),
-                        HashTableOp<true>);
+                        HashTableOp<CPUDevice>);
 
 }  // namespace monolith_tf
 }  // namespace tensorflow

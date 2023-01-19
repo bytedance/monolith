@@ -54,7 +54,7 @@ def create_in_worker_multi_type_hash_table(
     hash_filter: tf.Tensor,
     sync_client: tf.Tensor = None,
     queue_configs: Dict[str, int] = None,
-) -> multi_type_hash_table.BaseMultiTypeHashTable:
+):
   """
   Creates a in worker multi-type hash table factory.
   Args:
@@ -91,7 +91,7 @@ def create_multi_type_hash_table(
     sync_clients: List[tf.Tensor] = None,
     reduce_network_packets: bool = False,
     max_rpc_deadline_millis: int = 30,
-) -> multi_type_hash_table.BaseMultiTypeHashTable:
+):
   """Create a distributed multi type hash table.
   Args:
   reduce_network_packets - if True, it will compact all tensors locally so ps will get less load.
@@ -175,7 +175,7 @@ def create_native_multi_hash_table(
     hash_filters: List[tf.Tensor],
     sync_clients: List[tf.Tensor] = None,
     max_rpc_deadline_millis: int = 30,
-) -> multi_type_hash_table.BaseMultiTypeHashTable:
+):
   """Create a distributed native multi hash table."""
   if num_ps and sync_clients:
     assert num_ps == len(
@@ -199,6 +199,26 @@ def create_native_multi_hash_table(
         slot_to_config,
         MultiHashTableFactory(hash_filters, sync_clients),
         max_rpc_deadline_millis=max_rpc_deadline_millis)
+
+
+def create_in_worker_native_multi_hash_table(
+    shard_num: int,
+    slot_to_config: Dict[str, entry.HashTableConfigInstance],
+    hash_filter: tf.Tensor,
+    sync_client: tf.Tensor = None,
+    queue_configs: Dict[str, int] = None,
+):
+  # The logic here is
+  # DistributedMultiTypeHashTableMpi -> alltoall -> multi_hash_table
+  def table_factory(idx):
+    return multi_hash_table_ops.MultiHashTable.from_configs(
+      configs=slot_to_config,
+      hash_filter=hash_filter,
+      sync_client=sync_client,
+      name_suffix=str(idx))
+
+  return distributed_ps_sync.DistributedMultiTypeHashTableMpi(
+      shard_num, table_factory, queue_configs)
 
 
 def create_partitioned_hash_table(

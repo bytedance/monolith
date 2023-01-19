@@ -645,10 +645,19 @@ py_binary(
 py_test(
     name = "cpu_sync_training_test",
     srcs = ["cpu_sync_training_test.py"],
-    data = ["@org_tensorflow//tensorflow:libtensorflow_framework.so.2"],
     deps = [
         ":cpu_training",
         ":native_task",
+    ],
+)
+
+py_test(
+    name = "model_comp_test",
+    srcs = ["model_comp_test.py"],
+    deps = [
+        ":cpu_training",
+        ":native_model",
+        ":estimator",
     ],
 )
 

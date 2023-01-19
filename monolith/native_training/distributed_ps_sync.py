@@ -17,13 +17,13 @@ from __future__ import annotations
 import copy
 import collections
 import os
-from typing import Callable, Dict, Tuple, List
+from typing import Callable, Dict, Tuple, List, Union
 
 from absl import flags, logging
 import tensorflow as tf
 
 from monolith.native_training import multi_type_hash_table
-from monolith.native_training import distributed_ps
+from monolith.native_training import multi_hash_table_ops
 from monolith.native_training import distribution_ops
 from monolith.native_training.prefetch_queue import \
     enqueue_dicts_with_queue_return, AsyncPushHook, EnqueueHook
@@ -65,49 +65,6 @@ flags.DEFINE_string(
     "(af17bbdba2be72580bf5c8c43975078c for merged slot of fc_clk_ads_4d)")
 
 
-def _alltoall_flats(flats: List[tf.Tensor]) -> List[tf.Tensor]:
-  """All to all a list of 1-D tensors."""
-  flat = tf.concat(flats, 0)
-  size = tf.stack([tf.size(flat) for flat in flats])
-  if enable_custom_optimized_hvd:
-    flat_t, flat_t_size = hvd.alltoall(flat, size, with_size=True)
-  else:
-    flat_t = hvd.alltoall(flat, size)
-    flat_t_size = hvd.alltoall(size)
-  flats_t = tf.split(flat_t, flat_t_size, 0, len(flats))
-  return flats_t
-
-
-def _get_keyed_shape_with_unknown_first_dim(
-    keyed_tensors: Dict[str, tf.Tensor]) -> Dict[str, List[int]]:
-  keyed_shape = distributed_ps._get_keyed_shape(keyed_tensors)
-  # In all to all, we don't know other hosts' shape. The assumption here
-  # is that the first dim is unknown.
-  for k, v in keyed_shape.items():
-    v[0] = -1
-  return keyed_shape
-
-
-def _alltoall_sharded_map(
-    sharded_maps: List[Dict[str, tf.Tensor]]) -> List[Dict[str, tf.Tensor]]:
-  flats = []
-  flats_sizes = []
-  for i in range(len(sharded_maps)):
-    flat, flat_size = distributed_ps._pack_tensors(sharded_maps[i])
-    flats.append(flat)
-    flats_sizes.append(flat_size)
-  flats_t = _alltoall_flats(flats)
-  flats_sizes_t = _alltoall_flats(flats_sizes)
-  keyed_shape = _get_keyed_shape_with_unknown_first_dim(sharded_maps[0])
-
-  sharded_maps_t = []
-  for i in range(len(sharded_maps)):
-    sharded_map_t = distributed_ps._unpack_tensors(
-        keyed_shape, (flats_t[i], flats_sizes_t[i]))
-    sharded_maps_t.append(sharded_map_t)
-  return sharded_maps_t
-
-
 class DistributedMultiTypeHashTableMpi(
     multi_type_hash_table.BaseMultiTypeHashTable):
 
@@ -115,7 +72,12 @@ class DistributedMultiTypeHashTableMpi(
       self,
       shard_num: int,
       table_factory: Callable[[int],
-                              multi_type_hash_table.BaseMultiTypeHashTable],
+                              Union[
+                                # when use_native_multi_hash_table=False
+                                multi_type_hash_table.MultiTypeHashTable,
+                                # when use_native_multi_hash_table=True
+                                multi_hash_table_ops.MultiHashTable
+                              ]],
       queue_configs: Dict[str, int] = None):
 
     self._shard_num = shard_num
@@ -140,7 +102,8 @@ class DistributedMultiTypeHashTableMpi(
     sorted_slot_keys = sorted(slot_to_id.keys())
     slot_num = len(sorted_slot_keys)
     if early_reorder_indicies_res_pack:
-      all_fids, shard_sizes, sharded_slot_sizes, fused_embedding_offsets = early_reorder_indicies_res_pack
+      all_fids, shard_sizes, sharded_slot_sizes, emb_offset_sz, fused_embedding_offsets = \
+        early_reorder_indicies_res_pack
       if FLAGS.enable_alltoall_metrics:
         slot_name = FLAGS.enable_alltoall_metrics_for_slot
         if slot_name and slot_name in sorted_slot_keys:
@@ -159,7 +122,7 @@ class DistributedMultiTypeHashTableMpi(
                                          sharded_slot_sizes)
     else:
       sorted_input = [slot_to_id[k] for k in sorted_slot_keys]
-      all_fids, shard_sizes, sharded_slot_sizes, fused_embedding_offsets = \
+      all_fids, shard_sizes, sharded_slot_sizes, emb_offset_sz, fused_embedding_offsets = \
           distribution_ops.fused_reorder_by_indices(
               sorted_input, self._shard_num, self._output_dims
           )
@@ -206,7 +169,10 @@ class DistributedMultiTypeHashTableMpi(
                                       splits=[slot_num] * self._shard_num)
 
     auxiliary_bundle["shard_sizes"] = shard_sizes
-    auxiliary_bundle["fused_embedding_offsets"] = fused_embedding_offsets
+    with tf.device("/device:GPU:0"):
+      auxiliary_bundle["fused_embedding_offsets"] = tf.split(
+        fused_embedding_offsets, emb_offset_sz, axis=0, name="concat_emb_offsets_split")
+    auxiliary_bundle["emb_offset_sz"] = emb_offset_sz
     auxiliary_bundle["id_flat_t"] = id_flat_t
     # Note: id_flat_split_t is not being used in later computation.
     auxiliary_bundle["id_size_flat_t"] = id_size_flat_t
@@ -308,11 +274,6 @@ class DistributedMultiTypeHashTableMpi(
       with tf.device("/device:CPU:0"):
         # Size output on HostMemory in kernel. Ensure it's CPU device.
         auxiliary_bundle["recv_embeddings_size"] = tf.identity(_size)
-    # Keep on CPU
-    auxiliary_bundle["fused_embedding_offsets"] = [
-        tf.identity(t)
-        for t in list(auxiliary_bundle["fused_embedding_offsets"])
-    ]
 
     auxiliary_bundle, queue = enqueue_dicts_with_queue_return(
         auxiliary_bundle,

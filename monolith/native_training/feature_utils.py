@@ -48,6 +48,7 @@ def allreduce_cond(grads):
     from byteps.tensorflow.compression import FP16Compressor as BPSFP16Compressor
 
   if enable_allreduce_fusion == 'one':
+    # note: concat -> allreduce -> split is noticeably faster than hvd.grouped_allreduce
     logging.info('Enabled allreduce fusion (one op)')
     grads_wo_none = [grad for grad in grads if grad is not None]
     if len(grads_wo_none) == 0:
