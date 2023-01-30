@@ -97,8 +97,6 @@ cc_library(
     hdrs = ["adagrad_optimizer.h"],
     copts = [
         "-D_ENABLE_AVX",
-        "-mavx",
-        "-mfma",
     ],
     deps = [
         ":adagrad_optimizer_internal_deps",
@@ -130,8 +128,6 @@ cc_library(
     hdrs = ["dynamic_wd_adagrad_optimizer.h"],
     copts = [
         "-D_ENABLE_AVX",
-        "-mavx",
-        "-mfma",
     ],
     deps = [
         ":dynamic_wd_adagrad_optimizer_internal_deps",
@@ -403,8 +399,6 @@ cc_library(
     hdrs = ["dynamic_wd_avx_utils.h"],
     copts = [
         "-D_ENABLE_AVX",
-        "-mavx",
-        "-mfma",
     ],
     deps = [
         "@com_google_absl//absl/types:span",
@@ -417,8 +411,6 @@ cc_test(
     srcs = ["dynamic_wd_avx_test.cc"],
     copts = [
         "-D_ENABLE_AVX",
-        "-mavx",
-        "-mfma",
     ],
     deps = [
         ":dynamic_wd_avx_utils",
@@ -456,8 +448,6 @@ cc_library(
     hdrs = ["avx_utils.h"],
     copts = [
         "-D_ENABLE_AVX",
-        "-mavx",
-        "-mfma",
     ],
     deps = [
         "@com_google_absl//absl/types:span",
@@ -470,8 +460,6 @@ cc_test(
     srcs = ["avx_test.cc"],
     copts = [
         "-D_ENABLE_AVX",
-        "-mavx",
-        "-mfma",
     ],
     deps = [
         ":avx_utils",
@@ -486,8 +474,6 @@ cc_binary(
     srcs = ["avx_benchmark.cc"],
     copts = [
         "-D_ENABLE_AVX",
-        "-mavx",
-        "-mfma",
     ],
     deps = [
         ":avx_utils",

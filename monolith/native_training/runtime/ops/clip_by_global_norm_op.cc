@@ -12,49 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "clip_by_global_norm.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/util/work_sharder.h"
 
-#include "clip_by_global_norm.h"
-
 namespace tensorflow {
 namespace monolith {
 
 typedef Eigen::ThreadPoolDevice CPUDevice;
 
-void clip_by_global_norm_fp32(const float* input, int len, float* output,
-                              float scale) {
-  __m256 scale_vec = {scale, scale, scale, scale, scale, scale, scale, scale};
-  int i = 0;
-  __m256 reg;
-  for (i = 0; i + 8 <= len; input += 8, output += 8, i += 8) {
-    reg = _mm256_load_ps(input);
-    reg = _mm256_mul_ps(reg, scale_vec);
-    _mm256_store_ps(output, reg);
-  }
-  while (i++ < len) {
-    *output = *input * scale;
-    output++;
-    input++;
-  }
-}
-
 template <>
 struct ClipByGlobalNormImpl<CPUDevice> {
-  static void Compute(OpKernelContext* context,
-                      const std::vector<const float*>& input_ptrs,
-                      const std::vector<int>& input_lens,
-                      const std::vector<float*>& output_ptrs, float scale) {
-    int num_inputs = input_ptrs.size();
+  static void Compute(OpKernelContext* context, float scale) {
+    int num_inputs = context->num_inputs() - 2;
     bool user_parallel = num_inputs > 4;
-    auto func = [&input_ptrs, &input_lens, &output_ptrs, scale](int64 start,
-                                                                int64 end) {
+    auto func = [context, scale](int64 start, int64 end) {
       for (int64 i = start; i < end; ++i) {
-        clip_by_global_norm_fp32(input_ptrs[i], input_lens[i], output_ptrs[i],
-                                 scale);
+        Tensor* temp;
+        context->allocate_output(i, context->input(i).shape(), &temp);
+        temp->flat<float>() = context->input(i).flat<float>() * scale;
       }
     };
     if (user_parallel) {

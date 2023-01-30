@@ -15,10 +15,6 @@
 #ifndef MONOLITH_NATIVE_TRAINING_RUNTIME_OPS_CLIP_BY_GLOBAL_NORM
 #define MONOLITH_NATIVE_TRAINING_RUNTIME_OPS_CLIP_BY_GLOBAL_NORM
 
-#if defined(_ENABLE_AVX) && defined(__AVX__)
-#include <immintrin.h>
-#endif
-
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -30,11 +26,7 @@ namespace monolith {
 
 template <typename Device>
 struct ClipByGlobalNormImpl {
-  static void Compute(OpKernelContext* context,
-                      const std::vector<const float*>& input_ptrs,
-                      const std::vector<int>& input_lens,
-                      const std::vector<float*>& output_ptrs, float global_norm,
-                      float clip_norm);
+  static void Compute(OpKernelContext* context, float scale);
 };
 
 template <typename Device>
@@ -44,29 +36,11 @@ class ClipByGlobalNorm : public OpKernel {
       : OpKernel(context) {}
 
   void Compute(OpKernelContext* context) override {
-    VLOG(1) << "In ClipByGlobalNorm Computation";
-
-    auto num_inputs = context->num_inputs() - 2;
-    std::vector<const float*> input_ptrs(num_inputs);
-    std::vector<int> input_lens(num_inputs);
-    for (int i = 0; i < num_inputs; ++i) {
-      input_ptrs[i] = context->input(i).flat<float>().data();
-      input_lens[i] = context->input(i).NumElements();
-    }
-
-    std::vector<float*> output_ptrs(num_inputs);
-    float global_norm = context->input(num_inputs).scalar<float>().data()[0];
-    float clip_norm = context->input(num_inputs + 1).scalar<float>().data()[0];
+    int num_inputs = context->num_inputs() - 2;
+    float global_norm = context->input(num_inputs).scalar<float>()();
+    float clip_norm = context->input(num_inputs + 1).scalar<float>()();
     if (global_norm > clip_norm) {
-      for (int i = 0; i < num_inputs; ++i) {
-        Tensor* temp;
-        OP_REQUIRES_OK(context, context->allocate_output(
-                                    i, context->input(i).shape(), &temp));
-        output_ptrs[i] = temp->flat<float>().data();
-      }
-      ClipByGlobalNormImpl<Device>::Compute(context, input_ptrs, input_lens,
-                                            output_ptrs,
-                                            clip_norm / global_norm);
+      ClipByGlobalNormImpl<Device>::Compute(context, clip_norm / global_norm);
     } else {
       // If no clip, output as input.
       for (int i = 0; i < num_inputs; ++i) {

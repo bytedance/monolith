@@ -117,8 +117,6 @@ tf_kernel_library(
     ],
     copts = [
         "-D_ENABLE_AVX",
-        "-mavx",
-        "-mfma",
     ],
     gpu_srcs = [
         "clip_by_global_norm.h",
@@ -268,8 +266,6 @@ tf_kernel_library(
     ],
     copts = [
         "-D_ENABLE_AVX",
-        "-mavx",
-        "-mfma",
     ],
     gpu_srcs = [
         "map_id_to_embedding.cu.cc",

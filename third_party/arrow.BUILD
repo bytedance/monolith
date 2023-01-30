@@ -73,6 +73,7 @@ cc_library(
             "cpp/src/arrow/util/bpacking_avx512.cc",
             "cpp/src/arrow/util/bpacking_neon.cc",
             "cpp/src/arrow/util/tracing_internal.cc",
+            "cpp/src/arrow/compute/exec/*_avx*.cc",
         ],
     ) + select({
         "@bazel_tools//src/conditions:windows": [

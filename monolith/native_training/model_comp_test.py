@@ -195,15 +195,12 @@ class CpuSyncTrainTest(tf.test.TestCase):
     config = self._create_config(False, True)
     cpu_training.distributed_sync_train(config, p)
 
-  @test_util.run_gpu_only
-  def test_embedding_update_gpu(self):
-    hvd.init()
-    p = EmbeddingUpdateTask.params().instantiate()
-    config = self._create_config(True, False)
-    cpu_training.distributed_sync_train(config, p)
-    
-    config = self._create_config(True, True)
-    cpu_training.distributed_sync_train(config, p)
+    if test_util.is_gpu_available(cuda_only=True):
+      config = self._create_config(True, False)
+      cpu_training.distributed_sync_train(config, p)
+      
+      config = self._create_config(True, True)
+      cpu_training.distributed_sync_train(config, p)
 
 if __name__ == "__main__":
   tf.compat.v1.disable_eager_execution()

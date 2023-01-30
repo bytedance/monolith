@@ -144,7 +144,7 @@ class ClipByGlobalNormFused : public OpKernel {
       auto t = fao_alloc.get_slice(context->input(i).shape());
       output_ptrs_da.Set(i, t.flat<float>().data());
       // if this ends up unused, it will be overwritten
-      context->set_output(i, t);
+      context->set_output(i, std::move(t));
     }
     OP_REQUIRES_OK(context, output_ptrs_da.Finalize());
     auto config = GetGpuLaunchConfig(total, gpu_device);

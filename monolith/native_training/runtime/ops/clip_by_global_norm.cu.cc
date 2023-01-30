@@ -15,13 +15,14 @@
 #if GOOGLE_CUDA
 #define EIGEN_USE_GPU
 
+#include "monolith/native_training/runtime/ops/clip_by_global_norm.h"
+
+#include "monolith/native_training/runtime/ops/alloc_utils.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/kernels/gpu_device_array.h"
 #include "tensorflow/core/kernels/gpu_device_array_gpu.h"
 #include "tensorflow/core/util/gpu_kernel_helper.h"
-
-#include "monolith/native_training/runtime/ops/clip_by_global_norm.h"
 
 namespace tensorflow {
 namespace monolith {
@@ -29,8 +30,8 @@ namespace monolith {
 namespace {
 __global__ void element_wise_mul(
     GpuDeviceArrayStruct<const float*> input_ptrs_da,
-    GpuDeviceArrayStruct<int> offsets_da,
-    GpuDeviceArrayStruct<float*> output_ptrs_da, int size, float scale) {
+    GpuDeviceArrayStruct<float*> output_ptrs_da,
+    GpuDeviceArrayStruct<int> offsets_da, int size, float scale) {
   const float** input_ptrs = GetGpuDeviceArrayOnDevice(&input_ptrs_da);
   int* offsets = GetGpuDeviceArrayOnDevice(&offsets_da);
   float** output_ptrs = GetGpuDeviceArrayOnDevice(&output_ptrs_da);
@@ -60,43 +61,43 @@ typedef Eigen::GpuDevice GPUDevice;
 
 template <>
 struct ClipByGlobalNormImpl<GPUDevice> {
-  static void Compute(OpKernelContext* context,
-                      const std::vector<const float*>& input_ptrs,
-                      const std::vector<int>& input_lens,
-                      const std::vector<float*>& output_ptrs, float scale) {
-    GPUDevice gpu_device = context->eigen_device<GPUDevice>();
-    int num_inputs = input_ptrs.size();  // #inputs == #outputs
-
-    GpuDeviceArrayOnHost<const float*> input_ptrs_da(context, num_inputs);
+  static void Compute(OpKernelContext* context, float scale) {
+    const auto& gpu_device = context->eigen_gpu_device();
+    auto N_ = context->num_inputs() - 2;
+    GpuDeviceArrayOnHost<const float*> input_ptrs_da(context, N_);
+    GpuDeviceArrayOnHost<int> offsets(context, N_ + 1);
     OP_REQUIRES_OK(context, input_ptrs_da.Init());
-    for (int i = 0; i < num_inputs; ++i) {
-      input_ptrs_da.Set(i, input_ptrs[i]);
-    }
-    OP_REQUIRES_OK(context, input_ptrs_da.Finalize());
-
-    int offset = 0;
-    GpuDeviceArrayOnHost<int> offsets(context, num_inputs + 1);
-    int smem_usage = sizeof(int) * (num_inputs + 1);
     OP_REQUIRES_OK(context, offsets.Init());
-    for (int i = 0; i < num_inputs; ++i) {
-      offsets.Set(i, offset);
-      offset += input_lens[i];  // * suffix_dim_size(1)
+    monolith_tf::FusedAlignedOutputAllocator<EIGEN_MAX_ALIGN_BYTES /
+                                             sizeof(float)>
+        fao_alloc(context);
+    for (int i = 0; i < N_; ++i) {
+      input_ptrs_da.Set(i, context->input(i).flat<float>().data());
+      offsets.Set(i, fao_alloc.get_unaligned_total());
+      fao_alloc.add_slice(context->input(i).NumElements());
     }
-    offsets.Set(num_inputs, offset);  // offset val here is total workload
+    int total = fao_alloc.get_unaligned_total();
+    offsets.Set(N_, total);
+
+    OP_REQUIRES_OK(context, input_ptrs_da.Finalize());
     OP_REQUIRES_OK(context, offsets.Finalize());
 
-    GpuDeviceArrayOnHost<float*> output_ptrs_da(context, num_inputs);
+    GpuDeviceArrayOnHost<float*> output_ptrs_da(context, N_);
     OP_REQUIRES_OK(context, output_ptrs_da.Init());
-    for (int i = 0; i < num_inputs; ++i) {
-      output_ptrs_da.Set(i, output_ptrs[i]);
+    fao_alloc.allocate(DT_FLOAT);
+    for (int i = 0; i < N_; ++i) {
+      auto t = fao_alloc.get_slice(context->input(i).shape());
+      output_ptrs_da.Set(i, t.flat<float>().data());
+      context->set_output(i, std::move(t));
     }
     OP_REQUIRES_OK(context, output_ptrs_da.Finalize());
+    auto config = GetGpuLaunchConfig(total, gpu_device);
 
-    auto config = GetGpuLaunchConfig(offset, gpu_device);
+    const int smem_usage = sizeof(int) * (N_ + 1);
     TF_CHECK_OK(GpuLaunchKernel(
         element_wise_mul, config.block_count, config.thread_per_block,
-        smem_usage, gpu_device.stream(), input_ptrs_da.data(), offsets.data(),
-        output_ptrs_da.data(), offset, scale));
+        smem_usage, gpu_device.stream(), input_ptrs_da.data(),
+        output_ptrs_da.data(), offsets.data(), total, scale));
   }
 };
 
