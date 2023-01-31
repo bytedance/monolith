@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "monolith/native_training/data/training_instance/cc/data_reader.h"
+
 #include <bitset>
 #include <climits>
 
+#include "monolith/native_training/data/training_instance/cc/snappy_inputbuffer.h"
 #include "tensorflow/core/lib/core/coding.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/io/buffered_inputstream.h"
 #include "tensorflow/core/lib/io/random_inputstream.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/profiler/lib/traceme.h"
-
-#include "monolith/native_training/data/training_instance/cc/data_reader.h"
-#include "monolith/native_training/data/training_instance/cc/snappy_inputbuffer.h"
 
 namespace tensorflow {
 namespace monolith_tf {
@@ -319,22 +319,30 @@ Status ExampleBatchToExample(ExampleBatch *example_batch, int index,
   for (const auto &named_feature : example_batch->named_feature_list()) {
     if (named_feature.type() != FeatureListType::SHARED) {
       if (example_batch->batch_size() != named_feature.feature_size()) {
-        return errors::OutOfRange(absl::StrFormat(
+        std::string err_log = absl::StrFormat(
             "ExampleBatch batch_size should be equal to named_feature size, "
-            "while got %d vs %d",
-            example_batch->batch_size(), named_feature.feature_size()));
+            "while got %d vs %d for feature_name %s",
+            example_batch->batch_size(), named_feature.feature_size(),
+            named_feature.name());
+        LOG(ERROR) << err_log;
+        return errors::OutOfRange(err_log);
       }
       if (index >= named_feature.feature_size()) {
-        return errors::OutOfRange(
-            absl::StrFormat("index should be less than named_feature size, "
-                            "while got %d vs %d",
-                            index, named_feature.feature_size()));
+        std::string err_log = absl::StrFormat(
+            "index should be less than named_feature size, "
+            "while got %d vs %d for feautre_name %s",
+            index, named_feature.feature_size(), named_feature.name());
+        LOG(ERROR) << err_log;
+        return errors::OutOfRange(err_log);
       }
     } else {
       if (named_feature.feature_size() == 0) {
-        return errors::OutOfRange(absl::StrFormat(
-            "named_feature size should be positive while got %d",
-            named_feature.feature_size()));
+        std::string err_log = absl::StrFormat(
+            "named_feature size should be positive while got %d for "
+            "feature_name %s",
+            named_feature.feature_size(), named_feature.name());
+        LOG(ERROR) << err_log;
+        return errors::OutOfRange(err_log);
       }
     }
     const auto &efeat = named_feature.type() == FeatureListType::SHARED

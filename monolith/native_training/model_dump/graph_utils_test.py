@@ -13,19 +13,21 @@
 # limitations under the License.
 
 import tensorflow as tf
-
+from absl import flags
 from monolith.native_training.data.datasets import PBDataset
 from monolith.native_training.model_dump.graph_utils import GraphDefHelper
 from monolith.native_training.model_export.export_context import get_current_export_ctx
 from monolith.native_training.model_dump.dump_utils import DumpUtils
+from monolith.native_training.runner_utils import RunnerConfig
 
 file_name = "monolith/native_training/data/training_instance/examplebatch.data"
-
+FLAGS = flags.FLAGS
 
 class GraphUtilsTest(tf.test.TestCase):
 
   @classmethod
   def setUpClass(cls):
+    FLAGS.data_type = 'examplebatch'
     cls.dump_utils = DumpUtils()
     cls.dump_utils.load(
         "monolith/native_training/model_dump/test_data/model_dump")

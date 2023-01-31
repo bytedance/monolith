@@ -14,7 +14,7 @@
 
 import os, re, time
 import six, copy, time
-from absl import logging
+from absl import logging, flags
 from inspect import signature
 import pickle
 from io import BytesIO
@@ -37,7 +37,7 @@ from tensorflow.python.framework import ops
 from monolith.native_training.utils import add_to_collections
 
 DRY_RUN = 'dry_run'
-
+FLAGS = flags.FLAGS
 
 class DatasetInitHook(tf.compat.v1.train.SessionRunHook):
 
@@ -562,6 +562,21 @@ class GraphDefHelper(object):
     sub_graph, _ = self.sub_graph(dest_nodes=dest_nodes,
                                   source_nodes=None,
                                   with_library=True)
+    data_type = getattr(FLAGS, 'data_type')
+    logging.info(f"[INFO] using the data type {data_type}")
+    if data_type:
+      # replace pb dataset input pb type
+      for node in sub_graph.node:
+        if node.name == "PBDataset/input_pb_type":
+          val_attr = node.attr['value'] # ValAttr
+          val_ts = val_attr.WhichOneof('value') # tensor
+          if val_ts == 'tensor':
+            target_type = data_type.lower().encode()
+            val_attr.tensor.string_val[0] = target_type
+          logging.info(f"[INFO] using input_pb_type {val_attr.tensor.string_val[0]}")
+          
+          logging.info(f"[INFO] the pbdataset/input {node}")
+
     return_elements = tf.import_graph_def(sub_graph,
                                           input_map=None,
                                           return_elements=dest_nodes,
