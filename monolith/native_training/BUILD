@@ -109,16 +109,6 @@ py_test(
     ],
 )
 
-py_test(
-    name = "gpu_hash_table_ops_test",
-    srcs = ["gpu_hash_table_ops_test.py"],
-    deps = [
-        ":hash_filter_ops",
-        ":hash_table_ops",
-        ":learning_rate_functions",
-    ],
-)
-
 py_proto_library(
     name = "multi_hash_table_ops_py_proto",
     srcs = ["multi_hash_table_ops.proto"],

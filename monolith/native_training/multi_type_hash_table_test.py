@@ -167,7 +167,7 @@ class MultiTypeHashTableTest(tf.test.TestCase):
           "slot2": (_id([2, 3]), _value([[4, 4], [8, 8]]))
       })
       values_dict = hash_table.fused_lookup([0, 1, 2, 3], [1, 1, 2], 1)
-      embeddings, recv_splits, id_offsets, emb_offsets = sess.run(
+      embeddings, recv_splits, id_offsets, emb_offsets, indices = sess.run(
           values_dict)
     self.assertAllEqual(embeddings, [1, 2, 2, 4, 4, 8, 8])
     self.assertAllEqual(recv_splits, [7])
@@ -188,7 +188,7 @@ class MultiTypeHashTableTest(tf.test.TestCase):
           "slot2": (_id([2, 3]), _value([[4, 4], [8, 8]]))
       })
       values_dict = hash_table.fused_lookup([0, 2, 1, 3], [1, 0, 1, 0, 1, 1], 2)
-      embeddings, recv_splits, id_offsets, emb_offsets = sess.run(
+      embeddings, recv_splits, id_offsets, emb_offsets, indices = sess.run(
           values_dict)
     self.assertAllEqual(embeddings, [1, 4, 4, 2, 2, 8, 8])
     self.assertAllEqual(recv_splits, [3, 4])
@@ -204,14 +204,14 @@ class MultiTypeHashTableTest(tf.test.TestCase):
           }, factory)
       ids = tf.constant([0, 1, 2], dtype=tf.int64)
       fused_slot_size = tf.constant([1, 2])
-      embeddings, _, id_offsets, emb_offsets = hash_table.fused_lookup(
+      embeddings, _, id_offsets, emb_offsets, indices = hash_table.fused_lookup(
           ids, fused_slot_size, 1)
       grads = tf.constant([2.0, 1.0, 3.0, 2.0, 4.0])
       hash_table = hash_table.fused_apply_gradient(
-          ids, fused_slot_size, grads, id_offsets, emb_offsets,
+          ids, indices, fused_slot_size, grads, id_offsets, emb_offsets,
           tf.constant(0, dtype=tf.int64), tf.constant(0, dtype=tf.int64), 1)
       lookup_op = hash_table.fused_lookup(ids, fused_slot_size, 1)
-      embeddings, recv_splits, id_offsets, emb_offsets = sess.run(
+      embeddings, recv_splits, id_offsets, emb_offsets, indices = sess.run(
           lookup_op)
     self.assertAllEqual(embeddings, [-2, -1, -3, -2, -4])
     self.assertAllEqual(recv_splits, [5])
@@ -227,14 +227,14 @@ class MultiTypeHashTableTest(tf.test.TestCase):
           }, factory)
       ids = tf.constant([1, 1], dtype=tf.int64)
       fused_slot_size = tf.constant([1, 0, 1, 0])
-      embeddings, _, id_offsets, emb_offsets = hash_table.fused_lookup(
+      embeddings, _, id_offsets, emb_offsets, indices = hash_table.fused_lookup(
           ids, fused_slot_size, 2)
       grads = tf.constant([1.0, 2.0])
       hash_table = hash_table.fused_apply_gradient(
-          ids, fused_slot_size, grads, id_offsets, emb_offsets,
+          ids, indices, fused_slot_size, grads, id_offsets, emb_offsets,
           tf.constant(0, dtype=tf.int64), tf.constant(0, dtype=tf.int64), 2)
       lookup_op = hash_table.fused_lookup(ids, fused_slot_size, 2)
-      embeddings, recv_splits, id_offsets, emb_offsets = sess.run(
+      embeddings, recv_splits, id_offsets, emb_offsets, indices = sess.run(
           lookup_op)
     self.assertAllEqual(embeddings, [-3, -3])
     self.assertAllEqual(recv_splits, [1, 1])

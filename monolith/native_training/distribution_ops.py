@@ -221,7 +221,7 @@ def reorder_by_indices(input: tf.Tensor, shard_ids: tf.Tensor,
 
 def fused_reorder_by_indices(
     inputs: List[tf.Tensor], num_of_shards: int,
-    dim_sizes: List[int]) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+    dim_sizes: List[int]) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
   """
   Reorder and dedup int64 values in a list of tensors according to the sharding.
   

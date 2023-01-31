@@ -1099,7 +1099,7 @@ class HashTableOpsTest(tf.test.TestCase):
           _get_id_tensor([0, 4, 6, 1, 3, 7]),
           fused_slot_size=tf.constant([1, 1, 1, 1, 1, 1]),
           num_of_shards=2)
-      embeddings, recv_splits, id_offsets, emb_offsets = sess.run(
+      embeddings, recv_splits, id_offsets, emb_offsets, indices = sess.run(
           embeddings)
     self.assertAllEqual(embeddings, [1, 0, 1, 1, 1, 0, 1, 1])
     self.assertAllEqual(recv_splits, [4, 4])
@@ -1121,10 +1121,11 @@ class HashTableOpsTest(tf.test.TestCase):
         hash_tables.append(hash_table)
       hash_table_resource = [hash_table.table for hash_table in hash_tables]
       #embeddings=[1, 0, 0, 1, 0, 0]
-      embeddings, recv_splits, id_offsets, emb_offsets = ops.fused_lookup(
+      embeddings, recv_splits, id_offsets, emb_offsets, indices = ops.fused_lookup(
           hash_table_resource, ids, fused_slot_size, num_of_shards=2)
       new_tables = ops.fused_apply_gradient(hash_table_resource,
                                             ids,
+                                            indices,
                                             fused_slot_size,
                                             tf.constant(
                                                 [-1, -2, -2, -1, -2, -2],
@@ -1141,7 +1142,7 @@ class HashTableOpsTest(tf.test.TestCase):
                                      ids,
                                      fused_slot_size,
                                      num_of_shards=2)
-      embeddings, recv_splits, id_offsets, emb_offsets = sess.run(
+      embeddings, recv_splits, id_offsets, emb_offsets, indices = sess.run(
           lookup_op)
     self.assertAllClose(embeddings, [1.1, 0.2, 0.2, 1.1, 0.2, 0.2])
     self.assertAllEqual(recv_splits, [3, 3])

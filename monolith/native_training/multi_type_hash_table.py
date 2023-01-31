@@ -184,15 +184,18 @@ class MultiTypeHashTable(BaseMultiTypeHashTable):
   # This is a very concise API that supports fused lookup, without mapping the
   # IDs to its slots.
   def fused_lookup(self, ids: tf.Tensor, fused_slot_size: tf.Tensor,
-                   num_of_shards: int) -> Tuple[tf.Tensor]:
+                   num_of_shards: int, req_time=None) -> Tuple[tf.Tensor]:
+    if req_time is None:
+      req_time = tf.constant(0, dtype=tf.int64)
     return hash_table_ops.fused_lookup(self._hash_table_resources, ids,
-                                       fused_slot_size, num_of_shards)
+                                       fused_slot_size, num_of_shards, req_time)
 
   # This is a very concise API that supports fused optimize, without mapping the
   # IDs to its slots.
   def fused_apply_gradient(
       self,
       ids: tf.Tensor,
+      indices: tf.Tensor,
       fused_slot_size: tf.Tensor,
       id_grads: tf.Tensor,
       id_offsets: tf.Tensor,
@@ -202,7 +205,7 @@ class MultiTypeHashTable(BaseMultiTypeHashTable):
       num_of_shards: int,
       enable_grad_accumulation: bool = False) -> MultiTypeHashTable:
     table_handles_output = hash_table_ops.fused_apply_gradient(
-        self._hash_table_resources, ids, fused_slot_size, id_grads, id_offsets,
+        self._hash_table_resources, ids, indices, fused_slot_size, id_grads, id_offsets,
         grad_offsets, self._learning_rate_tensors,
         req_time, global_step, num_of_shards, enable_grad_accumulation)
     copied = copy.copy(self)

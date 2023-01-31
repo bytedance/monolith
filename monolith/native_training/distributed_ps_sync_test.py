@@ -20,6 +20,7 @@ os.environ["MONOLITH_WITH_HOROVOD"] = "True"
 import tensorflow as tf
 
 from monolith.native_training import distributed_ps
+from monolith.native_training import distribution_ops
 from monolith.native_training import distributed_ps_sync
 from monolith.native_training import hash_table_ops
 from monolith.native_training import learning_rate_functions
@@ -74,13 +75,15 @@ class DistributedMultiTypeHashTableMpiTest(tf.test.TestCase,
       self.evaluate(tf.compat.v1.assign(global_step, 0))
       table = distributed_ps_sync.DistributedMultiTypeHashTableMpi(
           hvd.size(), table_factory)
-      mulitplier = hvd.rank() + 1
       slot_to_ids = {
           "1": tf.constant([1, 1], dtype=tf.int64),
           "2": tf.constant([2], dtype=tf.int64)
       }
       # First lookup, nothing exists, returns 0 simply.
-      emb, auxiliary_bundle = table.lookup(slot_to_ids, auxiliary_bundle={})
+      reordred = distribution_ops.fused_reorder_by_indices(
+        [slot_to_ids["1"], slot_to_ids["2"]], 1, [1, 2])
+      reordred = (*reordred, None) # add timestamp
+      emb, auxiliary_bundle = table.lookup(slot_to_ids, {}, reordred)
       emb_value = sess.run(emb)
       self.assertAllClose(emb_value["1"], [[0], [0]])
       self.assertAllClose(emb_value["2"], [[0, 0]])
@@ -92,8 +95,7 @@ class DistributedMultiTypeHashTableMpiTest(tf.test.TestCase,
           auxiliary_bundle=auxiliary_bundle,
           global_step=tf.constant(0, dtype=tf.int64),
           req_time=tf.constant(0, dtype=tf.int64))
-      emb, auxiliary_bundle = updated_table.lookup(slot_to_ids,
-                                                   auxiliary_bundle={})
+      emb, auxiliary_bundle = updated_table.lookup(slot_to_ids, {}, reordred)
       emb_value = sess.run(emb)
       sum_multiplier = hvd.size()
       self.assertAllClose(emb_value["1"],

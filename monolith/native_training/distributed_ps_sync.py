@@ -101,31 +101,26 @@ class DistributedMultiTypeHashTableMpi(
       import byteps.tensorflow as bps
     sorted_slot_keys = sorted(slot_to_id.keys())
     slot_num = len(sorted_slot_keys)
-    if early_reorder_indicies_res_pack:
-      all_fids, shard_sizes, sharded_slot_sizes, emb_offset_sz, fused_embedding_offsets = \
-        early_reorder_indicies_res_pack
-      if FLAGS.enable_alltoall_metrics:
-        slot_name = FLAGS.enable_alltoall_metrics_for_slot
-        if slot_name and slot_name in sorted_slot_keys:
-          m = sorted_slot_keys.index(slot_name)
-          with tf.device("/CPU:0"):
-            tf.compat.v1.summary.scalar(
-                "{}_size".format(slot_name),
-                tf.reduce_sum(
-                    tf.gather(
-                        sharded_slot_sizes,
-                        [m + i * slot_num for i in range(self._shard_num)])))
+    assert early_reorder_indicies_res_pack is not None, \
+      "Support for reorder_fids_in_data_pipeline=False is dropped. Please set it to True"
+    all_fids, shard_sizes, sharded_slot_sizes, emb_offset_sz, fused_embedding_offsets, req_time = \
+      early_reorder_indicies_res_pack
+    if FLAGS.enable_alltoall_metrics:
+      slot_name = FLAGS.enable_alltoall_metrics_for_slot
+      if slot_name and slot_name in sorted_slot_keys:
+        m = sorted_slot_keys.index(slot_name)
         with tf.device("/CPU:0"):
-          tf.compat.v1.summary.scalar("all_fids_size", tf.size(all_fids))
-          tf.compat.v1.summary.histogram("shard_sizes", shard_sizes)
-          tf.compat.v1.summary.histogram("sharded_slot_sizes",
-                                         sharded_slot_sizes)
-    else:
-      sorted_input = [slot_to_id[k] for k in sorted_slot_keys]
-      all_fids, shard_sizes, sharded_slot_sizes, emb_offset_sz, fused_embedding_offsets = \
-          distribution_ops.fused_reorder_by_indices(
-              sorted_input, self._shard_num, self._output_dims
-          )
+          tf.compat.v1.summary.scalar(
+              "{}_size".format(slot_name),
+              tf.reduce_sum(
+                  tf.gather(
+                      sharded_slot_sizes,
+                      [m + i * slot_num for i in range(self._shard_num)])))
+      with tf.device("/CPU:0"):
+        tf.compat.v1.summary.scalar("all_fids_size", tf.size(all_fids))
+        tf.compat.v1.summary.histogram("shard_sizes", shard_sizes)
+        tf.compat.v1.summary.histogram("sharded_slot_sizes",
+                                        sharded_slot_sizes)
 
     # We exchange the flattened IDs and their splits.
     # M: num_of_ids,
@@ -180,8 +175,8 @@ class DistributedMultiTypeHashTableMpi(
     # fused_embeddings: [E], fused_splits: [N]
     # id_offsets: [K*N], emb_offsets: [K*N]
     with tf.device("/GPU:0"):
-      fused_embeddings, embedding_splits, id_offsets, emb_offsets = \
-          self._table.fused_lookup(id_flat_t, id_size_flat_t, self._shard_num)
+      fused_embeddings, embedding_splits, id_offsets, emb_offsets, indices = \
+          self._table.fused_lookup(id_flat_t, id_size_flat_t, self._shard_num, req_time)
     if FLAGS.enable_alltoall_metrics:
       with tf.device("/CPU:0"):
         tf.compat.v1.summary.histogram("fused_embedding_splits",
@@ -191,6 +186,7 @@ class DistributedMultiTypeHashTableMpi(
     auxiliary_bundle["embedding_splits"] = embedding_splits
     auxiliary_bundle["id_offsets"] = id_offsets
     auxiliary_bundle["emb_offsets"] = emb_offsets
+    auxiliary_bundle["indices"] = indices
     auxiliary_bundle["recv_emb_splits"] = tf.reshape(
         tf.matmul(
             tf.reshape(sharded_slot_sizes, [self._shard_num, slot_num]),
@@ -493,6 +489,7 @@ class DistributedMultiTypeHashTableMpi(
     with tf.device("/GPU:0"):
       updated_table = self._table.fused_apply_gradient(
           auxiliary_bundle.pop("id_flat_t"),
+          auxiliary_bundle.pop("indices"),
           auxiliary_bundle.pop("id_size_flat_t"),
           auxiliary_bundle.pop("grad_flat_t"),
           auxiliary_bundle.pop("id_offsets"),

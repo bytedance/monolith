@@ -223,20 +223,6 @@ http_archive(
 
 load("//third_party:repo.bzl", "tf_http_archive")
 
-# cuCollection, Deep Rec Ver
-#tf_http_archive(
-#    name = "cuCollections",
-#    patch_file = "//third_party:0001-cuco-modification-for-deeprec.patch",
-#    build_file = "//third_party:cuco.BUILD",
-#    sha256 = "c5c77a1f96b439b67280e86483ce8d5994aa4d14b7627b1d3bd7880be6be23fa",
-#    strip_prefix = "cuCollections-193de1aa74f5721717f991ca757dc610c852bb17",
-#    urls = [
-#        "https://github.com/NVIDIA/cuCollections/archive/193de1aa74f5721717f991ca757dc610c852bb17.zip",
-#        "https://github.com/NVIDIA/cuCollections/archive/193de1aa74f5721717f991ca757dc610c852bb17.zip",
-#    ],
-#)
-
-# cuCollection, Latest Ver, July 7th
 tf_http_archive(
     name = "cuCollections",
     build_file = "//third_party:cuco.BUILD",
@@ -248,32 +234,6 @@ tf_http_archive(
         "https://github.com/NVIDIA/cuCollections/archive/1e3c5842c6e212e0bd7de9802af583e53009f4a6.zip"
     ],
 )
-
-# cuCollection, last no is_invocalble_v version, Jult 7th
-#tf_http_archive(
-#    name = "cuCollections",
-#    patch_file = "//third_party:cuCollections.patch",
-#    build_file = "//third_party:cuco.BUILD",
-#    sha256 = "b1b815e70c57bc4d539fba9eb0aa7fc1ce3dea80882d127cad4cac699493d4fe",
-#    strip_prefix = "cuCollections-3b0adf597ed828f3813030452fb39f9b1735c90b",
-#    urls = [
-#        "https://github.com/NVIDIA/cuCollections/archive/3b0adf597ed828f3813030452fb39f9b1735c90b.zip",
-#        "https://github.com/NVIDIA/cuCollections/archive/3b0adf597ed828f3813030452fb39f9b1735c90b.zip",
-#    ],
-#)
-
-#Before sentinel updated
-#tf_http_archive(
-#    name = "cuCollections",
-#    patch_file = "//third_party:cuCollections.patch",
-#    build_file = "//third_party:cuco.BUILD",
-#    sha256 = "d4ab6cd692982bd43d4ba3f56a71138fe7c0334118acc09702038996323b8d33",
-#    strip_prefix = "cuCollections-0446d73eadb0478ddd4016c0d2eb04b9312dc53d",
-#    urls = [
-#        "https://github.com/NVIDIA/cuCollections/archive/0446d73eadb0478ddd4016c0d2eb04b9312dc53d.zip",
-#        "https://github.com/NVIDIA/cuCollections/archive/0446d73eadb0478ddd4016c0d2eb04b9312dc53d.zip",
-#    ],
-#)
 
 http_archive(
     name = "arrow",

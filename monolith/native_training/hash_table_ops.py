@@ -362,7 +362,7 @@ class HashTable(BaseHashTable):
 
 
 def fused_lookup(tables: tf.Tensor, ids: tf.Tensor, fused_slot_size: tf.Tensor,
-                 num_of_shards: int) -> Tuple[tf.Tensor]:
+                 num_of_shards: int, req_time: tf.Tensor=None) -> Tuple[tf.Tensor]:
   """ A fused operation for lookup.
 
   This op takes a fused_ids, and fused_slot_sizes,
@@ -380,8 +380,6 @@ def fused_lookup(tables: tf.Tensor, ids: tf.Tensor, fused_slot_size: tf.Tensor,
     recv_splits = [3, 3]
     id_offsets = [0, 1, 2, 3]
     emb_offsets = [0, 1, 3, 4]
-    embedding_sizes = [1, 2, 1, 2]
-
   For a setup of K tables, N shards:
   Args:
     tables:  A list of tables with shape [K], it is ordered by the tables' hashed_keys.
@@ -393,15 +391,17 @@ def fused_lookup(tables: tf.Tensor, ids: tf.Tensor, fused_slot_size: tf.Tensor,
     recv_splits: A 1-D flattened tensor with shape [N].
     id_offsets: A 1-D flattened tensor wih shape [K*N], and it is an artifact used by apply_gradients.
     emb_offsets: A 1-D flattened tensor with shape [K*N], and it is an artifact used by apply_gradients.
-    embedding_sizes: A 1-D flattened tensor with shape [K*N], and it is an artifact used by worker side.
   """
+  if req_time is None:
+    req_time = tf.constant(0, tf.int64)
   return hash_table_ops.monolith_hash_table_fused_lookup(
-      tables, ids, fused_slot_size, num_of_shards)
+      tables, ids, fused_slot_size, req_time, num_of_shards)
 
 
 def fused_apply_gradient(
     tables: List[tf.Tensor],
     ids: tf.Tensor,
+    indices: tf.Tensor,
     fused_slot_size: tf.Tensor,
     id_grads: tf.Tensor,
     id_offsets: tf.Tensor,
@@ -449,7 +449,7 @@ def fused_apply_gradient(
     An updated tables tensor.
   """
   return hash_table_ops.monolith_hash_table_fused_optimize(
-      tables, ids, fused_slot_size, id_grads, id_offsets, grad_offsets,
+      tables, ids, indices, fused_slot_size, id_grads, id_offsets, grad_offsets,
       learning_rate_tensors, req_time, global_step,
       num_of_shards, enable_grad_accumulation)
 

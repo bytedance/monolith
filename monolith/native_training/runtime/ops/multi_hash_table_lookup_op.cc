@@ -139,6 +139,7 @@ void MultiHashTableFusedLookupOp<CPUDevice>::ComputeH(OpKernelContext* ctx) {
                  ctx->allocate_output(2, {slot_size_cnt + 1}, &key_offsets_ts));
   OP_REQUIRES_OK(ctx,
                  ctx->allocate_output(3, {slot_size_cnt + 1}, &emb_offsets_ts));
+  ctx->set_output(4, ctx->input(1));
   auto key_offsets = key_offsets_ts->vec<int>().data();
   auto emb_offsets = emb_offsets_ts->vec<int>().data();
   auto emb_splits = emb_splits_ts->vec<int>().data();
@@ -216,10 +217,12 @@ REGISTER_OP("MonolithMultiHashTableFusedLookup")
     .Input("mtable: resource")
     .Input("ids: int64")
     .Input("fused_slot_size: int32")
+    .Input("req_time: int64")
     .Output("embeddings: float32")
     .Output("embedding_splits: int32")
     .Output("id_offsets: int32")
     .Output("embedding_offsets: int32")
+    .Output("indices: int64")
     .Attr("num_of_shards: int")
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       int num_shards;
@@ -234,6 +237,7 @@ REGISTER_OP("MonolithMultiHashTableFusedLookup")
       TF_RETURN_IF_ERROR(c->Add(dim, 1, &out));
       c->set_output(2, c->Vector(out));
       c->set_output(3, c->Vector(out));
+      c->set_output(4, c->input(1));
       return Status::OK();
     });
 

@@ -264,6 +264,12 @@ class _FusedCpuFeatureFactory(feature.FeatureFactoryFromEmbeddings):
     return apply_op.as_op()
 
 
+def get_req_time(features):
+  if "req_time" in features:
+    return features["req_time"][0]
+  else:
+    return None
+
 @dataclasses.dataclass
 class CpuTrainingConfig:
   """The CPU training config.
@@ -545,6 +551,7 @@ class CpuTraining:
         reordered_pack = distribution_ops.fused_reorder_by_indices(
             sorted_input, self.config.num_workers, merged_slot_dims
         )
+        reordered_pack = (*reordered_pack, get_req_time(dense_features))
         if self.config.use_native_multi_hash_table:
           # DistributedMultiTypeHashTableMpi.lookup
           lookup_args = reordered_pack
@@ -1081,12 +1088,6 @@ class CpuTraining:
       if variable_prefetch_enabled():
         return (variables.FetchAllCachedVariablesHook(),)
       return ()
-
-    def get_req_time(features):
-      if "req_time" in features:
-        return features["req_time"][0]
-      else:
-        return None
 
     def get_itempool_hook(model_dir, mode):
       pools = tf.compat.v1.get_collection(POOL_KEY)

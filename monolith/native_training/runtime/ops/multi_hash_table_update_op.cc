@@ -217,13 +217,16 @@ class MultiHashTableFusedOptimizeOp : public OpKernel {
 template <>
 void MultiHashTableFusedOptimizeOp<CPUDevice>::ComputeH(OpKernelContext* ctx) {
   auto ids = ctx->input(1).vec<int64_t>().data();
-  auto slot_size_vec = ctx->input(2).vec<int32>().data();
-  auto id_grads = ctx->input(3).vec<float>().data();
-  auto key_offsets = ctx->input(4).vec<int32>().data();
-  auto emb_offsets = ctx->input(5).vec<int32>().data();
-  auto learning_rates = ctx->input(6).vec<float>().data();
-  auto update_time = ctx->input(7).scalar<int64_t>()();
-  auto global_step = ctx->input(8).scalar<int64_t>()();
+  auto num_ids = ctx->input(1).NumElements();
+  auto indices = ctx->input(2).vec<int64_t>().data();
+  auto slot_size_vec = ctx->input(3).vec<int32>().data();
+  auto id_grads = ctx->input(4).vec<float>().data();
+  auto num_grads = ctx->input(4).NumElements();
+  auto key_offsets = ctx->input(5).vec<int32>().data();
+  auto emb_offsets = ctx->input(6).vec<int32>().data();
+  auto learning_rates = ctx->input(7).vec<float>().data();
+  auto req_time = ctx->input(8).scalar<int64_t>()();
+  auto global_step = ctx->input(9).scalar<int64_t>()();
 
   core::RefCountPtr<MultiHashTable> mtable;
   OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &mtable));
@@ -240,7 +243,7 @@ void MultiHashTableFusedOptimizeOp<CPUDevice>::ComputeH(OpKernelContext* ctx) {
         learning_rate_offset += table->slice_size();
         table->BatchOptimize(
             ctx, slot_size_vec[curr_idx], ids + key_offsets[curr_idx],
-            id_grads + emb_offsets[curr_idx], learning_rate, update_time,
+            id_grads + emb_offsets[curr_idx], learning_rate, req_time,
             enable_grad_accumulation_, global_step);
       }
     }
@@ -257,6 +260,7 @@ void MultiHashTableFusedOptimizeOp<CPUDevice>::ComputeH(OpKernelContext* ctx) {
 REGISTER_OP("MonolithMultiHashTableFusedOptimize")
     .Input("mtable: resource")
     .Input("ids: int64")
+    .Input("indices: int64")
     .Input("fused_slot_size: int32")
     .Input("id_grads: float")
     .Input("id_offsets: int32")

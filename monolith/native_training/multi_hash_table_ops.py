@@ -429,19 +429,26 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
 
   # This is a very concise API that supports fused lookup, without mapping the
   # IDs to its slots.
-  def fused_lookup(self, ids: tf.Tensor, fused_slot_size: tf.Tensor,
-                   num_of_shards: int) -> Tuple[tf.Tensor]:
+  def fused_lookup(self, 
+                   ids: tf.Tensor, 
+                   fused_slot_size: tf.Tensor,
+                   num_of_shards: int,
+                   req_time=None) -> Tuple[tf.Tensor]:
+    if req_time is None:
+      req_time = tf.constant(0, dtype=tf.int64)
     return hash_table_ops.monolith_multi_hash_table_fused_lookup(
         mtable=self._handle,
         ids=ids,
         fused_slot_size=fused_slot_size, 
-        num_of_shards=num_of_shards)
+        num_of_shards=num_of_shards,
+        req_time=req_time)
 
   # This is a very concise API that supports fused optimize, without mapping the
   # IDs to its slots.
   def fused_apply_gradient(
       self,
       ids: tf.Tensor,
+      indices: tf.Tensor,
       fused_slot_size: tf.Tensor,
       id_grads: tf.Tensor,
       id_offsets: tf.Tensor,
@@ -453,6 +460,7 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
     handle = hash_table_ops.monolith_multi_hash_table_fused_optimize(
         mtable=self._handle, 
         ids=ids,
+        indices=indices,
         fused_slot_size=fused_slot_size,
         id_grads=id_grads,
         id_offsets=id_offsets,

@@ -174,6 +174,7 @@ void HashTableFusedLookupOp<CPUDevice>::ComputeH(OpKernelContext* ctx) {
                  ctx->allocate_output(2, {slot_size_cnt + 1}, &key_offsets_ts));
   OP_REQUIRES_OK(ctx,
                  ctx->allocate_output(3, {slot_size_cnt + 1}, &emb_offsets_ts));
+  ctx->set_output(4, ctx->input(num_tables_ + 0));
   auto key_offsets = key_offsets_ts->vec<int>().data();
   auto emb_offsets = emb_offsets_ts->vec<int>().data();
   auto emb_splits = emb_splits_ts->vec<int>().data();
@@ -272,10 +273,12 @@ REGISTER_OP("MonolithHashTableFusedLookup")
     .Input("table_handles: N * resource")
     .Input("ids: int64")
     .Input("fused_slot_size: int32")
+    .Input("req_time: int64")
     .Output("embeddings: float32")
     .Output("embedding_splits: int32")
     .Output("id_offsets: int32")
     .Output("embedding_offsets: int32")
+    .Output("indices: int64")
     .Attr("N: int")
     .Attr("num_of_shards: int")
     .SetShapeFn([](shape_inference::InferenceContext* c) {
@@ -286,6 +289,7 @@ REGISTER_OP("MonolithHashTableFusedLookup")
       c->set_output(1, c->Vector(num_shards));
       c->set_output(2, c->Vector(num_tables * num_shards + 1));
       c->set_output(3, c->Vector(num_tables * num_shards + 1));
+      c->set_output(4, c->input(num_tables));
       auto shape = c->input(num_tables + 1);
       TF_RETURN_IF_ERROR(c->WithRank(shape, 1, &shape));
       auto dim = c->Dim(shape, 0);

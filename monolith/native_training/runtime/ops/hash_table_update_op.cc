@@ -198,13 +198,16 @@ class HashTableFusedOptimizeOp : public OpKernel {
 template <>
 void HashTableFusedOptimizeOp<CPUDevice>::ComputeH(OpKernelContext* ctx) {
   auto ids = ctx->input(num_tables_).vec<int64_t>().data();
-  auto slot_size_vec = ctx->input(num_tables_ + 1).vec<int32>().data();
-  auto id_grads = ctx->input(num_tables_ + 2).vec<float>().data();
-  auto key_offsets = ctx->input(num_tables_ + 3).vec<int32>().data();
-  auto emb_offsets = ctx->input(num_tables_ + 4).vec<int32>().data();
-  auto learning_rates = ctx->input(num_tables_ + 5).vec<float>().data();
-  auto update_time = ctx->input(num_tables_ + 6).scalar<int64_t>()();
-  auto global_step = ctx->input(num_tables_ + 7).scalar<int64_t>()();
+  auto num_ids = ctx->input(num_tables_).NumElements();
+  auto indices = ctx->input(num_tables_ + 1).vec<int64_t>().data();
+  auto slot_size_vec = ctx->input(num_tables_ + 2).vec<int32>().data();
+  auto id_grads = ctx->input(num_tables_ + 3).vec<float>().data();
+  auto num_grads = ctx->input(num_tables_ + 3).NumElements();
+  auto key_offsets = ctx->input(num_tables_ + 4).vec<int32>().data();
+  auto emb_offsets = ctx->input(num_tables_ + 5).vec<int32>().data();
+  auto learning_rates = ctx->input(num_tables_ + 6).vec<float>().data();
+  auto update_time = ctx->input(num_tables_ + 7).scalar<int64_t>()();
+  auto global_step = ctx->input(num_tables_ + 8).scalar<int64_t>()();
 
   std::vector<EmbeddingHashTableTfBridge*> hash_tables(num_tables_, nullptr);
   for (int table_id = 0; table_id < num_tables_; table_id++) {
@@ -280,6 +283,7 @@ REGISTER_KERNEL_BUILDER(Name("MonolithHashTableOptimize").Device(DEVICE_CPU),
 REGISTER_OP("MonolithHashTableFusedOptimize")
     .Input("table_handles: N * resource")
     .Input("ids: int64")
+    .Input("indices: int64")
     .Input("fused_slot_size: int32")
     .Input("id_grads: float")
     .Input("id_offsets: int32")
@@ -298,7 +302,7 @@ REGISTER_OP("MonolithHashTableFusedOptimize")
       for (int i = 0; i < num_tables; ++i) {
         c->set_output(i, c->Scalar());
       }
-      auto shape = c->input(num_tables + 1);
+      auto shape = c->input(num_tables + 2);
       TF_RETURN_IF_ERROR(c->WithRank(shape, 1, &shape));
       auto dim = c->Dim(shape, 0);
       TF_RETURN_IF_ERROR(c->WithValue(dim, num_tables * num_shards, &dim));
