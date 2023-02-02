@@ -464,33 +464,35 @@ class MonolithBaseModel(NativeTask, ABC):
           labels_list.append(label_tensor)
           preds_list.append(pred_tensor)
 
-          if head_classification:
-            auc_per_core, auc_update_op = tf.compat.v1.metrics.auc(
-                labels=label_tensor, predictions=pred_tensor, name=name)
-            tf.compat.v1.summary.scalar("{}_auc".format(name), auc_per_core)
-            train_ops.append(auc_update_op)
-          else:
-            mean_squared_error, mse_update_op = tf.compat.v1.metrics.mean_squared_error(
-                labels=label_tensor, predictions=pred_tensor, name=name)
-            tf.compat.v1.summary.scalar("{}_mse".format(name),
-                                        mean_squared_error)
-            train_ops.append(mse_update_op)
+          if not FLAGS.disable_native_metrics:
+            if head_classification:
+              auc_per_core, auc_update_op = tf.compat.v1.metrics.auc(
+                  labels=label_tensor, predictions=pred_tensor, name=name)
+              tf.compat.v1.summary.scalar("{}_auc".format(name), auc_per_core)
+              train_ops.append(auc_update_op)
+            else:
+              mean_squared_error, mse_update_op = tf.compat.v1.metrics.mean_squared_error(
+                  labels=label_tensor, predictions=pred_tensor, name=name)
+              tf.compat.v1.summary.scalar("{}_mse".format(name),
+                                          mean_squared_error)
+              train_ops.append(mse_update_op)
       else:
         targets.append(head_name)
         labels_list.append(label)
         preds_list.append(pred)
 
-        if is_classification:
-          auc_per_core, auc_update_op = tf.compat.v1.metrics.auc(
-              labels=label, predictions=pred, name=head_name)
-          tf.compat.v1.summary.scalar(f"{head_name}_auc", auc_per_core)
-          train_ops.append(auc_update_op)
-        else:
-          mean_squared_error, mse_update_op = tf.compat.v1.metrics.mean_squared_error(
-              labels=label, predictions=pred, name=head_name)
-          tf.compat.v1.summary.scalar("{}_mse".format(head_name),
-                                      mean_squared_error)
-          train_ops.append(mse_update_op)
+        if not FLAGS.disable_native_metrics:
+          if is_classification:
+            auc_per_core, auc_update_op = tf.compat.v1.metrics.auc(
+                labels=label, predictions=pred, name=head_name)
+            tf.compat.v1.summary.scalar(f"{head_name}_auc", auc_per_core)
+            train_ops.append(auc_update_op)
+          else:
+            mean_squared_error, mse_update_op = tf.compat.v1.metrics.mean_squared_error(
+                labels=label, predictions=pred, name=head_name)
+            tf.compat.v1.summary.scalar("{}_mse".format(head_name),
+                                        mean_squared_error)
+            train_ops.append(mse_update_op)
 
       enable_metrics = self.metrics.enable_kafka_metrics or self.metrics.enable_file_metrics or self.metrics.enable_deep_insight
       if enable_metrics and self.metrics.deep_insight_sample_ratio > 0:

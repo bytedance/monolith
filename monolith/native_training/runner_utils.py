@@ -183,6 +183,7 @@ class RunnerConfig(DistributedCpuTrainingConfig):
     :param is_hourly: Whether the input data is hourly partitioned.
     :param enable_dynamic_sharding: Whether switch on dynamic_sharding
     :param max_task_num_per_worker: Number of data reader task per worker, the same as primus setting
+    :param disable_native_metrics: Whether disable tensorflow native metrics, such as auc, mse.
   """
 
   task: str = None
@@ -223,6 +224,7 @@ class RunnerConfig(DistributedCpuTrainingConfig):
   end_hour: int = None
   enable_dynamic_sharding: bool = False
   max_task_num_per_worker: int = 1
+  disable_native_metrics: bool = False
 
   def __post_init__(self):
     mlp_pass()
