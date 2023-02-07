@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef MONOLITH_NATIVE_TRAINING_RUNTIME_OPS_CLIP_BY_GLOBAL_NORM_IN_PLACE_CU
-#define MONOLITH_NATIVE_TRAINING_RUNTIME_OPS_CLIP_BY_GLOBAL_NORM_IN_PLACE_CU
 #if GOOGLE_CUDA
 #define EIGEN_USE_GPU
 
@@ -192,4 +190,3 @@ REGISTER_KERNEL_BUILDER(Name("MonolithClipByGlobalNormFused")
 }  // namespace tensorflow
 
 #endif
-#endif  // MONOLITH_NATIVE_TRAINING_RUNTIME_OPS_CLIP_BY_GLOBAL_NORM_IN_PLACE_CU

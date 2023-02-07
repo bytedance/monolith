@@ -22,6 +22,7 @@ import tensorflow as tf
 from tensorflow.python.training import training_util
 
 from monolith.native_training import clip_ops
+from monolith.native_training.distribution_ops import gen_distribution_ops
 from monolith.native_training import device_utils
 from monolith.native_training import feature
 from monolith.native_training.native_task import NativeContext
@@ -39,7 +40,7 @@ skip_allreduce = int(os.getenv("MONOLITH_SKIP_ALLREDUCE", '0'))
 
 if enable_hvd != None:
   import horovod.tensorflow as hvd
-  from horovod.tensorflow.compression import FP16Compressor
+  from horovod.tensorflow.compression import FP16Compressor, NoneCompressor
 
 
 def allreduce_cond(grads):
@@ -47,25 +48,24 @@ def allreduce_cond(grads):
     import byteps.tensorflow as bps
     from byteps.tensorflow.compression import FP16Compressor as BPSFP16Compressor
 
+  grads_wo_none = [grad for grad in grads if grad is not None]
+  num_grads = len(grads)
+  results = [None for _ in range(num_grads)]
+  if len(grads_wo_none) == 0:
+    return grads
+
+  def map_to_output(reduced):
+    r_idx = 0
+    for i in range(num_grads):
+      if grads[i] is not None:
+        results[i] = reduced[r_idx]
+        r_idx += 1
+    assert r_idx == len(reduced), "Something is wrong"
+    return results
+
   if enable_allreduce_fusion == 'one':
     # note: concat -> allreduce -> split is noticeably faster than hvd.grouped_allreduce
-    logging.info('Enabled allreduce fusion (one op)')
-    grads_wo_none = [grad for grad in grads if grad is not None]
-    if len(grads_wo_none) == 0:
-      return grads
-    reshaped_grads = []
-    grad_shapes = []
-    grad_lens = []
-    # reshape to 1D
-    for idx in range(len(grads_wo_none)):
-      grad = grads_wo_none[idx]
-      grad_shapes.append(grad.shape)
-      reshaped_grad = tf.reshape(grad, [-1], name='ar_reshape_' +
-                                 str(idx)) if len(grad.shape) != 1 else grad
-      grad_lens.append(int(reshaped_grad.shape[0]))
-      reshaped_grads.append(reshaped_grad)
-    # concat
-    grads_fused = tf.concat(reshaped_grads, axis=0, name='concat_ar')
+    grads_fused = gen_distribution_ops.monolith_aligned_flat_concat(grads_wo_none)
     # AR
     if enable_bps and enable_bps_allreduce:
       grads_fused_avg = bps.push_pull(grads_fused, average=True, compression=BPSFP16Compressor, name="bps_ar_fuse_one") \
@@ -73,26 +73,13 @@ def allreduce_cond(grads):
     else:
       grads_fused_avg = hvd.allreduce(grads_fused, op=hvd.Average, compression=FP16Compressor, name="hvd_ar_fuse_one") \
                           if enable_allreduce_fp16 else hvd.allreduce(grads_fused, op=hvd.Average, name="hvd_ar_fuse_one")
-    # split to 1D
-    grads_avg_split = tf.split(grads_fused_avg,
-                               grad_lens,
-                               axis=0,
-                               name='split_fuse_one')
-    # to original shape
-    num_grads = len(grads)
-    results = [None for _ in range(num_grads)]
-    for idx in range(num_grads):
-      if grads[idx] is not None:
-        results[idx] = tf.reshape(grads_avg_split[idx], grad_shapes[idx], name='ar_reshape_back_'+str(idx)) \
-                      if len(grad_shapes[idx]) !=1 else grads_avg_split[idx]
-
-    return results
+    return map_to_output(gen_distribution_ops.monolith_aligned_flat_split(grads_wo_none, grads_fused_avg))
+  elif enable_allreduce_fusion == "grouped":
+    assert not enable_bps or not enable_bps_allreduce
+    compression = FP16Compressor if enable_allreduce_fp16 else NoneCompressor
+    return map_to_output(hvd.grouped_allreduce(grads_wo_none, op=hvd.Average, compression=compression))
   elif enable_allreduce_fusion == 'multi':
     logging.info('Enabled allreduce fusion (based on shape)')
-    grads_wo_none = [grad for grad in grads if grad is not None]
-    if len(grads_wo_none) == 0:
-      return grads
-
     grads_1d = []
     grads_1d_dim0 = []
     # cur model has the following 2-D grads:
@@ -156,9 +143,6 @@ def allreduce_cond(grads):
                                    grads_2d_dim0[k],
                                    axis=0,
                                    name='split_2d_grads_' + str(k))
-
-    num_grads = len(grads)
-    results = [None for _ in range(num_grads)]
     for idx in range(num_grads - 1, -1, -1):
       if grads[idx] is None:
         continue

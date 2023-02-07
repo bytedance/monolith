@@ -516,6 +516,20 @@ class DistributionOpsTest(tf.test.TestCase):
       self.assertTrue(f1)
       self.assertTrue(f2)
 
+  @test_util.run_gpu_only
+  def test_aligned_concat_split(self):
+    with tf.compat.v1.Session() as sess, test_util.use_gpu():
+      arrays = []
+      num_items = 155
+      for i in range(num_items):
+        num_dims = random.randint(1, 4)
+        arrays.append(tf.random.uniform([random.randint(1, 50) for _ in range(num_dims)]))
+      concat = distribution_ops.gen_distribution_ops.monolith_aligned_flat_concat(arrays)
+      splits = distribution_ops.gen_distribution_ops.monolith_aligned_flat_split(arrays, concat)
+      arrays, splits = sess.run([arrays, splits])
+      for i in range(num_items):
+        self.assertAllEqual(arrays[i], splits[i])
+      
 
 if __name__ == "__main__":
   tf.compat.v1.disable_eager_execution()

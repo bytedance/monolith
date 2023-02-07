@@ -271,6 +271,7 @@ tf_kernel_library(
         "map_id_to_embedding.cu.cc",
         "reduce_op.cu.cc",
         "alloc_utils.h",
+        "aligned_concat_split.cu.cc"
     ],
     # TODO: Figure out how to link "@org_tensorflow//tensorflow/core/kernels:cwise_lib_hdrs" for fill_functor.h
     deps = [

@@ -52,26 +52,32 @@ class FusedAlignedOutputAllocator {
  public:
   explicit FusedAlignedOutputAllocator(OpKernelContext* ctx): ctx_(ctx) {
   }
-  void add_slice(int64 num_elements) {
+  inline void add_slice(int64 num_elements) {
     total_ += num_elements;
     aligned_total_ += round_up_to_align(num_elements);
   }
-  void allocate(DataType dtype) {
+  inline void allocate(DataType dtype) {
     // allocate_temp may seem suspicious here, but it's properly reference counted
     // (including its slice), so we don't need to worry about its lifetime problem
     OP_REQUIRES_OK(ctx_, ctx_->allocate_temp(dtype, {aligned_total_}, &flat_out_));
     aligned_total_ = 0;
   }
-  Tensor get_slice(const TensorShape& shape) {
+  inline Tensor get_slice(const TensorShape& shape, const Tensor& flat) {
     int64 num_elements = shape.num_elements();
     Tensor reshaped;
     // note: CopyFrom and Slice doesn't copy the underlying memory
-    (void)reshaped.CopyFrom(flat_out_.Slice(aligned_total_, aligned_total_ + num_elements), shape);
+    (void)reshaped.CopyFrom(flat.Slice(aligned_total_, aligned_total_ + num_elements), shape);
     aligned_total_ += round_up_to_align(num_elements);
     return reshaped;
   }
-  int64 get_unaligned_total() const {
+  inline Tensor get_slice(const TensorShape& shape) {
+    return get_slice(shape, flat_out_);
+  }
+  inline int64 get_unaligned_total() const {
     return total_;
+  }
+  inline int64 get_aligned_total() const {
+    return aligned_total_;
   }
 
  private:
@@ -80,7 +86,7 @@ class FusedAlignedOutputAllocator {
   int64 total_ = 0;
   Tensor flat_out_;
   static constexpr int64 round_up_to_align(int64 a) {
-    if constexpr (alignment == 0)
+    if (alignment == 0)
       return a;
     constexpr int64 temp = alignment - 1;
     constexpr int64 temp2 = ~temp;
