@@ -10,3 +10,17 @@ index 2335f6b1..5d5ec084 100644
      "-Xep:CollectionIncompatibleType:OFF",
  ]
  
+
+diff --git a/repositories.maven.bzl b/repositories.maven.bzl
+index ae5ebb8..44eae0d 100644
+--- a/repositories.maven.bzl
++++ b/repositories.maven.bzl
+@@ -47,6 +47,7 @@ def copybara_maven_repositories():
+             "org.apache.commons:commons-compress:1.21",
+         ],
+         repositories = [
++            "https://maven.byted.org/repository/public",
+             "https://maven.google.com",
+             "https://repo1.maven.org/maven2",
+         ],
+

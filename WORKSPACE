@@ -231,7 +231,7 @@ tf_http_archive(
     strip_prefix = "cuCollections-1e3c5842c6e212e0bd7de9802af583e53009f4a6",
     urls = [
         "https://github.com/NVIDIA/cuCollections/archive/1e3c5842c6e212e0bd7de9802af583e53009f4a6.zip",
-        "https://github.com/NVIDIA/cuCollections/archive/1e3c5842c6e212e0bd7de9802af583e53009f4a6.zip"
+        "https://github.com/NVIDIA/cuCollections/archive/1e3c5842c6e212e0bd7de9802af583e53009f4a6.zip",
     ],
 )
 
@@ -246,7 +246,7 @@ http_archive(
     ],
 )
 
-# extra dependencies of arrow begin 
+# extra dependencies of arrow begin
 http_archive(
     name = "rapidjson",
     build_file = "//third_party:rapidjson.BUILD",
