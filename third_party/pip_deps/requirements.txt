@@ -1,14 +1,14 @@
 
 cityhash==0.4.1
 croniter==1.0.15
-cryptography==3.4.8
+cryptography==39.0.1
 dataclasses_json==0.5.2
 flask_api==2.0
 flask==1.1.2
 freezegun==1.1.0
 google-cloud-storage
 grpcio==1.32.0
-# Flask is stupid.
+# Flask currently lists wrong deps.
 itsdangerous==1.1.0
 kazoo==2.8.0
 kubernetes==19.15.0
