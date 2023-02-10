@@ -30,11 +30,12 @@ from tensorflow.python.ops.variables import Variable
 SaveSliceInfo = Variable.SaveSliceInfo
 
 from idl.matrix.proto.line_id_pb2 import LineId
+from idl.matrix.proto.example_pb2 import FeatureConfigs
 from tensorflow.python.ops.variables import PartitionedVariable
 from tensorflow.python.ops.gen_resource_variable_ops import read_variable_op
 from tensorflow.python.ops.ragged.row_partition import RowPartition
 from tensorflow.python.framework import ops
-from monolith.native_training.utils import add_to_collections
+from monolith.native_training.utils import add_to_collections, get_collection
 
 DRY_RUN = 'dry_run'
 FLAGS = flags.FLAGS
@@ -695,6 +696,22 @@ class GraphDefHelper(object):
                                       input_map=vread_map,
                                       return_elements=real_out,
                                       name="")
+
+    # collection sparse_feature
+    for node in tf.compat.v1.get_default_graph().as_graph_def().node:
+      if node.op == "ShardingSparseFidsV2":
+        feature_cfgs = FeatureConfigs()
+        feature_cfgs.ParseFromString(node.attr["feature_cfgs"].s)
+        sparse_features = get_collection("sparse_features")
+        if sparse_features is None:
+          sparse_features = []
+        else:
+          sparse_features = sparse_features[-1]
+        for feat_name, _ in feature_cfgs.feature_configs.items():
+          sparse_features.append(feat_name)
+        sparse_features = list(set(sparse_features))
+        add_to_collections('sparse_features', sparse_features)
+
     real_result = {name: value for name, value in zip(real_out, real_result)}
     result = [real_result.get(name, direct_out.get(name)) for name in outputs]
     if len(model_fn.summary) > 0:
@@ -762,6 +779,7 @@ class GraphDefHelper(object):
   def import_receiver_fn(self, receiver_conf):
     dest_nodes, sparse_features, dense_features, extra_features = [], [], [], []
     dense_feature_shapes, dense_feature_types, extra_feature_shapes = [], [], []
+    parser_type = receiver_conf.parser_type
     for feat_name, ts_repr in receiver_conf.features.items():
       ts_dict = eval(ts_repr)
       if ts_dict['is_ragged']:
@@ -783,6 +801,7 @@ class GraphDefHelper(object):
     add_to_collections('dense_feature_types', dense_feature_types)
     add_to_collections('extra_features', extra_features)
     add_to_collections('extra_feature_shapes', extra_feature_shapes)
+    add_to_collections('variant_type', parser_type)
 
     num_feature_tensors = len(dest_nodes)
     for name, ph_name in receiver_conf.receiver_name.items():
