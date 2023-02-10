@@ -1876,6 +1876,8 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
   # By default the grappler (meta_optimizer) is enabled.
   # session_config.graph_options.rewrite_options.disable_meta_optimizer = True
   session_config.graph_options.rewrite_options.memory_optimization = 1
+  if os.environ.get('TF_XLA_FLAGS', None):
+    session_config.graph_options.optimizer_options.global_jit_level = 1
 
   # We reduce the frequency of saving to HDFS summary, otherwise it slows down
   # the training.
