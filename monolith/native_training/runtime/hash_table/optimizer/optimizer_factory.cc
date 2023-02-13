@@ -24,6 +24,7 @@
 #include "monolith/native_training/runtime/hash_table/optimizer/batch_softmax_optimizer.h"
 #include "monolith/native_training/runtime/hash_table/optimizer/dynamic_wd_adagrad_optimizer.h"
 #include "monolith/native_training/runtime/hash_table/optimizer/ftrl_optimizer.h"
+#include "monolith/native_training/runtime/hash_table/optimizer/group_adagrad_optimizer.h"
 #include "monolith/native_training/runtime/hash_table/optimizer/group_ftrl_optimizer.h"
 #include "monolith/native_training/runtime/hash_table/optimizer/momentum_optimizer.h"
 #include "monolith/native_training/runtime/hash_table/optimizer/moving_average_optimizer.h"
@@ -75,6 +76,10 @@ std::unique_ptr<OptimizerInterface> NewOptimizerFromConfig(
       break;
     case OptimizerConfig::kGroupFtrl:
       opt = NewGroupFtrlOptimizer(std::move(*config.mutable_group_ftrl()));
+      break;
+    case OptimizerConfig::kGroupAdagrad:
+      opt =
+          NewGroupAdaGradOptimizer(std::move(*config.mutable_group_adagrad()));
       break;
     case OptimizerConfig::kBatchSoftmax:
       opt =

@@ -78,6 +78,7 @@ cc_library(
         ":dynamic_wd_adagrad_optimizer",
         ":ftrl_optimizer",
         ":group_ftrl_optimizer",
+        ":group_adagrad_optimizer",
         ":momentum_optimizer",
         ":moving_average_optimizer",
         ":rmsprop_optimizer",
@@ -439,6 +440,29 @@ cc_test(
         ":group_ftrl_optimizer",
         ":optimizer_cc_proto",
         ":test_utils",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "group_adagrad_optimizer",
+    srcs = ["group_adagrad_optimizer.cc"],
+    hdrs = ["group_adagrad_optimizer.h"],
+    deps = [
+        ":optimizer_cc_proto",
+        ":optimizer_interface",
+        ":avx_utils",
+    ],
+)
+
+cc_test(
+    name = "group_adagrad_optimizer_test",
+    srcs = ["group_adagrad_optimizer_test.cc"],
+    deps = [
+        ":group_adagrad_optimizer",
+        ":optimizer_cc_proto",
+        ":test_utils",
+        ":avx_utils",
         "@com_google_googletest//:gtest_main",
     ],
 )

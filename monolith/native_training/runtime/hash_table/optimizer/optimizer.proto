@@ -87,6 +87,20 @@ message GroupFtrlOptimizerDump {
   repeated float norm = 2;
 }
 
+message GroupAdaGradOptimizerConfig {
+  optional int32 dim_size = 1;
+  optional float learning_rate = 2 [default = 0.01];
+  optional float beta = 3 [default = 0.0];
+  optional float initial_accumulator_value = 4 [default = 0.1];
+  optional float l2_regularization_strength = 5 [default = 0.0];
+  optional float weight_decay_factor = 6 [default = 0.0];
+  optional int64 warmup_steps = 7 [default = 0];
+}
+
+message GroupAdaGradOptimizerDump {
+  optional float grad_square_sum = 1;
+}
+
 message AdadeltaOptimizerConfig {
   optional int32 dim_size = 1;
   optional float learning_rate = 2 [default = 0.01];
@@ -209,6 +223,7 @@ message OptimizerConfig {
     DcOptimizerConfig dc = 13;
     GroupFtrlOptimizerConfig group_ftrl = 14;
     BatchSoftmaxOptimizerConfig batch_softmax = 15;
+    GroupAdaGradOptimizerConfig group_adagrad = 16;
   }
   optional bool stochastic_rounding_float16 = 4;  // Default false.
 }
@@ -227,6 +242,7 @@ message SingleOptimizerDump {
     RmspropV2OptimizerDump rmspropv2 = 12;
     GroupFtrlOptimizerDump group_ftrl = 13;
     BatchSoftmaxOptimizerDump batch_softmax = 14;
+    GroupAdaGradOptimizerDump group_adagrad = 15;
   }
 }
 

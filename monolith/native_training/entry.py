@@ -306,6 +306,30 @@ class FTRLWithGroupSparsityOptimizer(Optimizer):
     return opt
 
 
+@monolith_export
+class AdaGradWithGroupLassoOptimizer(Optimizer):
+
+  def __init__(
+      self,
+      learning_rate=None,
+      beta=None,
+      initial_accumulator_value=None,
+      l2_regularization=None,
+      weight_decay_factor=0.0,
+      warmup_steps=0):
+    self.learning_rate = learning_rate
+    self.beta = beta
+    self.initial_accumulator_value = initial_accumulator_value
+    self.l2_regularization_strength = l2_regularization
+    self.weight_decay_factor = weight_decay_factor
+    self.warmup_steps = warmup_steps
+
+  def as_proto(self):
+    opt = embedding_hash_table_pb2.OptimizerConfig()
+    _convert_to_proto(self, opt.group_adagrad)
+    return opt
+
+
 # TODO: put DcOptimizer into entry.py
 
 
