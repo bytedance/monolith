@@ -94,10 +94,7 @@ _CHIEF_TIMEOUT_SECONDS = 1800
 
 class ChiefSyncHook(tf.estimator.SessionRunHook):
   """
-  A hook that used for chief and woker sync at the begining and at the end.
-  Args:
-    has_chief - if cluster has chief, place queue in chief.
-                Otherwise, place queue in localhost.
+  A hook that used for chief and worker sync at the beginning and at the end.
   """
 
   def __init__(self,
@@ -110,7 +107,6 @@ class ChiefSyncHook(tf.estimator.SessionRunHook):
     self._helper.mark_restore_done(session)
 
   def end(self, session):
-    # At the end, chief waits for other workers performing an enqueue op.
     start_time = time.time()
     while True:
       num_alive_workers = self._helper.get_num_alive_workers(session)
@@ -133,10 +129,7 @@ class ChiefSyncHook(tf.estimator.SessionRunHook):
 
 class WorkerSyncHook(tf.estimator.SessionRunHook):
   """
-  A hook that used for chief and woker sync at the begining and at the end.
-  Args:
-    has_chief - if cluster has chief, place queue in chief.
-                Otherwise, place queue in localhost.
+  A hook that used for chief and worker sync at the beginning and at the end.
   """
 
   def __init__(self, worker_index, sync_helper: SyncHelper):

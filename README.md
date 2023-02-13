@@ -21,7 +21,7 @@ https://join.slack.com/t/monolithusergroup/shared_invite/zt-1mewhxi5v-L7EPkRTaoO
 
 Currently, we only support compilation on the Linux.
 
-Frist, download bazel 3.1.0
+First, download bazel 3.1.0
 ```bash
 wget https://github.com/bazelbuild/bazel/releases/download/3.1.0/bazel-3.1.0-installer-linux-x86_64.sh && \
   chmod +x bazel-3.1.0-installer-linux-x86_64.sh && \

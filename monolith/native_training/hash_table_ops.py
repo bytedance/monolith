@@ -718,9 +718,9 @@ def extract_slot_from_entry(entry: tf.Tensor, fid_v2=True):
   return hash_table_ops.monolith_extract_slot_from_entry(entry, fid_v2=fid_v2)
 
 
-class HashTableRestorerSaverLitsener(tf.estimator.CheckpointSaverListener):
+class HashTableRestorerSaverListener(tf.estimator.CheckpointSaverListener):
   """Since we use restore to remove stale entries,
-  we create a saver litsener here."""
+  we create a saver listener here."""
 
   def __init__(self, ckpt_prefix: str):
     self._l = HashTableCheckpointRestorerListener(ckpt_prefix)

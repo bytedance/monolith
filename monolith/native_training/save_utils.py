@@ -246,7 +246,7 @@ class SecondOrStepTimerWithTideSetting(tf.estimator.SecondOrStepTimer):
 
 
 class NoFirstSaveCheckpointSaverHook(tf.estimator.CheckpointSaverHook):
-  """A saver hook which won't perform the first save (which happpend on after_create_session)."""
+  """A saver hook which won't perform the first save (which happened on after_create_session)."""
 
   _has_dense_only: bool = False
   _last_triggered_step: int = 0

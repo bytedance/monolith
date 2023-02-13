@@ -927,7 +927,7 @@ class CpuTraining:
 
       if self.config.feature_eviction_on_save:
         save_listeners.extend([
-            hash_table_ops.HashTableRestorerSaverLitsener(basename),
+            hash_table_ops.HashTableRestorerSaverListener(basename),
             multi_hash_table_ops.MultiHashTableRestorerSaverListener(basename),
         ])
 

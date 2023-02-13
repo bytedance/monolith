@@ -430,6 +430,9 @@ REGISTER_KERNEL_BUILDER(Name("MonolithReduceMean").Device(DEVICE_CPU),
                         ReduceMeanOp);
 REGISTER_KERNEL_BUILDER(Name("MonolithReduceSquareNorm").Device(DEVICE_CPU),
                         ReduceSquareNormOp);
+REGISTER_KERNEL_BUILDER(
+    Name("MonolithFusedReduceSumAndSplit").Device(DEVICE_CPU),
+    ReduceSumAndSplitOp);
 
 REGISTER_KERNEL_BUILDER(Name("MonolithReduceSumGradient").Device(DEVICE_CPU),
                         ReduceSumGradientOp);
@@ -438,9 +441,6 @@ REGISTER_KERNEL_BUILDER(Name("MonolithReduceMeanGradient").Device(DEVICE_CPU),
 REGISTER_KERNEL_BUILDER(
     Name("MonolithReduceSquareNormGradient").Device(DEVICE_CPU),
     ReduceSquareNormGradientOp);
-REGISTER_KERNEL_BUILDER(
-    Name("MonolithFusedReduceSumAndSplit").Device(DEVICE_CPU),
-    ReduceSumAndSplitOp);
 REGISTER_KERNEL_BUILDER(
     Name("MonolithFusedReduceSumAndSplitGradient").Device(DEVICE_CPU),
     ReduceSumAndSplitGradientOp);

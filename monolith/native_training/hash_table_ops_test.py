@@ -542,7 +542,7 @@ class HashTableOpsTest(tf.test.TestCase):
         listeners=[
             ops.HashTableCheckpointSaverListener(ckpt_prefix),
             AssignSaverListener(),
-            ops.HashTableRestorerSaverLitsener(ckpt_prefix)
+            ops.HashTableRestorerSaverListener(ckpt_prefix)
         ])
 
     with self.session() as sess:

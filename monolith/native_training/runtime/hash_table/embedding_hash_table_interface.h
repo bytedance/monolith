@@ -129,7 +129,7 @@ class EmbeddingHashTableInterface {
   virtual bool Contains(int64_t id) const = 0;
 };
 
-// A decorator will default retdirect all method to base class.
+// A decorator will default redirect all method to base class.
 class DefaultEmbeddingHashTableDecorator : public EmbeddingHashTableInterface {
  public:
   DefaultEmbeddingHashTableDecorator(
@@ -213,7 +213,7 @@ class DefaultEmbeddingHashTableDecorator : public EmbeddingHashTableInterface {
   std::unique_ptr<EmbeddingHashTableInterface> base_;
 };
 
-// A class that provides some usefult functionality. Like default values for
+// A class that provides some useful functionality. Like default values for
 // some method.
 class EmbeddingHashTableHelper : public DefaultEmbeddingHashTableDecorator {
  public:

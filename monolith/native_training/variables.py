@@ -85,7 +85,7 @@ def cached_variable_creator(next_creator, **kwargs):
     # In this case, we shouldn't do the cache since we try assign vars
     # on the remote machines.
     #
-    # This is commmon when cached_var is forced to colocate with var.
+    # This is common when cached_var is forced to colocate with var.
     # For example, var is optimizer's slot variables.
     return var
 

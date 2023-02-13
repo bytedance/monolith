@@ -159,11 +159,11 @@ def restore_hash_filter(hash_filter: tf.Tensor,
 def intercept_gradient(filter_tensor: tf.Tensor, ids: tf.Tensor,
                        embeddings: tf.Tensor):
   """
-  If id is supposed to be filtered, the graident will be intercepted. Output the same 
+  If id is supposed to be filtered, the gradient will be intercepted. Output the same 
   embeddings.
   Args:
     ids - a 1-D int64 tensor.
-    embeddings - a N-d embedding tensor whose the first dimention is corresponding to ids. 
+    embeddings - a N-d embedding tensor whose the first dimension is corresponding to ids. 
   """
   return filter_ops.MonolithHashFilterInterceptGradient(
       filter_handle=filter_tensor, ids=ids, embeddings=embeddings)
