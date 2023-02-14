@@ -40,3 +40,7 @@ For example,
 ```bash
 bazel run //monolith/native_training:demo --output_filter=IGNORE_LOGS
 ```
+
+### Demo and tutorials
+
+There are a tutorial in [markdown/demo](markdown/demo) on how to run distributed async training, and few guides on how to use the `MonolithModel` API [here](markdown).  
