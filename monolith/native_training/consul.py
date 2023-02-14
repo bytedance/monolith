@@ -84,7 +84,8 @@ class Client:
       conn = HTTPConnection(self._consul_host,
                             self._consul_port,
                             timeout=timeout)
-    conn.request("GET", "/v1/lookup/name?name=" + name)
+    conn.request("GET",
+                 "/v1/lookup/name?name=" + name + "&addr-family=dual-stack")
     response = conn.getresponse()
     status = response.status
     data = response.read()
