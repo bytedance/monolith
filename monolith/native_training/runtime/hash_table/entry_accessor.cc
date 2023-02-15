@@ -91,6 +91,15 @@ class ServingEntryAccessor final : public EntryAccessorInterface {
     std::vector<float> num(dump.num_size());
     absl::c_copy(dump.num(), num.begin());
     compressor_->Encode(num, ctx);
+
+    static int64_t total_size_bytes = 0, total_uncompressed_size_bytes = 0;
+    total_size_bytes += compressor_->SizeBytes();
+    total_uncompressed_size_bytes += compressor_->UncompressedSizeBytes();
+    LOG_EVERY_N_SEC(INFO, 60) << absl::StrFormat(
+        "Restore %ld bytes into memory using compressor %s, that is %ld bytes "
+        "if uncompressed",
+        total_size_bytes, compressor_->DebugString(),
+        total_uncompressed_size_bytes);
   }
 
  private:

@@ -27,23 +27,38 @@ namespace {
 
 class FloatCompressorBase : public FloatCompressorInterface {
  public:
-  FloatCompressorBase(int dim_size, int64_t size_bytes)
-      : dim_size_(dim_size), size_bytes_(size_bytes) {}
+  FloatCompressorBase(int dim_size, int64_t size_bytes,
+                      int64_t uncompressed_size_bytes)
+      : dim_size_(dim_size),
+        size_bytes_(size_bytes),
+        uncompressed_size_bytes_(uncompressed_size_bytes) {}
 
   // Use final to inline this when possible.
   int64_t SizeBytes() const final { return size_bytes_; }
+
+  int64_t UncompressedSizeBytes() const final {
+    return uncompressed_size_bytes_;
+  }
+
   int DimSize() const final { return dim_size_; }
 
  private:
   int dim_size_;
   int64_t size_bytes_;
+  int64_t uncompressed_size_bytes_;
 };
 
 class Fp32FloatCompressor final : public FloatCompressorBase {
  public:
   explicit Fp32FloatCompressor(const FloatCompressorConfig::Fp32& config)
       : FloatCompressorBase(config.dim_size(),
+                            config.dim_size() * sizeof(float),
                             config.dim_size() * sizeof(float)) {}
+
+  std::string DebugString() const override {
+    return absl::StrFormat("Fp32(dim_size=%d)", FloatCompressorBase::DimSize());
+  }
+
   void Encode(absl::Span<const float> num, void* compressed) const override {
     auto* f = reinterpret_cast<float*>(compressed);
     for (int i = 0; i < DimSize(); ++i) {
@@ -64,7 +79,12 @@ class Fp16FloatCompressor final : public FloatCompressorBase {
  public:
   explicit Fp16FloatCompressor(const FloatCompressorConfig::Fp16& config)
       : FloatCompressorBase(config.dim_size(),
-                            config.dim_size() * sizeof(int16_t)) {}
+                            config.dim_size() * sizeof(int16_t),
+                            config.dim_size() * sizeof(float)) {}
+
+  std::string DebugString() const override {
+    return absl::StrFormat("Fp16(dim_size=%d)", FloatCompressorBase::DimSize());
+  }
 
   void Encode(absl::Span<const float> num, void* compressed) const override {
     auto* i16 = reinterpret_cast<int16_t*>(compressed);
@@ -87,8 +107,17 @@ class FixedR8FloatCompressor final : public FloatCompressorBase {
  public:
   explicit FixedR8FloatCompressor(const FloatCompressorConfig::FixedR8& config)
       : FloatCompressorBase(config.dim_size(),
-                            config.dim_size() * sizeof(int8_t)),
-        fake_quantizer_(config.r()) {}
+                            config.dim_size() * sizeof(int8_t),
+                            config.dim_size() * sizeof(float)),
+        fake_quantizer_(config.r()) {
+    LOG_EVERY_N(INFO, 100) << "FixedR8FloatCompressor config: "
+                           << config.DebugString();
+  }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("FixedR8(dim_size=%d)",
+                           FloatCompressorBase::DimSize());
+  }
 
   void Encode(absl::Span<const float> num, void* compressed) const override {
     auto* i8 = reinterpret_cast<int8_t*>(compressed);
@@ -114,8 +143,14 @@ class OneBitFloatCompressor final : public FloatCompressorBase {
  public:
   explicit OneBitFloatCompressor(const FloatCompressorConfig::OneBit& config)
       : FloatCompressorBase(config.dim_size(),
-                            config.dim_size() * sizeof(int8_t)),
+                            config.dim_size() * sizeof(int8_t),
+                            config.dim_size() * sizeof(float)),
         hash_net_quantizer_(config) {}
+
+  std::string DebugString() const override {
+    return absl::StrFormat("OneBit(dim_size=%d)",
+                           FloatCompressorBase::DimSize());
+  }
 
   void Encode(absl::Span<const float> num, void* compressed) const override {
     auto* i8 = reinterpret_cast<int8_t*>(compressed);
@@ -140,13 +175,19 @@ class CombinedFloatCompressor final : public FloatCompressorBase {
  public:
   CombinedFloatCompressor(std::unique_ptr<FloatCompressorInterface> compressor1,
                           std::unique_ptr<FloatCompressorInterface> compressor2)
-      : FloatCompressorBase(
-            compressor1->DimSize() + compressor2->DimSize(),
-            compressor1->SizeBytes() + compressor2->SizeBytes()),
+      : FloatCompressorBase(compressor1->DimSize() + compressor2->DimSize(),
+                            compressor1->SizeBytes() + compressor2->SizeBytes(),
+                            compressor1->UncompressedSizeBytes() +
+                                compressor2->UncompressedSizeBytes()),
         compressor1_(std::move(compressor1)),
         compressor2_(std::move(compressor2)),
         compressor1_dim_size_(compressor1_->DimSize()),
         compressor1_size_bytes_(compressor1_->SizeBytes()) {}
+
+  std::string DebugString() const override {
+    return absl::StrFormat("%s|%s", compressor1_->DebugString(),
+                           compressor2_->DebugString());
+  }
 
   void Encode(absl::Span<const float> num, void* compressed) const override {
     absl::Span<const float> num1 = num.subspan(0, compressor1_dim_size_);

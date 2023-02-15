@@ -26,8 +26,13 @@ class FloatCompressorInterface {
  public:
   virtual ~FloatCompressorInterface() = default;
 
+  virtual std::string DebugString() const = 0;
+
   // How many bytes are required for the compressor.
   virtual int64_t SizeBytes() const = 0;
+
+  // How many bytes are required if not compressed.
+  virtual int64_t UncompressedSizeBytes() const = 0;
 
   // How many dimensions this compressor support.
   virtual int DimSize() const = 0;
