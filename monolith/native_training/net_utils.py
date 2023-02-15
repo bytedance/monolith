@@ -18,6 +18,7 @@ from queue import Queue, Empty
 import socket
 import threading
 from typing import Dict, List
+import ipaddress
 
 import netifaces
 
@@ -96,18 +97,46 @@ class NodeAliveChecker:
       return self._addrs
 
 
-def get_another_nic_ip():
-  """Returns None if there is only 1 NIC, otherwise returns non-default ip."""
-  l = [i for i in netifaces.interfaces() if i.startswith("eth") and i != "eth0"]
+def is_ipv6_address(ip: str):
+  try:
+    ip_obj = ipaddress.ip_address(ip)
+  except ValueError:
+    return False
+  return ip_obj.version == 6
+
+
+def concat_ip_and_port(ip: str, port: int):
+  if not is_ipv6_address(ip):
+    return f"{ip}:{port}"
+  else:
+    return f"[{ip}]:{port}"
+
+
+def _get_eth_netinterfaces():
+  return [i for i in netifaces.interfaces() if i.startswith("eth")]
+
+
+def is_ipv4_supported():
+  l = _get_eth_netinterfaces()
+  for i in l:
+    addrs = netifaces.ifaddresses(i)
+    if netifaces.AFINET in addrs:
+      return True
+  return False
+
+
+def get_local_server_addr(port: int):
+  """Given a port. Returns an addr.
+  In the machine that supports IPv4, it is equivalent to gethostbyname(gethostname()).
+  """
+  l = _get_eth_netinterfaces()
   for i in l:
     addrs = netifaces.ifaddresses(i)
     if netifaces.AF_INET in addrs:
-      return addrs[netifaces.AF_INET][0]["addr"]
+      return concat_ip_and_port(addrs[netifaces.AF_INET][0]["addr"], port)
+    elif netifaces.AF_INET6 in addrs:
+      return concat_ip_and_port(addrs[netifaces.AF_INET6][0]["addr"], port)
   return None
-
-
-def is_ipv6_address(ip: str):
-  return ':' in ip.strip('[]')
 
 
 class AddressFamily(object):

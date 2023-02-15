@@ -22,6 +22,7 @@ import tensorflow as tf
 from tensorflow.python.lib.io import file_io
 
 from monolith.native_training import barrier_ops
+from monolith.native_training import net_utils
 from monolith.native_training import save_utils
 from monolith.native_training.hooks.server import constants
 from monolith.native_training.hooks.server import service_pb2
@@ -84,7 +85,7 @@ class ServerHook(tf.estimator.SessionRunHook):
         concurrent.futures.ThreadPoolExecutor(max_workers=2))
     service_pb2_grpc.add_ControllerServicer_to_server(servicer, self._server)
     port = self._server.add_insecure_port("[::]:0")
-    addr = f"{socket.gethostbyname(socket.gethostname())}:{port}"
+    addr = net_utils.get_local_server_addr(port)
     self._server.start()
     tf.io.gfile.makedirs(self._model_dir)
     file_io.atomic_write_string_to_file(

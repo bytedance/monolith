@@ -35,6 +35,7 @@ py_library(
         ":constants",
         ":service_py_grpc",
         "//monolith/native_training:barrier_ops",
+        "//monolith/native_training:net_utils",
         "//monolith/native_training:save_utils",
         requirement("grpcio"),
     ],

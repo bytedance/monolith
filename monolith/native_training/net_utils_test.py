@@ -79,8 +79,15 @@ class NetUtilsTest(unittest.TestCase):
 
       self.assertEqual(alive_checker.all_nodes_alive(), _FAILED_TIME == 0)
 
-  def test_get_another_nic_ip(self):
-    net_utils.get_another_nic_ip()
+  def test_concat_ip_and_port(self):
+    self.assertEqual(net_utils.concat_ip_and_port("localhost", 10),
+                     "localhost:10")
+    self.assertEqual(net_utils.concat_ip_and_port("127.0.0.1", 10),
+                     "127.0.0.1:10")
+    self.assertEqual(net_utils.concat_ip_and_port("::1", 10), "[::1]:10")
+
+  def test_get_local_server_addr(self):
+    self.assertIsNotNone(net_utils.get_local_server_addr(10))
 
 
 if __name__ == "__main__":
