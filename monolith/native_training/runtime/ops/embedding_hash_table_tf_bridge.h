@@ -98,6 +98,7 @@ class EmbeddingHashTableTfBridge : public ResourceBase {
   void set_last_evict_ts_sec(const int64_t last_evict_ts_sec);
   bool IsServingEntryType() const;
   std::string DebugString() const override;
+  std::string Summary() const;
 
   void SetHopscotchHashSet(
       HopscotchHashSet<std::pair<int64_t, const void*>>* hash_set);

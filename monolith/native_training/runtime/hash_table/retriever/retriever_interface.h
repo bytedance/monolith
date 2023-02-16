@@ -37,6 +37,8 @@ class RetrieverInterface {
   // Back propagation
   virtual void Backward(absl::Span<const float> num, absl::Span<float> grad,
                         int64_t global_step) const = 0;
+
+  virtual std::string DebugString() const = 0;
 };
 
 }  // namespace hash_table

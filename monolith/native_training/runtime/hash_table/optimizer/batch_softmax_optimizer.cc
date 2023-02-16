@@ -30,6 +30,12 @@ class BatchSoftmaxOptimizer : public OptimizerInterface {
 
   int64_t SizeBytes() const override { return sizeof(int64_t); }
 
+  int64_t UncompressedSizeBytes() const override { return SizeBytes(); }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("BatchSoftmax(D=%d)", DimSize());
+  }
+
   int DimSize() const override { return config_.dim_size(); }
 
   int SliceSize() const override { return 1; }

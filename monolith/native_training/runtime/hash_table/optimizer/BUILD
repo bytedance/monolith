@@ -104,6 +104,7 @@ cc_library(
         ":avx_utils",
         ":optimizer_cc_proto",
         ":optimizer_interface",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -146,6 +147,7 @@ cc_library(
     deps = [
         ":optimizer_cc_proto",
         ":optimizer_interface",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -201,6 +203,7 @@ cc_library(
     deps = [
         ":optimizer_cc_proto",
         ":optimizer_interface",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -222,6 +225,7 @@ cc_library(
     deps = [
         ":optimizer_cc_proto",
         ":optimizer_interface",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -243,6 +247,7 @@ cc_library(
     deps = [
         ":optimizer_cc_proto",
         ":optimizer_interface",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -264,6 +269,7 @@ cc_library(
     deps = [
         ":optimizer_cc_proto",
         ":optimizer_interface",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -285,6 +291,7 @@ cc_library(
     deps = [
         ":optimizer_cc_proto",
         ":optimizer_interface",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -306,6 +313,7 @@ cc_library(
     deps = [
         ":optimizer_cc_proto",
         ":optimizer_interface",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -327,6 +335,7 @@ cc_library(
     deps = [
         ":optimizer_cc_proto",
         ":optimizer_interface",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -371,6 +380,7 @@ cc_library(
     deps = [
         ":optimizer_interface",
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -452,6 +462,7 @@ cc_library(
         ":optimizer_cc_proto",
         ":optimizer_interface",
         ":avx_utils",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 

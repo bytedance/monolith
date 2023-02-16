@@ -32,6 +32,14 @@ class EntryAccessorDecorator : public EntryAccessorInterface {
 
   int64_t SizeBytes() const override { return entry_accessor_->SizeBytes(); }
 
+  int64_t UncompressedSizeBytes() const override {
+    return entry_accessor_->UncompressedSizeBytes();
+  }
+
+  std::string DebugString() const override {
+    return entry_accessor_->DebugString();
+  }
+
   int DimSize() const override { return entry_accessor_->DimSize(); }
 
   int SliceSize() const override { return entry_accessor_->SliceSize(); }

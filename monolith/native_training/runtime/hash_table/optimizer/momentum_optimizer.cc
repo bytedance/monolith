@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "monolith/native_training/runtime/hash_table/optimizer/momentum_optimizer.h"
 #include <cmath>
 #include <memory>
-
-#include "monolith/native_training/runtime/hash_table/optimizer/momentum_optimizer.h"
+#include "absl/strings/str_format.h"
 
 namespace monolith {
 namespace hash_table {
@@ -30,6 +30,12 @@ class MomentumOptimizer : public OptimizerInterface {
     return (conf_.dim_size()) * sizeof(float);
   }
 
+  int64_t UncompressedSizeBytes() const override { return SizeBytes(); }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("Momentum(D=%d)", DimSize());
+  }
+
   int DimSize() const override { return conf_.dim_size(); }
 
   int SliceSize() const override { return 1; }
@@ -42,15 +48,14 @@ class MomentumOptimizer : public OptimizerInterface {
     }
   }
 
-  void Optimize(void* ctx, absl::Span<float> num,
-                absl::Span<const float> grad,
+  void Optimize(void* ctx, absl::Span<float> num, absl::Span<const float> grad,
                 absl::Span<const float> learning_rates,
                 const int64_t global_step) const override {
     float* n = static_cast<float*>(ctx);
     float g_total = 0;
     for (int i = 0; i < conf_.dim_size(); ++i) {
-      float dx = learning_rates[0] * (grad[i] +
-                 conf_.weight_decay_factor() * num[i]);
+      float dx =
+          learning_rates[0] * (grad[i] + conf_.weight_decay_factor() * num[i]);
       float new_n = n[i];
       float new_w = num[i];
       if (conf_.use_nesterov()) {

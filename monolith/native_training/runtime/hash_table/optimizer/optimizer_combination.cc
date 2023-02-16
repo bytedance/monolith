@@ -15,6 +15,7 @@
 #include "monolith/native_training/runtime/hash_table/optimizer/optimizer_combination.h"
 
 #include "absl/algorithm/container.h"
+#include "absl/strings/str_format.h"
 #include "absl/types/span.h"
 
 namespace monolith {
@@ -38,6 +39,14 @@ class CombinedOptimizer : public OptimizerInterface {
     return opt1_->SizeBytes() + opt2_->SizeBytes();
   }
 
+  int64_t UncompressedSizeBytes() const override {
+    return opt1_->UncompressedSizeBytes() + opt2_->UncompressedSizeBytes();
+  }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("%s|%s", opt1_->DebugString(), opt2_->DebugString());
+  }
+
   int DimSize() const override { return opt1_->DimSize() + opt2_->DimSize(); }
 
   int SliceSize() const override {
@@ -50,8 +59,7 @@ class CombinedOptimizer : public OptimizerInterface {
     opt2_->Init(ctx2);
   }
 
-  void Optimize(void* ctx, absl::Span<float> num,
-                absl::Span<const float> grad,
+  void Optimize(void* ctx, absl::Span<float> num, absl::Span<const float> grad,
                 absl::Span<const float> learning_rates,
                 const int64_t global_step) const override {
     void* ctx2 = static_cast<char*>(ctx) + size_bytes1_;

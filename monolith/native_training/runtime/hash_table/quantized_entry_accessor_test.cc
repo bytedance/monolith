@@ -37,6 +37,8 @@ using ::testing::WithArgs;
 class MockEntryAccessor : public EntryAccessorInterface {
  public:
   MOCK_CONST_METHOD0(SizeBytes, int64_t());
+  MOCK_CONST_METHOD0(UncompressedSizeBytes, int64_t());
+  MOCK_CONST_METHOD0(DebugString, std::string());
   MOCK_CONST_METHOD0(DimSize, int());
   MOCK_CONST_METHOD0(SliceSize, int());
   MOCK_CONST_METHOD1(Init, void(void* ctx));

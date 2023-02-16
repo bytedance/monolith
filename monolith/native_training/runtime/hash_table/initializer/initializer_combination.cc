@@ -15,6 +15,8 @@
 
 #include "monolith/native_training/runtime/hash_table/initializer/initializer_combination.h"
 
+#include "absl/strings/str_format.h"
+
 namespace monolith {
 namespace hash_table {
 namespace {
@@ -30,6 +32,11 @@ class CombinedInitializer : public InitializerInterface {
   void Initialize(absl::Span<float> nums) const override {
     init1_->Initialize(nums);
     init2_->Initialize(nums.subspan(init1_->DimSize()));
+  }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("%s|%s", init1_->DebugString(),
+                           init2_->DebugString());
   }
 
  private:

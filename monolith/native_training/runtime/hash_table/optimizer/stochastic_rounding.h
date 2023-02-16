@@ -25,8 +25,10 @@ namespace monolith {
 namespace hash_table {
 
 inline float stochastic_round(float vf, float p) {
-  unsigned int half_up = half_float::detail::float2half<std::round_toward_infinity>(vf);
-  unsigned int half_down = half_float::detail::float2half<std::round_toward_neg_infinity>(vf);
+  unsigned int half_up =
+      half_float::detail::float2half<std::round_toward_infinity>(vf);
+  unsigned int half_down =
+      half_float::detail::float2half<std::round_toward_neg_infinity>(vf);
   float vf_up = half_float::detail::half2float<float>(half_up);
   float vf_down = half_float::detail::half2float<float>(half_down);
   if (p <= (vf - vf_down) / (vf_up - vf_down)) {
@@ -39,14 +41,13 @@ inline float stochastic_round(float vf, float p) {
 class StochasticRoundingFloat16OptimizerDecorator : public OptimizerInterface {
  public:
   explicit StochasticRoundingFloat16OptimizerDecorator(
-    std::unique_ptr<OptimizerInterface> optimizer)
-        : optimizer_(std::move(optimizer)) {}
+      std::unique_ptr<OptimizerInterface> optimizer)
+      : optimizer_(std::move(optimizer)) {}
 
   // optimize the num based on gradients and the optimizer's data.
   // |num|, |grad| are float arrays whose length is at least DimSize().
   // Result `num` will be stochastically rounded.
-  void Optimize(void* ctx, absl::Span<float> num,
-                absl::Span<const float> grad,
+  void Optimize(void* ctx, absl::Span<float> num, absl::Span<const float> grad,
                 absl::Span<const float> learning_rates,
                 const int64_t global_step = 0) const override {
     optimizer_->Optimize(ctx, num, grad, learning_rates);
@@ -56,25 +57,23 @@ class StochasticRoundingFloat16OptimizerDecorator : public OptimizerInterface {
   }
 
   // Forward all other class methods.
-  int64_t SizeBytes() const override {
-    return optimizer_->SizeBytes();
+  int64_t SizeBytes() const override { return optimizer_->SizeBytes(); }
+
+  int64_t UncompressedSizeBytes() const override {
+    return optimizer_->UncompressedSizeBytes();
   }
+
+  std::string DebugString() const override { return optimizer_->DebugString(); }
 
   // The dim that this optimizer can support.
-  int DimSize() const override {
-    return optimizer_->DimSize();
-  }
+  int DimSize() const override { return optimizer_->DimSize(); }
 
   // The slice size that this optimizer holds.
-  int SliceSize() const override {
-    return optimizer_->SliceSize();
-  }
+  int SliceSize() const override { return optimizer_->SliceSize(); }
 
   // Init optimizer ctx.
   // |num| is at least DimSize() long.
-  void Init(void* ctx) const override {
-    optimizer_->Init(ctx);
-  }
+  void Init(void* ctx) const override { optimizer_->Init(ctx); }
 
   // Save and restore the entry.
   OptimizerDump Save(const void* ctx) const override {
@@ -102,8 +101,9 @@ class StochasticRoundingFloat16OptimizerDecorator : public OptimizerInterface {
    */
   static float rand() {
     update_rng();
-    return static_cast<float>(
-      (((rng_[0] & 65535) << 16) + rng_[1]) & 4294967295) / 4294967296;
+    return static_cast<float>((((rng_[0] & 65535) << 16) + rng_[1]) &
+                              4294967295) /
+           4294967296;
   }
 };
 

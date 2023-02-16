@@ -94,6 +94,9 @@ class HashTableRestoreOp : public AsyncOpKernel {
   void WorkerThread(EmbeddingHashTableTfBridge::DumpShard shard, AsyncPack* p) {
     p->status[shard.idx] = RestoreOneShard(shard, p);
     if (p->finish_num.fetch_add(1) == p->thread_num - 1) {
+      auto summary = p->hash_table->Summary();
+      LOG(INFO) << absl::StrFormat("Hash table: %s, summary: %s", p->basename,
+                                   summary);
       Cleanup(p);
     }
   }
@@ -110,7 +113,8 @@ class HashTableRestoreOp : public AsyncOpKernel {
     io::SequentialRecordReader reader(f.get(), opts);
     Status restore_status;
     auto get_fn = [&reader, &restore_status, &filename](
-        EmbeddingHashTableTfBridge::EntryDump* dump, int64_t* max_update_ts) {
+                      EmbeddingHashTableTfBridge::EntryDump* dump,
+                      int64_t* max_update_ts) {
       Status s = GetRecord(&reader, dump);
       if (TF_PREDICT_FALSE(!s.ok())) {
         if (!errors::IsOutOfRange(s)) {
@@ -165,5 +169,5 @@ REGISTER_OP("MonolithHashTableRestore")
 
 REGISTER_KERNEL_BUILDER(Name("MonolithHashTableRestore").Device(DEVICE_CPU),
                         HashTableRestoreOp);
-}  // namespace tensorflow
 }  // namespace monolith_tf
+}  // namespace tensorflow

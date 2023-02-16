@@ -49,6 +49,7 @@ cc_library(
     deps = [
         ":initializer_config_cc_proto",
         ":initializer_interface",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -59,6 +60,7 @@ cc_library(
     deps = [
         ":initializer_config_cc_proto",
         ":initializer_interface",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -80,6 +82,7 @@ cc_library(
     hdrs = ["initializer_combination.h"],
     deps = [
         ":initializer_interface",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 

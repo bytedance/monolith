@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "monolith/native_training/runtime/hash_table/optimizer/adadelta_optimizer.h"
 #include <cmath>
 #include <memory>
-
-#include "monolith/native_training/runtime/hash_table/optimizer/adadelta_optimizer.h"
+#include "absl/strings/str_format.h"
 
 namespace monolith {
 namespace hash_table {
@@ -30,6 +30,12 @@ class AdadeltaOptimizer : public OptimizerInterface {
     return 2 * conf_.dim_size() * sizeof(float);
   }
 
+  int64_t UncompressedSizeBytes() const override { return SizeBytes(); }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("Adadelta(D=%d)", DimSize());
+  }
+
   int DimSize() const override { return conf_.dim_size(); }
 
   int SliceSize() const override { return 1; }
@@ -42,8 +48,7 @@ class AdadeltaOptimizer : public OptimizerInterface {
     }
   }
 
-  void Optimize(void* ctx, absl::Span<float> num,
-                absl::Span<const float> grad,
+  void Optimize(void* ctx, absl::Span<float> num, absl::Span<const float> grad,
                 absl::Span<const float> learning_rates,
                 const int64_t global_step) const override {
     float* accum = static_cast<float*>(ctx);
@@ -51,13 +56,15 @@ class AdadeltaOptimizer : public OptimizerInterface {
     float effective_lr = learning_rates[0];
     for (int i = 0; i < conf_.dim_size(); ++i) {
       float cur_grad = grad[i] + conf_.weight_decay_factor() * num[i];
-      float new_accum = accum[i] * conf_.averaging_ratio() + cur_grad * cur_grad * (1 - conf_.averaging_ratio());
+      float new_accum = accum[i] * conf_.averaging_ratio() +
+                        cur_grad * cur_grad * (1 - conf_.averaging_ratio());
       float update = std::sqrt(accum_update[i] + conf_.epsilon()) /
                      std::sqrt(new_accum + conf_.epsilon()) * cur_grad;
       float new_w = num[i] - update * effective_lr;
-      float new_accum_update =
-          accum_update[i] * conf_.averaging_ratio() + update * update * (1 - conf_.averaging_ratio());
-      // printf("%d: %f %f %f %f %f\n", i, cur_grad, new_accum, update, new_w, new_accum_update);
+      float new_accum_update = accum_update[i] * conf_.averaging_ratio() +
+                               update * update * (1 - conf_.averaging_ratio());
+      // printf("%d: %f %f %f %f %f\n", i, cur_grad, new_accum, update, new_w,
+      // new_accum_update);
       num[i] = new_w;
       accum[i] = new_accum;
       accum_update[i] = new_accum_update;

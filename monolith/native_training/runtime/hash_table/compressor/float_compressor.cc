@@ -56,7 +56,7 @@ class Fp32FloatCompressor final : public FloatCompressorBase {
                             config.dim_size() * sizeof(float)) {}
 
   std::string DebugString() const override {
-    return absl::StrFormat("Fp32(dim_size=%d)", FloatCompressorBase::DimSize());
+    return absl::StrFormat("Fp32(D=%d)", FloatCompressorBase::DimSize());
   }
 
   void Encode(absl::Span<const float> num, void* compressed) const override {
@@ -83,7 +83,7 @@ class Fp16FloatCompressor final : public FloatCompressorBase {
                             config.dim_size() * sizeof(float)) {}
 
   std::string DebugString() const override {
-    return absl::StrFormat("Fp16(dim_size=%d)", FloatCompressorBase::DimSize());
+    return absl::StrFormat("Fp16(D=%d)", FloatCompressorBase::DimSize());
   }
 
   void Encode(absl::Span<const float> num, void* compressed) const override {
@@ -115,8 +115,7 @@ class FixedR8FloatCompressor final : public FloatCompressorBase {
   }
 
   std::string DebugString() const override {
-    return absl::StrFormat("FixedR8(dim_size=%d)",
-                           FloatCompressorBase::DimSize());
+    return absl::StrFormat("FixedR8(D=%d)", FloatCompressorBase::DimSize());
   }
 
   void Encode(absl::Span<const float> num, void* compressed) const override {
@@ -148,8 +147,7 @@ class OneBitFloatCompressor final : public FloatCompressorBase {
         hash_net_quantizer_(config) {}
 
   std::string DebugString() const override {
-    return absl::StrFormat("OneBit(dim_size=%d)",
-                           FloatCompressorBase::DimSize());
+    return absl::StrFormat("OneBit(D=%d)", FloatCompressorBase::DimSize());
   }
 
   void Encode(absl::Span<const float> num, void* compressed) const override {

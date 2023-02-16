@@ -29,6 +29,11 @@ class OptimizerInterface {
   // How many bytes are required for the optimizer
   virtual int64_t SizeBytes() const = 0;
 
+  // How many bytes are required for the optimizer if not compressed.
+  virtual int64_t UncompressedSizeBytes() const = 0;
+
+  virtual std::string DebugString() const = 0;
+
   // The dim that this optimizer can support.
   virtual int DimSize() const = 0;
 

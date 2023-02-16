@@ -43,6 +43,10 @@ class HashNetRetriever final : public RetrieverBase {
     }
   }
 
+  std::string DebugString() const override {
+    return absl::StrFormat("HashNet(D=%d)", RetrieverBase::DimSize());
+  }
+
  private:
   std::unique_ptr<HashNetQuantizer> hash_net_quantizer_;
 };

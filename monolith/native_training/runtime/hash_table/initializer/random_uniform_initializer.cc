@@ -15,6 +15,7 @@
 #include "monolith/native_training/runtime/hash_table/initializer/random_uniform_initializer.h"
 
 #include <random>
+#include "absl/strings/str_format.h"
 
 namespace monolith {
 namespace hash_table {
@@ -34,6 +35,11 @@ class RandomUniformInitializer : public InitializerInterface {
     for (int i = 0; i < conf_.dim_size(); ++i) {
       nums[i] = distribution(generator);
     }
+  }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("RandomUniform(D=%d, min=%f, max=%f)", DimSize(),
+                           conf_.minval(), conf_.maxval());
   }
 
  private:

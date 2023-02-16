@@ -15,6 +15,7 @@
 #include <cmath>
 #include <memory>
 
+#include "absl/strings/str_format.h"
 #include "monolith/native_training/runtime/hash_table/optimizer/ftrl_optimizer.h"
 
 namespace monolith {
@@ -29,6 +30,12 @@ class FtrlOptimizer : public OptimizerInterface {
   // We need both Zero and Norm in the opt state.
   int64_t SizeBytes() const override {
     return 2 * conf_.dim_size() * sizeof(float);
+  }
+
+  int64_t UncompressedSizeBytes() const override { return SizeBytes(); }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("Ftrl(D=%d)", DimSize());
   }
 
   int DimSize() const override { return conf_.dim_size(); }
@@ -46,8 +53,7 @@ class FtrlOptimizer : public OptimizerInterface {
 
   // Please refer to this link for the algorithm:
   // https://www.eecs.tufts.edu/~dsculley/papers/ad-click-prediction.pdf
-  void Optimize(void* ctx, absl::Span<float> num,
-                absl::Span<const float> grad,
+  void Optimize(void* ctx, absl::Span<float> num, absl::Span<const float> grad,
                 absl::Span<const float> learning_rates,
                 const int64_t global_step) const override {
     float* norm = static_cast<float*>(ctx);
@@ -55,19 +61,17 @@ class FtrlOptimizer : public OptimizerInterface {
     float effective_lr = learning_rates[0];
     for (int i = 0; i < conf_.dim_size(); ++i) {
       auto norm_new = norm[i] + grad[i] * grad[i];
-      auto sigma =
-          (std::sqrt(norm_new) - std::sqrt(norm[i])) / effective_lr;
+      auto sigma = (std::sqrt(norm_new) - std::sqrt(norm[i])) / effective_lr;
       zero[i] += (grad[i] - sigma * num[i]);
       norm[i] = norm_new;
-      num[i] =
-          (std::abs(zero[i]) > conf_.l1_regularization_strength())
-              ? effective_lr *
-                    (std::signbit(zero[i]) *
-                         conf_.l1_regularization_strength() -
-                     zero[i]) /
-                    (std::sqrt(norm[i]) + conf_.beta() +
-                     conf_.l2_regularization_strength() * effective_lr)
-              : 0.0;
+      num[i] = (std::abs(zero[i]) > conf_.l1_regularization_strength())
+                   ? effective_lr *
+                         (std::signbit(zero[i]) *
+                              conf_.l1_regularization_strength() -
+                          zero[i]) /
+                         (std::sqrt(norm[i]) + conf_.beta() +
+                          conf_.l2_regularization_strength() * effective_lr)
+                   : 0.0;
     }
   }
 

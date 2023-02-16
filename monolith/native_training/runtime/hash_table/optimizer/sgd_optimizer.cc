@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "monolith/native_training/runtime/hash_table/optimizer/sgd_optimizer.h"
 #include <cmath>
 #include <memory>
-
-#include "monolith/native_training/runtime/hash_table/optimizer/sgd_optimizer.h"
+#include "absl/strings/str_format.h"
 
 namespace monolith {
 namespace hash_table {
@@ -27,14 +27,19 @@ class SgdOptimizer : public OptimizerInterface {
 
   int64_t SizeBytes() const override { return 0; }
 
+  int64_t UncompressedSizeBytes() const override { return SizeBytes(); }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("Sgd(D=%d)", DimSize());
+  }
+
   int DimSize() const override { return conf_.dim_size(); }
 
   int SliceSize() const override { return 1; }
 
   void Init(void* ctx) const override {}
 
-  void Optimize(void* ctx, absl::Span<float> num,
-                absl::Span<const float> grad,
+  void Optimize(void* ctx, absl::Span<float> num, absl::Span<const float> grad,
                 absl::Span<const float> learning_rates,
                 const int64_t global_step) const {
     float effective_lr = learning_rates[0];

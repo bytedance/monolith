@@ -15,7 +15,7 @@
 
 #include <cmath>
 #include <memory>
-
+#include "absl/strings/str_format.h"
 #include "monolith/native_training/runtime/hash_table/optimizer/adagrad_optimizer.h"
 #include "monolith/native_training/runtime/hash_table/optimizer/avx_utils.h"
 
@@ -30,6 +30,14 @@ class AdagradOptimizer : public OptimizerInterface {
 
   int64_t SizeBytes() const override {
     return conf_.dim_size() * sizeof(float);
+  }
+
+  int64_t UncompressedSizeBytes() const override {
+    return conf_.dim_size() * sizeof(float);
+  }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("Adagrad(D=%d)", DimSize());
   }
 
   int DimSize() const override { return conf_.dim_size(); }

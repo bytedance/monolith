@@ -16,6 +16,7 @@
 
 #include <memory>
 #include "absl/algorithm/container.h"
+#include "absl/strings/str_format.h"
 #include "monolith/native_training/runtime/hash_table/retriever/retriever_base.h"
 
 namespace monolith {
@@ -32,6 +33,10 @@ class RawRetriever final : public RetrieverBase {
 
   void Backward(absl::Span<const float> num, absl::Span<float> grad,
                 int64_t global_step) const override {}
+
+  std::string DebugString() const override {
+    return absl::StrFormat("Raw(D=%d)", RetrieverBase::DimSize());
+  }
 };
 
 }  // namespace

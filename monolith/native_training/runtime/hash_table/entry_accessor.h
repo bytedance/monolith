@@ -34,8 +34,13 @@ class EntryAccessorInterface {
  public:
   virtual ~EntryAccessorInterface() = default;
 
-  // Size bytes need to be aloocated in this entry.
+  // Size bytes need to be allocated in this entry.
   virtual int64_t SizeBytes() const = 0;
+
+  // Size bytes need to be allocated in this entry if not compressed.
+  virtual int64_t UncompressedSizeBytes() const = 0;
+
+  virtual std::string DebugString() const = 0;
 
   // The dim that this entry accessor can support
   virtual int DimSize() const = 0;

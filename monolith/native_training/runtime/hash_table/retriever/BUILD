@@ -30,6 +30,7 @@ cc_library(
     deps = [
         ":retriever_base",
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -51,6 +52,7 @@ cc_library(
         ":retriever_base",
         "//monolith/native_training/runtime/hash_table/compressor:fake_quantizer",
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -71,6 +73,7 @@ cc_library(
     deps = [
         ":retriever_base",
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 

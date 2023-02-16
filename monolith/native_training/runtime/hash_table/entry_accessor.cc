@@ -45,9 +45,20 @@ class ServingEntryAccessor final : public EntryAccessorInterface {
   explicit ServingEntryAccessor(
       std::unique_ptr<FloatCompressorInterface> compressor)
       : compressor_(std::move(compressor)),
-        size_bytes_(compressor_->SizeBytes()) {}
+        size_bytes_(compressor_->SizeBytes()),
+        uncompressed_size_bytes_(compressor_->UncompressedSizeBytes()) {}
 
   int64_t SizeBytes() const override { return size_bytes_; }
+
+  int64_t UncompressedSizeBytes() const override {
+    return uncompressed_size_bytes_;
+  }
+
+  std::string DebugString() const override {
+    return absl::StrFormat(
+        R"({"compressor": "%s", "size_bytes": %ld, "uncompressed_size_bytes": %ld})",
+        compressor_->DebugString(), SizeBytes(), UncompressedSizeBytes());
+  }
 
   int DimSize() const override { return compressor_->DimSize(); }
 
@@ -91,20 +102,12 @@ class ServingEntryAccessor final : public EntryAccessorInterface {
     std::vector<float> num(dump.num_size());
     absl::c_copy(dump.num(), num.begin());
     compressor_->Encode(num, ctx);
-
-    static int64_t total_size_bytes = 0, total_uncompressed_size_bytes = 0;
-    total_size_bytes += compressor_->SizeBytes();
-    total_uncompressed_size_bytes += compressor_->UncompressedSizeBytes();
-    LOG_EVERY_N_SEC(INFO, 60) << absl::StrFormat(
-        "Restore %ld bytes into memory using compressor %s, that is %ld bytes "
-        "if uncompressed",
-        total_size_bytes, compressor_->DebugString(),
-        total_uncompressed_size_bytes);
   }
 
  private:
   std::unique_ptr<FloatCompressorInterface> compressor_;
   int size_bytes_;
+  int uncompressed_size_bytes_;
 };
 
 // The layout of ctx is:
@@ -118,6 +121,7 @@ class EntryAccessor final : public EntryAccessorInterface {
         optimizer_(std::move(optimizer)),
         retriever_(std::move(retriever)),
         optimizer_bytes_(optimizer_->SizeBytes()),
+        uncompressed_optimizer_bytes_(optimizer_->UncompressedSizeBytes()),
         dim_size_(initializer_->DimSize()),
         slice_size_(optimizer_->SliceSize()),
         num_bytes_(retriever_->SizeBytes()) {
@@ -135,6 +139,17 @@ class EntryAccessor final : public EntryAccessorInterface {
   EntryAccessor& operator=(EntryAccessor&&) = default;
 
   int64_t SizeBytes() const override { return num_bytes_ + optimizer_bytes_; }
+
+  int64_t UncompressedSizeBytes() const override {
+    return num_bytes_ + uncompressed_optimizer_bytes_;
+  }
+
+  std::string DebugString() const override {
+    return absl::StrFormat(
+        R"({"initializer": "%s", "optimizer": "%s", "retriever": "%s"})",
+        initializer_->DebugString(), optimizer_->DebugString(),
+        retriever_->DebugString());
+  }
 
   int DimSize() const override { return dim_size_; }
 
@@ -201,6 +216,7 @@ class EntryAccessor final : public EntryAccessorInterface {
   std::unique_ptr<OptimizerInterface> optimizer_;
   std::unique_ptr<RetrieverInterface> retriever_;
   const int64_t optimizer_bytes_ = 0;
+  const int64_t uncompressed_optimizer_bytes_ = 0;
   const int dim_size_ = 0;
   const int slice_size_ = 0;
   const int64_t num_bytes_ = 0;

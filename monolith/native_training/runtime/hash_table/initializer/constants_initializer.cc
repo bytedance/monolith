@@ -16,6 +16,8 @@
 
 #include "monolith/native_training/runtime/hash_table/initializer/constants_initializer.h"
 
+#include "absl/strings/str_format.h"
+
 namespace monolith {
 namespace hash_table {
 namespace {
@@ -31,6 +33,10 @@ class ConstantsInitializer : public InitializerInterface {
     for (int i = 0; i < dim_size_; ++i) {
       nums[i] = constant_;
     }
+  }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("Constants(D=%d, C=%f)", dim_size_, constant_);
   }
 
  private:

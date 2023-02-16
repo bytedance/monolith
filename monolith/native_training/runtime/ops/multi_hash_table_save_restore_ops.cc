@@ -35,10 +35,13 @@
 #include "tensorflow/core/platform/path.h"
 #include "tensorflow/core/platform/random.h"
 #include "tensorflow/core/platform/threadpool.h"
+#include "third_party/nlohmann/json.hpp"
 
 namespace tensorflow {
 namespace monolith_tf {
 namespace {
+
+using tensorflow::strings::HumanReadableNumBytes;
 
 // Carries the data through async process.
 template <typename TableType>
@@ -53,6 +56,8 @@ struct AsyncPack {
         mtable(std::move(p_mtable)),
         lock_ctxs(std::move(p_lock_ctxs)),
         done(std::move(p_done)),
+        thread_num(p_thread_num),
+        finish_num(0),
         status(p_thread_num) {}
 
   ~AsyncPack() {
@@ -67,6 +72,8 @@ struct AsyncPack {
   core::RefCountPtr<TableType> mtable;
   std::vector<std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx>> lock_ctxs;
   std::function<void()> done;
+  const int thread_num;
+  mutable std::atomic_int finish_num;
   mutable std::vector<Status> status;
 };
 
@@ -285,6 +292,22 @@ class MultiHashTableRestoreOp : public AsyncOpKernel {
   void WorkerThread(EmbeddingHashTableTfBridge::DumpShard shard,
                     std::shared_ptr<const AsyncPack<TableType>> p) {
     p->status[shard.idx] = RestoreOneShard(shard, p.get());
+    if (p->finish_num.fetch_add(1) == p->thread_num - 1) {
+      int64_t total_byte_size = 0, total_uncompressed_byte_size = 0;
+      for (int i = 0; i < p->mtable->size(); ++i) {
+        auto t = p->mtable->table(i);
+        auto name = p->mtable->name(i);
+        auto summary = t->Summary();
+        LOG(INFO) << absl::StrFormat("Hash table: %s, summary: %s", name,
+                                     summary);
+        LogSummary(summary, &total_byte_size, &total_uncompressed_byte_size);
+      }
+
+      LOG(INFO) << absl::StrFormat(
+          "total memory: %s, total memory if not compressed: %s",
+          HumanReadableNumBytes(total_byte_size),
+          HumanReadableNumBytes(total_uncompressed_byte_size));
+    }
   }
 
   Status RestoreOneShard(EmbeddingHashTableTfBridge::DumpShard shard,
@@ -369,6 +392,23 @@ class MultiHashTableRestoreOp : public AsyncOpKernel {
                               shard.idx);
     return Status::OK();
   }
+
+ private:
+  template <bool enabled = std::is_same<TableType, MultiHashTable>::value>
+  inline typename std::enable_if<enabled, void>::type LogSummary(
+      const std::string& summary, int64_t* total_byte_size,
+      int64_t* total_uncompressed_byte_size) {
+    nlohmann::json json = nlohmann::json::parse(summary);
+    CHECK(json.contains("memory"));
+    CHECK(json.contains("memory_if_not_compressed"));
+    *total_byte_size += int64_t(json["memory"]);
+    *total_uncompressed_byte_size += int64_t(json["memory_if_not_compressed"]);
+  }
+
+  template <bool enabled = std::is_same<TableType, MultiHashTable>::value>
+  inline typename std::enable_if<!enabled, void>::type LogSummary(
+      const std::string& summary, int64_t* total_byte_size,
+      int64_t* total_uncompressed_byte_size) {}
 };
 
 class MultiHashTableFeatureStatOp : public OpKernel {

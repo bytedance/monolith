@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "monolith/native_training/runtime/hash_table/optimizer/moving_average_optimizer.h"
 #include <cmath>
 #include <memory>
-
-#include "monolith/native_training/runtime/hash_table/optimizer/moving_average_optimizer.h"
+#include "absl/strings/str_format.h"
 
 namespace monolith {
 namespace hash_table {
@@ -26,22 +26,26 @@ class MovingAverageOptimizer : public OptimizerInterface {
   explicit MovingAverageOptimizer(MovingAverageOptimizerConfig config)
       : conf_(std::move(config)) {}
 
-  int64_t SizeBytes() const override {
-    return 0;
+  int64_t SizeBytes() const override { return 0; }
+
+  int64_t UncompressedSizeBytes() const override { return SizeBytes(); }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("MovingAverage(D=%d)", DimSize());
   }
 
   int DimSize() const override { return conf_.dim_size(); }
 
   int SliceSize() const override { return 1; }
 
-  void Init(void* ctx) const override { }
+  void Init(void* ctx) const override {}
 
-  void Optimize(void* ctx, absl::Span<float> num,
-                absl::Span<const float> grad,
+  void Optimize(void* ctx, absl::Span<float> num, absl::Span<const float> grad,
                 absl::Span<const float> learning_rates,
                 const int64_t global_step) const override {
     for (int i = 0; i < conf_.dim_size(); ++i) {
-      float new_w = conf_.momentum() * num[i] + (1 - conf_.momentum()) * grad[i];
+      float new_w =
+          conf_.momentum() * num[i] + (1 - conf_.momentum()) * grad[i];
       num[i] = new_w;
     }
   }
@@ -51,7 +55,7 @@ class MovingAverageOptimizer : public OptimizerInterface {
     return dump;
   }
 
-  void Restore(void* ctx, OptimizerDump dump) const override { }
+  void Restore(void* ctx, OptimizerDump dump) const override {}
 
  private:
   MovingAverageOptimizerConfig conf_;

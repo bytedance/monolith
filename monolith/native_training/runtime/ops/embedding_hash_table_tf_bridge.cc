@@ -391,6 +391,10 @@ std::string EmbeddingHashTableTfBridge::DebugString() const {
   return config_.DebugString();
 }
 
+std::string EmbeddingHashTableTfBridge::Summary() const {
+  return table_->DebugString();
+}
+
 int32 EmbeddingHashTableTfBridge::dim_size() const { return dim_size_; }
 int32 EmbeddingHashTableTfBridge::slice_size() const {
   return table_->SliceSize();

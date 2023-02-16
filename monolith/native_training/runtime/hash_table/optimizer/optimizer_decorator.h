@@ -30,8 +30,14 @@ class OptimizerDecorator : public OptimizerInterface {
   explicit OptimizerDecorator(std::unique_ptr<OptimizerInterface> base_opt)
       : base_opt_(std::move(base_opt)) {}
 
-  int64_t SizeBytes() const override {
-    return base_opt_.get()->SizeBytes();
+  int64_t SizeBytes() const override { return base_opt_.get()->SizeBytes(); }
+
+  int64_t UncompressedSizeBytes() const override {
+    return base_opt_.get()->UncompressedSizeBytes();
+  }
+
+  std::string DebugString() const override {
+    return base_opt_.get()->DebugString();
   }
 
   int DimSize() const override { return base_opt_.get()->DimSize(); }
@@ -40,23 +46,25 @@ class OptimizerDecorator : public OptimizerInterface {
 
   void Init(void* ctx) const override { return base_opt_.get()->Init(ctx); }
 
-  void Optimize(void* ctx, absl::Span<float> num,
-                absl::Span<const float> grad,
+  void Optimize(void* ctx, absl::Span<float> num, absl::Span<const float> grad,
                 absl::Span<const float> learning_rates,
                 const int64_t global_step = 0) const override {
     return base_opt_.get()->Optimize(ctx, num, grad, learning_rates);
   }
 
-  OptimizerDump Save(const void* ctx) const override { return base_opt_.get()->Save(ctx); }
+  OptimizerDump Save(const void* ctx) const override {
+    return base_opt_.get()->Save(ctx);
+  }
 
-  void Restore(void* ctx, OptimizerDump dump) const override { return base_opt_.get()->Restore(ctx, dump); }
-
+  void Restore(void* ctx, OptimizerDump dump) const override {
+    return base_opt_.get()->Restore(ctx, dump);
+  }
 
   virtual void OptimizeWithLatestValue(void* ctx, absl::Span<float> num,
-                               absl::Span<const float> grad,
-                               absl::Span<const float> learning_rates,
-                               absl::Span<float> latest_value,
-                               const int64_t global_step = 0) const = 0;
+                                       absl::Span<const float> grad,
+                                       absl::Span<const float> learning_rates,
+                                       absl::Span<float> latest_value,
+                                       const int64_t global_step = 0) const = 0;
 
  protected:
   std::unique_ptr<OptimizerInterface> base_opt_;

@@ -16,7 +16,7 @@
 
 #include <memory>
 #include "absl/algorithm/container.h"
-
+#include "absl/strings/str_format.h"
 #include "monolith/native_training/runtime/hash_table/retriever/retriever_base.h"
 
 namespace monolith {
@@ -37,6 +37,10 @@ class FakeQuantRetriever final : public RetrieverBase {
 
   void Backward(absl::Span<const float> num, absl::Span<float> grad,
                 int64_t global_step) const override {}
+
+  std::string DebugString() const override {
+    return absl::StrFormat("FakeQuant(D=%d)", RetrieverBase::DimSize());
+  }
 
  private:
   FakeQuantizer fake_quantizer_;

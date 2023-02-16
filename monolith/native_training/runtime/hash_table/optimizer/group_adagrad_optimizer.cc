@@ -15,6 +15,7 @@
 #include <cmath>
 #include <memory>
 
+#include "absl/strings/str_format.h"
 #include "monolith/native_training/runtime/hash_table/optimizer/group_adagrad_optimizer.h"
 
 namespace monolith {
@@ -28,6 +29,14 @@ class GroupAdaGradOptimizer : public OptimizerInterface {
 
   // Only need 4 byte, grad_square_sum = sum(g_max^2)
   int64_t SizeBytes() const override { return sizeof(float); }
+
+  int64_t UncompressedSizeBytes() const override {
+    return conf_.dim_size() * sizeof(float);
+  }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("GroupAdaGrad(D=%d)", DimSize());
+  }
 
   int DimSize() const override { return conf_.dim_size(); }
 

@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "monolith/native_training/runtime/hash_table/optimizer/rmsprop_optimizer.h"
 #include <cmath>
 #include <memory>
-
-#include "monolith/native_training/runtime/hash_table/optimizer/rmsprop_optimizer.h"
+#include "absl/strings/str_format.h"
 
 namespace monolith {
 namespace hash_table {
@@ -30,6 +30,12 @@ class RmspropOptimizer : public OptimizerInterface {
     return (conf_.dim_size()) * sizeof(float);
   }
 
+  int64_t UncompressedSizeBytes() const override { return SizeBytes(); }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("Rmsprop(D=%d)", DimSize());
+  }
+
   int DimSize() const override { return conf_.dim_size(); }
 
   int SliceSize() const override { return 1; }
@@ -41,8 +47,7 @@ class RmspropOptimizer : public OptimizerInterface {
     }
   }
 
-  void Optimize(void* ctx, absl::Span<float> num,
-                absl::Span<const float> grad,
+  void Optimize(void* ctx, absl::Span<float> num, absl::Span<const float> grad,
                 absl::Span<const float> learning_rates,
                 const int64_t global_step) const override {
     float* n = static_cast<float*>(ctx);
@@ -50,12 +55,12 @@ class RmspropOptimizer : public OptimizerInterface {
       const float& cur_grad = grad[i];
       float new_n = n[i];
       float new_w = num[i];
-      double dx = cur_grad +
-                  static_cast<double>(conf_.weight_decay_factor()) * new_w;
+      double dx =
+          cur_grad + static_cast<double>(conf_.weight_decay_factor()) * new_w;
       new_n = static_cast<double>(conf_.momentum()) * new_n +
               (1 - static_cast<double>(conf_.momentum())) * dx * dx;
-      double eta = static_cast<double>(conf_.learning_rate()) /
-                   (std::sqrt(new_n) + 1);
+      double eta =
+          static_cast<double>(conf_.learning_rate()) / (std::sqrt(new_n) + 1);
       new_w -= eta * dx;
       n[i] = new_n;
       num[i] = new_w;
@@ -86,7 +91,6 @@ class RmspropOptimizer : public OptimizerInterface {
   RmspropOptimizerConfig conf_;
 };
 
-
 class RmspropV2Optimizer : public OptimizerInterface {
  public:
   explicit RmspropV2Optimizer(RmspropV2OptimizerConfig config)
@@ -94,6 +98,12 @@ class RmspropV2Optimizer : public OptimizerInterface {
 
   int64_t SizeBytes() const override {
     return (conf_.dim_size()) * sizeof(float);
+  }
+
+  int64_t UncompressedSizeBytes() const override { return SizeBytes(); }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("RmspropV2(D=%d)", DimSize());
   }
 
   int DimSize() const override { return conf_.dim_size(); }
@@ -107,8 +117,7 @@ class RmspropV2Optimizer : public OptimizerInterface {
     }
   }
 
-  void Optimize(void* ctx, absl::Span<float> num,
-                absl::Span<const float> grad,
+  void Optimize(void* ctx, absl::Span<float> num, absl::Span<const float> grad,
                 absl::Span<const float> learning_rates,
                 const int64_t global_step) const override {
     // TODO(eric.wei): implement RMSPropV2 using AVX
@@ -116,20 +125,19 @@ class RmspropV2Optimizer : public OptimizerInterface {
   }
 
   void OptimizeNormal(void* ctx, absl::Span<float> num,
-                absl::Span<const float> grad,
-                absl::Span<const float> learning_rates,
-                const int64_t global_step) const {
+                      absl::Span<const float> grad,
+                      absl::Span<const float> learning_rates,
+                      const int64_t global_step) const {
     float* n = static_cast<float*>(ctx);
     for (int i = 0; i < conf_.dim_size(); ++i) {
       const float& cur_grad = grad[i];
       float new_n = n[i];
       float new_w = num[i];
-      double dx = cur_grad +
-                  static_cast<double>(conf_.weight_decay_factor()) * new_w;
-      new_n = static_cast<double>(conf_.momentum()) * new_n +
-              dx * dx;
-      double eta = static_cast<double>(learning_rates[0]) /
-                   (std::sqrt(new_n) + 1);
+      double dx =
+          cur_grad + static_cast<double>(conf_.weight_decay_factor()) * new_w;
+      new_n = static_cast<double>(conf_.momentum()) * new_n + dx * dx;
+      double eta =
+          static_cast<double>(learning_rates[0]) / (std::sqrt(new_n) + 1);
       new_w -= eta * dx;
       n[i] = new_n;
       num[i] = new_w;
@@ -138,7 +146,8 @@ class RmspropV2Optimizer : public OptimizerInterface {
 
   OptimizerDump Save(const void* ctx) const override {
     OptimizerDump dump;
-    RmspropV2OptimizerDump* rmspropv2_dump = dump.add_dump()->mutable_rmspropv2();
+    RmspropV2OptimizerDump* rmspropv2_dump =
+        dump.add_dump()->mutable_rmspropv2();
     const float* n = static_cast<const float*>(ctx);
 
     for (int i = 0; i < conf_.dim_size(); ++i) {
@@ -161,7 +170,6 @@ class RmspropV2Optimizer : public OptimizerInterface {
 };
 
 }  // namespace
-
 
 std::unique_ptr<OptimizerInterface> NewRmspropOptimizer(
     RmspropOptimizerConfig config) {

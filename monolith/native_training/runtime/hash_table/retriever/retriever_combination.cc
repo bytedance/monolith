@@ -15,7 +15,7 @@
 #include "monolith/native_training/runtime/hash_table/retriever/retriever_combination.h"
 
 #include <memory>
-
+#include "absl/strings/str_format.h"
 #include "monolith/native_training/runtime/hash_table/retriever/retriever_base.h"
 
 namespace monolith {
@@ -44,6 +44,11 @@ class CombinedRetriever final : public RetrieverBase {
                           global_step);
     retriever2_->Backward(num.subspan(dim_size1), grad.subspan(dim_size1),
                           global_step);
+  }
+
+  std::string DebugString() const override {
+    return absl::StrFormat("%s|%s", retriever1_->DebugString(),
+                           retriever2_->DebugString());
   }
 
  private:

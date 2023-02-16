@@ -299,6 +299,15 @@ class CuckooEmbeddingHashTable : public EmbeddingHashTableInterface {
 
   bool Contains(int64_t id) const override { return m_.contains(id); }
 
+  std::string DebugString() const override {
+    return absl::StrFormat(
+        R"({"accessor": %s, "size": %ld, "memory": %ld, "memory_if_not_compressed": %ld, "load_factor": %f})",
+        accessor_->DebugString(), Size(),
+        Size() * (accessor_->SizeBytes() + sizeof(int64_t)),
+        Size() * (accessor_->UncompressedSizeBytes() + sizeof(int64_t)),
+        m_.load_factor());
+  }
+
  private:
   void UpsertEntry(int64_t id,
                    const std::function<void(EntryType&)>& upsert_fn) {
@@ -336,7 +345,9 @@ std::unique_ptr<EmbeddingHashTableInterface> NewCuckooEmbeddingHashTable(
     const SlotExpireTimeConfig& slot_expire_time_config) {
   const int64_t size_bytes = accessor->SizeBytes();
   Params p = {
-      std::move(config), std::move(accessor), initial_capacity,
+      std::move(config),
+      std::move(accessor),
+      initial_capacity,
       slot_expire_time_config,
   };
   if (type == EmbeddingHashTableConfig::PACKED) {

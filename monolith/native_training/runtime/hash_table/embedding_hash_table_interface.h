@@ -30,7 +30,7 @@ struct GpuExtraArgs {
 };
 
 // Hash table maps int64 to a float array with fixed length.
-// Implemention of this interface should guarantee thread safety.
+// Implementation of this interface should guarantee thread safety.
 class EmbeddingHashTableInterface {
  public:
   virtual ~EmbeddingHashTableInterface() = default;
@@ -127,6 +127,8 @@ class EmbeddingHashTableInterface {
 
   // Returns true if the current table contains the given key.
   virtual bool Contains(int64_t id) const = 0;
+
+  virtual std::string DebugString() const = 0;
 };
 
 // A decorator will default redirect all method to base class.
@@ -208,6 +210,8 @@ class DefaultEmbeddingHashTableDecorator : public EmbeddingHashTableInterface {
   int SliceSize() const override { return base_->SliceSize(); }
 
   bool Contains(int64_t id) const override { return base_->Contains(id); }
+
+  std::string DebugString() const override { return base_->DebugString(); }
 
  private:
   std::unique_ptr<EmbeddingHashTableInterface> base_;
