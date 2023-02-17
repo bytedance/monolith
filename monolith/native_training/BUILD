@@ -514,11 +514,11 @@ py_library(
         ":estimator",
         ":feature",
         ":file_ops",
+        ":mlp_utils",
         ":monolith_export",
         ":native_task",
         ":native_task_context",
         ":utils",
-        ":mlp_utils",
         "//monolith:utils",
         "//monolith/core:base_layer",
         "//monolith/native_training:feature_utils",
@@ -646,8 +646,8 @@ py_test(
     srcs = ["model_comp_test.py"],
     deps = [
         ":cpu_training",
-        ":native_model",
         ":estimator",
+        ":native_model",
     ],
 )
 
@@ -773,8 +773,8 @@ py_library(
     srcs = ["service_discovery.py"],
     deps = [
         ":consul",
-        ":zk_utils",
         ":mlp_utils",
+        ":zk_utils",
     ],
 )
 
@@ -1124,7 +1124,6 @@ py_library(
     srcs = ["net_utils.py"],
     deps = [
         requirement("netifaces"),
-        "//monolith:utils",
     ],
 )
 
@@ -1226,7 +1225,6 @@ py_test(
         ":nested_tensors",
     ],
 )
-
 
 py_library(
     name = "mlp_utils",

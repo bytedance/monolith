@@ -22,8 +22,6 @@ import ipaddress
 
 import netifaces
 
-from monolith import utils
-
 
 class NodeAliveChecker:
 
