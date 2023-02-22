@@ -22,6 +22,7 @@ import time
 from absl import logging
 import grpc
 
+from monolith.native_training import net_utils
 from monolith.native_training.proto import primus_am_service_pb2
 from monolith.native_training.proto import primus_am_service_pb2_grpc
 
@@ -33,13 +34,7 @@ def get_local_host():
   elif "YARN_INET_ADDR" in os.environ:
     local_host = os.environ["YARN_INET_ADDR"]
   else:
-    try:
-      local_host = socket.gethostbyname(socket.gethostname())
-    except socket.gaierror as e:
-      logging.info('Failed to get ipv4, try to get ipv6 instead')
-      local_host = socket.getaddrinfo(socket.gethostname(), None,
-                                      socket.AF_INET6)[0][4][0]
-      local_host = '[{}]'.format(local_host)
+    local_host = net_utils.get_local_ip()
   assert local_host
   return local_host
 

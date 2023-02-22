@@ -20,8 +20,6 @@ import threading
 from typing import Dict, List
 import ipaddress
 
-import netifaces
-
 
 class NodeAliveChecker:
 
@@ -110,31 +108,24 @@ def concat_ip_and_port(ip: str, port: int):
     return f"[{ip}]:{port}"
 
 
-def _get_eth_netinterfaces():
-  return [i for i in netifaces.interfaces() if i.startswith("eth")]
+def get_local_ip():
+  try:
+    return socket.getaddrinfo(socket.gethostname(), None)[0][4][0]
+  except socket.gaierror:
+    return socket.getaddrinfo(socket.gethostname(),
+                              None,
+                              family=socket.AF_INET6)[0][4][0]
 
 
 def is_ipv4_supported():
-  l = _get_eth_netinterfaces()
-  for i in l:
-    addrs = netifaces.ifaddresses(i)
-    if netifaces.AFINET in addrs:
-      return True
-  return False
+  return not is_ipv6_address(get_local_ip())
 
 
 def get_local_server_addr(port: int):
   """Given a port. Returns an addr.
   In the machine that supports IPv4, it is equivalent to gethostbyname(gethostname()).
   """
-  l = _get_eth_netinterfaces()
-  for i in l:
-    addrs = netifaces.ifaddresses(i)
-    if netifaces.AF_INET in addrs:
-      return concat_ip_and_port(addrs[netifaces.AF_INET][0]["addr"], port)
-    elif netifaces.AF_INET6 in addrs:
-      return concat_ip_and_port(addrs[netifaces.AF_INET6][0]["addr"], port)
-  return None
+  return concat_ip_and_port(get_local_ip(), port)
 
 
 class AddressFamily(object):

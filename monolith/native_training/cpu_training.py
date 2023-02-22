@@ -1695,9 +1695,8 @@ def distributed_train(config: DistributedCpuTrainingConfig,
     server = tf.distribute.Server({"local": [addr]}, config=server_config)
   else:
     assert isinstance(discovery, ServiceDiscovery)
-    # We prefer to use another nic since the default client will always use eth0.
     ip = yarn_runtime.get_local_host()
-    server = tf.distribute.Server({"local": [ip + ":0"]}, config=server_config)
+    server = tf.distribute.Server({"local": [net_utils.concat_ip_and_port(ip, 0)]}, config=server_config)
     addr = urlparse(server.target).netloc
 
   _prepare_server(server.target, config)

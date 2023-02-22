@@ -1106,6 +1106,7 @@ py_library(
     name = "yarn_runtime",
     srcs = ["yarn_runtime.py"],
     deps = [
+        ":net_utils",
         "//monolith/native_training/proto:primus_am_service_py_proto",
         "//monolith/native_training/proto:primus_am_service_py_proto_grpc",
     ],
@@ -1122,9 +1123,6 @@ py_test(
 py_library(
     name = "net_utils",
     srcs = ["net_utils.py"],
-    deps = [
-        requirement("netifaces"),
-    ],
 )
 
 py_test(
