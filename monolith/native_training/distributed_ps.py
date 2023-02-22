@@ -769,23 +769,60 @@ class PartitionedHashTable(object):
   def _native_hash_table_lookup_raw(self, lookup_data_on_wk: LookupData,
                                     lookup_data_on_wk_row_split: LookupData):
     ps_idx_to_multi_type_resp = {}
+
+    def emit_lookup_timer_ops(i, interval):
+        return [
+            logging_ops.emit_timer(
+                "embedding_lookup",
+                tf.cast(interval, tf.float32),
+                tags={
+                    "model_name": native_task_context.get().model_name,
+                    "ps": str(i)
+                })
+        ]
+
+    interval_ops = []
     for i in range(self._num_ps):
       table: multi_hash_table_ops.RawMultiTypeHashTable = self._tables[i]
+      (splitted_id_values,), send_ts = logging_ops.tensors_timestamp(
+          [lookup_data_on_wk[i][self._native_multi_hash_table_fake_table]])
       splitted_id = tf.RaggedTensor.from_row_splits(
-          lookup_data_on_wk[i][self._native_multi_hash_table_fake_table],
+          splitted_id_values,
           lookup_data_on_wk_row_split[i][
               self._native_multi_hash_table_fake_table],
           validate=False)
       is_standalone = export_context.is_exporting_standalone() or self._local_ps
       with nullcontext() if is_standalone else ps_device(i):
         flat_emb = table.raw_lookup(splitted_id)
+      (flat_emb,), end_ts = logging_ops.tensors_timestamp([flat_emb])
+      interval_ops.extend(emit_lookup_timer_ops(i, end_ts - send_ts))
       ps_idx_to_multi_type_resp[i] = {
           self._native_multi_hash_table_fake_table: flat_emb
       }
-    return ps_idx_to_multi_type_resp
+
+    ret = {}
+    with tf.control_dependencies(interval_ops):
+      for i, sub_item in ps_idx_to_multi_type_resp.items():
+        ret[i] = {}
+        for tname, ts in sub_item.items():
+          ret[i][tname] = tf.identity(ts)
+    return ret
 
   def _lookup_raw(self, lookup_data_on_wk: LookupData):
     ps_idx_to_multi_type_resp = {}
+
+    def emit_lookup_timer_ops(i, interval):
+        return [
+            logging_ops.emit_timer(
+                "embedding_lookup",
+                tf.cast(interval, tf.float32),
+                tags={
+                    "model_name": native_task_context.get().model_name,
+                    "ps": str(i)
+                })
+        ]
+
+    interval_ops = []
     for i in range(self._num_ps):
       # sub_table_name -> fids tensor
       multi_type_query: Dict[str, tf.Tensor] = lookup_data_on_wk[i]
@@ -794,7 +831,8 @@ class PartitionedHashTable(object):
           str, List[int]] = tensor_utils.get_keyed_shape(multi_type_query)
 
       # to reduce the number of rpc (send/recv ops) call, we pack fids by concat
-      packed_fids_on_worker = tensor_utils.pack_tensors(multi_type_query)
+      packed_fids_on_worker, send_ts = logging_ops.tensors_timestamp(
+          tensor_utils.pack_tensors(multi_type_query))
 
       is_standalone = export_context.is_exporting_standalone() or self._local_ps
       with nullcontext() if is_standalone else ps_device(i):
@@ -820,7 +858,9 @@ class PartitionedHashTable(object):
         else:
           packed_embedding_on_ps = (packed_embeddings, emb_sizes)
 
-      packed_embedding_on_worker = packed_embedding_on_ps  # data transfer in logic
+      packed_embedding_on_worker, end_ts = logging_ops.tensors_timestamp(
+          packed_embedding_on_ps)  # data transfer in logic
+      interval_ops.extend(emit_lookup_timer_ops(i, end_ts - send_ts))
 
       # on worker, uppack
       if self.transfer_float16:
@@ -835,7 +875,13 @@ class PartitionedHashTable(object):
           multi_type_resp_shape, packed_embedding_on_worker)
       ps_idx_to_multi_type_resp[i] = multi_type_resp_on_worker
 
-    return ps_idx_to_multi_type_resp
+    ret = {}
+    with tf.control_dependencies(interval_ops):
+      for i, sub_item in ps_idx_to_multi_type_resp.items():
+        ret[i] = {}
+        for tname, ts in sub_item.items():
+          ret[i][tname] = tf.identity(ts)
+    return ret
 
   def _native_hash_table_lookup_with_remote_predict(
       self, lookup_data_on_wk: LookupData,

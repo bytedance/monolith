@@ -1078,6 +1078,7 @@ class CpuTraining:
         #
         # Finally, we can use something similar to PSStrategy to solve
         # this problem.
+        logging.info("partition max_shards={}".format(self.config.num_ps))
         return tf.compat.v1.variable_scope(
             "",
             partitioner=tf.compat.v1.variable_axis_size_partitioner(

@@ -281,6 +281,7 @@ class PartitionVariableDef(object):
       for i, (name, device) in enumerate(zip(self._partitions, self.device)):
         group_device = device if i == 0 else group_device
         if group_device is not None and len(group_device) > 0:
+          logging.warning("variable[{}] use group_device[{}]".format(name, group_device))
           with tf.compat.v1.device(None):
             with tf.compat.v1.device(group_device):
               variable = tf.compat.v1.get_variable(dtype=dtypes[i],
@@ -302,7 +303,6 @@ class PartitionVariableDef(object):
           else:
             save_slice_info = self._save_slice_info.get(name)
             variable._set_save_slice_info(save_slice_info)
-          group_device = variable.device
 
         self._variable[name] = variable
       vs._partitioner = partitioner
@@ -717,7 +717,7 @@ class GraphDefHelper(object):
     if len(model_fn.summary) > 0:
       for summary in summaries:
         for sum_ts in real_result.get(summary).outputs:
-          logging.info("[INFO] add summary {} to collection".format(sum_ts))
+          # logging.info("[INFO] add summary {} to collection".format(sum_ts))
           ops.add_to_collection(ops.GraphKeys.SUMMARIES, sum_ts)
 
     # check sig_input in graph
