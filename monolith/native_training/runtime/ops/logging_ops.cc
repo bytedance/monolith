@@ -112,7 +112,11 @@ REGISTER_KERNEL_BUILDER(Name("MonolithMetric").Device(DEVICE_CPU), MetricOp);
 
 class MetricV2Op : public OpKernel {
  public:
-  explicit MetricV2Op(OpKernelConstruction* ctx) : OpKernel(ctx) {
+  explicit MetricV2Op(OpKernelConstruction* ctx)
+      : OpKernel(ctx),
+        stat_last_1_min_(60),
+        stat_last_5_min_(300),
+        stat_last_15_min_(900) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("key", &key_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("tags", &tags_));
   }
@@ -121,11 +125,81 @@ class MetricV2Op : public OpKernel {
     const Tensor& value_tensor = ctx->input(0);
     const float value = value_tensor.scalar<float>()();
     monolith::GetMetrics()->emit_timer(key_, value, tags_);
+    tensorflow::mutex_lock l(mu_);
+    auto now = absl::Now();
+    stat_last_1_min_.PushOne(value, now);
+    stat_last_5_min_.PushOne(value, now);
+    stat_last_15_min_.PushOne(value, now);
+
+    LOG_EVERY_N_SEC(INFO, 600) << absl::StrFormat(
+        "%s last_1_min: %s", key_, stat_last_1_min_.DebugString());
+    LOG_EVERY_N_SEC(INFO, 600) << absl::StrFormat(
+        "%s last_5_min: %s", key_, stat_last_5_min_.DebugString());
+    LOG_EVERY_N_SEC(INFO, 600) << absl::StrFormat(
+        "%s last_15_min: %s", key_, stat_last_15_min_.DebugString());
   }
+
+ private:
+  class MovingStat {
+   public:
+    explicit MovingStat(int64_t time_window_in_sec)
+        : time_window_in_sec_(time_window_in_sec),
+          min_(std::numeric_limits<float>::max()),
+          max_(std::numeric_limits<float>::min()),
+          sum_(0.f) {}
+
+    void PushOne(float value, absl::Time t) {
+      min_ = std::min(min_, value);
+      max_ = std::max(max_, value);
+      sum_ += value;
+      buffer_.emplace_back(value, t);
+
+      while (!buffer_.empty()) {
+        auto start = buffer_.front().second;
+        int64_t delta = absl::ToInt64Seconds(t - start);
+        if (delta > time_window_in_sec_) {
+          sum_ -= buffer_.front().first;
+          buffer_.pop_front();
+        } else {
+          break;
+        }
+      }
+    }
+
+    std::string DebugString() const {
+      float avg = 0, p99 = 0;
+      if (!buffer_.empty()) {
+        avg = sum_ / buffer_.size();
+
+        std::vector<float> values;
+        values.reserve(buffer_.size());
+        for (const auto& p : buffer_) {
+          values.push_back(p.first);
+        }
+        std::sort(values.begin(), values.end());
+        int64_t p99_index = values.size() * 0.99f;
+        p99 = values[p99_index];
+      }
+
+      return absl::StrFormat("min: %f, max: %f, avg: %f, p99: %f", min_, max_,
+                             avg, p99);
+    }
+
+   private:
+    int64_t time_window_in_sec_;
+    float min_;
+    float max_;
+    float sum_;
+    std::deque<std::pair<float, absl::Time>> buffer_;
+  };
 
  private:
   std::string key_;
   std::string tags_;
+  tensorflow::mutex mu_;
+  MovingStat stat_last_1_min_ TF_GUARDED_BY(mu_);
+  MovingStat stat_last_5_min_ TF_GUARDED_BY(mu_);
+  MovingStat stat_last_15_min_ TF_GUARDED_BY(mu_);
 };
 
 REGISTER_OP("MonolithMetricV2")
