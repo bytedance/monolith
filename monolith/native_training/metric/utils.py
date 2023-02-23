@@ -68,7 +68,8 @@ def write_deep_insight(features: Dict[str, tf.Tensor],
         sample_rates=sample_rates,
         model_name=model_name,
         target=target,
-        sample_ratio=sample_ratio)
+        sample_ratio=sample_ratio,
+        return_msgs=is_fake)
   else:
     labels = tf.stack(labels_list)
     preds = tf.stack(preds_list)
@@ -91,5 +92,6 @@ def write_deep_insight(features: Dict[str, tf.Tensor],
         sample_ratio=sample_ratio,
         extra_fields_values=extra_fields_values,
         extra_fields_keys=extra_fields_keys,
-        targets=targets)
+        targets=targets,
+        return_msgs=is_fake)
   return deep_insight_op

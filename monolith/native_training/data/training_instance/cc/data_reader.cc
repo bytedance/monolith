@@ -374,7 +374,6 @@ Status ExampleBatchToExample(ExampleBatch *example_batch, int index,
             "mapper==nullptr");
       }
       if (mapper->IsAvailable()) {
-        LOG_FIRST_N(INFO, 1) << mapper->DebugString();
         int32_t id = -1;
         int32_t sorted_id = -1;
         bool found = mapper->GetIdByName(named_feature.name(), &id, &sorted_id);

@@ -19,6 +19,7 @@ import types
 import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Iterable, Callable, Optional, Union
+import re
 
 import tensorflow as tf
 from tensorflow.python.eager import context
@@ -40,7 +41,7 @@ from tensorflow.python.ops import gen_experimental_dataset_ops
 from tensorflow.python.data.experimental.ops import compression_ops
 from tensorflow.python.data.experimental.ops.data_service_ops import \
   _parse_service, _DataServiceDataset, ProcessingMode
-from tensorflow.python.data.experimental.ops.distribute_options import ExternalStatePolicy
+from tensorflow.python.data.experimental.ops.distribute_options import ExternalStatePolicy, AutoShardPolicy
 
 from monolith.native_training.hooks import ckpt_hooks
 from monolith.utils import get_libops_path
@@ -55,13 +56,27 @@ from monolith.native_training.runtime.ops import gen_monolith_ops
 from kafka import KafkaConsumer
 from threading import Thread, RLock
 from queue import Queue
-from monolith.native_training.mlp_utils import enable_sync_training
+from monolith.native_training.distribution_utils import enable_sync_training
 from tensorflow.core.framework.attr_value_pb2 import AttrValue
 from tensorflow.core.framework.tensor_pb2 import TensorProto
 
 pb_datasource_ops = gen_monolith_ops
 
 FLAGS = flags.FLAGS
+flags.DEFINE_string('data_service_dispatcher', '',
+                    'string, data_service_dispatcher')
+flags.DEFINE_bool('dataset_use_dataservice', False,
+                  'bool, whether use dataservice')
+flags.DEFINE_string(
+    'dataset_input_patterns', None,
+    'string, input patterns list of files, format data_{DATE(20201120, 20201210)}/hour_{INT(0, 5)}/part_{INT(0, 3)}'
+)
+flags.DEFINE_bool('dataset_input_use_snappy', None,
+                  'bool, dataset_input_use_snappy')
+flags.DEFINE_bool('dataset_input_use_parquet', None,
+                  'bool dataset_input_use_parquet')
+flags.DEFINE_integer('dataset_worker_idx', None, 'int dataset_worker_idx')
+flags.DEFINE_integer('dataset_num_workers', None, 'int dataset_num_workers')
 POOL_KEY = "TF_ITEMPOOL"
 
 
@@ -122,6 +137,69 @@ class DatasetMetaclass(type):
         kwargs['servers'] = kwargs.get('servers') or value
       else:
         kwargs['input_pb_type'] = kwargs.get('input_pb_type') or value
+
+    if FLAGS.dataset_input_patterns:
+      #test_str = "data_{DATE(20201120, 20201210)}/hour_{INT(0, 5)}/part_{INT(0, 3)}"
+      dataset_input_patterns = FLAGS.dataset_input_patterns.replace(" ", "")
+      logging.info("The original string is : " + dataset_input_patterns)
+
+      input_pattern = re.sub(r'\{.*?\}', "{}", dataset_input_patterns)
+      logging.info(f"input_pattern {input_pattern}")
+
+      all_pattern_tmp = re.findall(r'{.*?}', dataset_input_patterns)
+      all_pattern_tmp = [sub[1:-1] for sub in all_pattern_tmp]
+      logging.info(f"all_pattern_tmp {all_pattern_tmp}")
+      all_pattern_format = []
+      for pattern in all_pattern_tmp:
+        pattern_part = re.split("[(,)]", pattern)
+        assert len(pattern_part) == 4
+        pattern_type = pattern_part[0]
+        start = pattern_part[1]
+        end = pattern_part[2]
+        #print(pattern_type, start, end)
+        pattern_list = []
+        assert pattern_type == "DATE" or pattern_type == "INT"
+        if pattern_type == "DATE":
+          assert len(start) == len(end)
+          if len(start) == 8:
+            start_date = datetime.strptime(start, '%Y%m%d').date()
+            end_date = datetime.strptime(end, '%Y%m%d').date()
+            delta = end_date - start_date
+            pattern_list = [(start_date + timedelta(days=i)).strftime("%Y%m%d")
+                            for i in range(delta.days + 1)]
+          elif len(start) == 10:
+            start_date = datetime.strptime(start, '%Y%m%d%H')
+            end_date = datetime.strptime(end, '%Y%m%d%H')
+            delta = end_date - start_date
+            pattern_list = [
+                (start_date + timedelta(hours=i)).strftime("%Y%m%d%H")
+                for i in range(delta.days * 24 + delta.seconds // 3600 + 1)
+            ]
+          else:
+            assert False, f"not support {start} {end}"
+        elif pattern_type == "INT":
+          pattern_list = list(range(int(start), int(end) + 1))
+        #print(pattern_list)
+        all_pattern_format.append(pattern_list)
+
+      logging.info(f"all_pattern_format {all_pattern_format}")
+
+      all_input_files = []
+
+      def pattern_recurse(pattern_format_list, *args):
+        if len(pattern_format_list) == 0:
+          all_input_files.append(input_pattern.format(*args))
+        else:
+          for pattern in pattern_format_list[0]:
+            pattern_recurse(pattern_format_list[1:], *args, pattern)
+
+      pattern_recurse(all_pattern_format)
+
+      logging.info(f"all_input_files {all_input_files}")
+      kwargs['patterns'] = all_input_files
+
+    if FLAGS.dataset_input_use_parquet is not None:
+      kwargs['use_parquet'] = FLAGS.dataset_input_use_parquet
 
     try:
       # the first param is str, batch to streaming, use kafka params for cmd
@@ -194,8 +272,6 @@ class PBDataset(metaclass=DatasetMetaclass):
       configuration=None,
       container: str = '',
       shared_name: str = '',
-      use_data_service: bool = False,
-      use_parquet: bool = False,
       cycle_length=None,
       block_length=None,
       num_parallel_calls=None,
@@ -267,21 +343,26 @@ class DynamicMatchingFilesDataset(dataset_ops.DatasetSource):
 
 
 class ParquetDataset(dataset_ops.DatasetSource):
-  def __init__(
-      self,
-      file_name,
-      output_pb_type: PbType,
-      select_columns: List[str],
-      select_columns_type: List[str],
-      batch_size = 512,
-      drop_remainder = True,
-      **kwargs):
+
+  def __init__(self,
+               file_name,
+               output_pb_type: PbType,
+               select_columns: List[str],
+               select_columns_type: List[str],
+               batch_size=512,
+               drop_remainder=True,
+               **kwargs):
     # assert isinstance(file_name, str)
-    assert output_pb_type in [PbType.EXAMPLE, PbType.EXAMPLEBATCH, PbType.PLAINTEXT]
-    assert output_pb_type != 'example_batch' or (isinstance(batch_size, int) and batch_size > 0)
+    assert output_pb_type in [
+        PbType.EXAMPLE, PbType.EXAMPLEBATCH, PbType.PLAINTEXT
+    ]
+    assert output_pb_type != 'example_batch' or (isinstance(batch_size, int) and
+                                                 batch_size > 0)
     batch_size = 0 if output_pb_type == 'example' else batch_size
-    assert isinstance(select_columns, list) and all(isinstance(c, str) for c in select_columns)
-    assert isinstance(select_columns_type, list) and all(t in ["int", "fid_v1", "fid_v2", "float"] for t in select_columns_type)
+    assert isinstance(select_columns, list) and all(
+        isinstance(c, str) for c in select_columns)
+    assert isinstance(select_columns_type, list) and all(
+        t in ["int", "fid_v1", "fid_v2", "float"] for t in select_columns_type)
 
     if output_pb_type == PbType.EXAMPLEBATCH and batch_size > 0 and drop_remainder:
       get_default_parser_ctx().set('batch_size', batch_size)
@@ -294,8 +375,7 @@ class ParquetDataset(dataset_ops.DatasetSource):
         batch_size=batch_size,
         select_columns=select_columns,
         select_columns_type=select_columns_type,
-        drop_remainder=drop_remainder
-    )
+        drop_remainder=drop_remainder)
 
     super().__init__(variant_tensor)
 
@@ -377,6 +457,11 @@ class FilePBDataset(dataset_ops.DatasetSource):
     if use_snappy is None:
       if isinstance(file_name, str):
         use_snappy = file_name.endswith('.snappy')
+        logging.info(f"FilePBDataset change use_snappy {use_snappy}")
+    if use_snappy is None:
+      use_snappy = FLAGS.dataset_input_use_snappy
+      logging.info(
+          f"FilePBDataset change use_snappy {FLAGS.dataset_input_use_snappy}")
     assert use_snappy is not None
     variant_tensor = pb_datasource_ops.pb_dataset(
         file_name=file_name,
@@ -406,13 +491,12 @@ class DistributedFilePBDataset(dataset_ops.DatasetSource):
   def __init__(
       self,
       patterns: Union[str, List[str]],
-      use_snappy=False,
+      use_snappy=None,
       buffer_size: int = None,
       input_pb_type: PbType = None,
       output_pb_type: PbType = None,
       feature_pruning_type: int = FeaturePruningType.PRUNING_RAW_FEATURE,
       exclude_fn: Callable[[tf.Tensor], bool] = None,
-      use_data_service: bool = False,
       cycle_length=2,
       block_length=None,
       num_parallel_calls=tf.data.AUTOTUNE,
@@ -435,9 +519,7 @@ class DistributedFilePBDataset(dataset_ops.DatasetSource):
 
     if use_parquet:
       map_func = lambda file_name: ParquetDataset(
-          file_name=file_name,
-          output_pb_type=output_pb_type,
-          **kwargs)
+          file_name=file_name, output_pb_type=output_pb_type, **kwargs)
     else:
       map_func = lambda file_name: FilePBDataset(
           file_name=file_name,
@@ -449,7 +531,7 @@ class DistributedFilePBDataset(dataset_ops.DatasetSource):
           disable_iterator_save_restore=not enable_dynamic_sharding,
           **kwargs)
     graph = tf.compat.v1.get_default_graph()
-    if use_data_service and not hasattr(graph, 'dry_run'):
+    if FLAGS.data_service_dispatcher and not hasattr(graph, 'dry_run'):
       files_list = DynamicMatchingFilesDataset(patterns)
       # files_list = tf.data.Dataset.from_tensor_slices(patterns)
       if exclude_fn is not None:
@@ -958,9 +1040,18 @@ class PyKafkaDataset(dataset_ops.DatasetSource):
   def element_spec(self):
     return self._dataset.element_spec
 
-def create_plain_kafka_dataset( topics: List[str], group_id: str, servers: str,
-               stream_timeout=-1, message_poll_timeout=10000, poll_batch_size: int = 1024,
-                configuration=None, container: str = '', shared_name: str = '',):
+
+def create_plain_kafka_dataset(
+    topics: List[str],
+    group_id: str,
+    servers: str,
+    stream_timeout=-1,
+    message_poll_timeout=10000,
+    poll_batch_size: int = 1024,
+    configuration=None,
+    container: str = '',
+    shared_name: str = '',
+):
   metadata = list(configuration or [])
   if group_id is not None:
     metadata.append(f"group.id={group_id}")
@@ -970,24 +1061,23 @@ def create_plain_kafka_dataset( topics: List[str], group_id: str, servers: str,
     assert isinstance(poll_batch_size, int) and poll_batch_size > 0
     metadata.append(f"batch.num.messages={poll_batch_size}")
 
-  resource = kafka_resource_init(topics=topics, metadata=metadata,
-                                container=container, shared_name=shared_name)
+  resource = kafka_resource_init(topics=topics,
+                                 metadata=metadata,
+                                 container=container,
+                                 shared_name=shared_name)
 
   dataset = tf.data.experimental.Counter()
-  dataset = dataset.map(
-    lambda i: kafka_read_next(
+  dataset = dataset.map(lambda i: kafka_read_next(
       input=resource,
       index=i,
       message_poll_timeout=message_poll_timeout,
       stream_timeout=stream_timeout,
-    )
-  )
+  ))
   dataset = dataset.apply(
-    tf.data.experimental.take_while(
-      lambda v: tf.greater(v.continue_fetch, 0)
-    )
-  )
+      tf.data.experimental.take_while(
+          lambda v: tf.greater(v.continue_fetch, 0)))
   return dataset
+
 
 class KafkaDataset(dataset_ops.DatasetSource):
 
@@ -1105,6 +1195,37 @@ def register_dataset(service, dataset, buffer_size=32):
   return dataset_id
 
 
+def from_dataset_id(processing_mode,
+                    service,
+                    dataset_id,
+                    element_spec,
+                    job_name=None,
+                    max_outstanding_requests=None,
+                    task_refresh_interval_hint_ms=None,
+                    buffer_size: int = 16):
+  ProcessingMode.validate(processing_mode)
+  protocol, address = _parse_service(service)
+
+  dataset = _DataServiceDataset(
+      dataset_id=dataset_id,
+      processing_mode=processing_mode,
+      address=address,
+      protocol=protocol,
+      job_name=job_name,
+      max_outstanding_requests=max_outstanding_requests,
+      task_refresh_interval_hint_ms=task_refresh_interval_hint_ms)
+  dataset = dataset.prefetch(buffer_size=buffer_size).map(
+      lambda x: compression_ops.uncompress(x, output_spec=element_spec),
+      num_parallel_calls=dataset_ops.AUTOTUNE)
+
+  # Disable autosharding for shared jobs.
+  if job_name:
+    options = dataset_ops.Options()
+    options.experimental_distribute.auto_shard_policy = AutoShardPolicy.OFF
+    dataset = dataset.with_options(options)
+  return dataset
+
+
 def merged_window(self: tf.data.Dataset,
                   size: int = 2,
                   drop_remainder: bool = True):
@@ -1144,19 +1265,39 @@ def merged_window(self: tf.data.Dataset,
 
 
 def distribute(self,
-               target,
                *,
-               job_name: str,
-               num_worker: int,
-               worker_idx: int,
+               target: str = None,
+               job_name: str = "monolith_dataservice_task",
+               num_worker: int = None,
+               worker_idx: int = None,
                queue_device: str = "/job:ps/task:0/device:CPU:0",
                max_outstanding_requests: int = dataset_ops.AUTOTUNE,
                window_size: int = None):
   graph = tf.compat.v1.get_default_graph()
+  if hasattr(graph, 'dry_run') or not FLAGS.data_service_dispatcher:
+    return self
+
+  if worker_idx is None:
+    worker_idx = FLAGS.dataset_worker_idx
+  if num_worker is None:
+    num_worker = FLAGS.dataset_num_workers
+  if target is None:
+    target = FLAGS.data_service_dispatcher
+
+  assert worker_idx is not None and num_worker is not None and target is not None
+
   if max_outstanding_requests is None:
     max_outstanding_requests = min(num_worker, 8)
-  if hasattr(graph, 'dry_run'):
-    return self
+  if FLAGS.is_local:
+    dataset_id = register_dataset(target, self)
+    dataset = dsvc.from_dataset_id(
+        processing_mode="distributed_epoch",
+        service=target,
+        dataset_id=dataset_id,
+        job_name=job_name,
+        element_spec=self.element_spec,
+        max_outstanding_requests=max_outstanding_requests)
+    return dataset
   elif num_worker is None or num_worker <= 0:
     logging.warning(f'num_worker is {num_worker}, error')
     return self
@@ -1170,6 +1311,9 @@ def distribute(self,
   except Exception as e:
     pass
 
+  logging.info(
+      f'dataset.distribute worker_idx {worker_idx}, num_worker {num_worker}, target {target}'
+  )
   tf_config = os.environ.get('TF_CONFIG')
   if tf_config is not None:
     tf_config = json.loads(tf_config)
@@ -1183,43 +1327,7 @@ def distribute(self,
         raise Exception('role error')
 
   element_spec = self.element_spec
-  if tf_config is not None and 'ps' in map(lambda x: x.lower(),
-                                           tf_config['cluster']):
-    logging.info('PS/Worker mode, use queue to broadcast dataset_id')
-    with tf.compat.v1.device(queue_device):
-      queue = tf.compat.v1.FIFOQueue(capacity=num_worker,
-                                     dtypes=[tf.int64],
-                                     shared_name=f'{job_name}_queue',
-                                     shapes=tuple())
-    if worker_idx == 0:
-      # data service try to register dataset, if the dataset has been registed, return dataset_id drectily
-      # that means get or register dataset. for data parallel, the data pipeline assure to be identity
-      # here we ues queue to ensure the same data pipeline for a job
-      dataset_id = register_dataset(target, self)
-      stacked_dids = tf.stack(values=[dataset_id for _ in range(num_worker)],
-                              name='stacked_dids')
-      enqueue_op = queue.enqueue_many(vals=stacked_dids)
-      with tf.compat.v1.control_dependencies(control_inputs=[enqueue_op]):
-        # to share pipeline, job_name must be specified
-        dataset = dsvc.from_dataset_id(
-            processing_mode="distributed_epoch",
-            service=target,
-            dataset_id=dataset_id,
-            job_name=job_name,
-            element_spec=element_spec,
-            max_outstanding_requests=max_outstanding_requests)
-    else:
-      dataset_id = queue.dequeue()
-      dataset = dsvc.from_dataset_id(
-          processing_mode="distributed_epoch",
-          service=target,
-          dataset_id=dataset_id,
-          job_name=job_name,
-          element_spec=element_spec,
-          max_outstanding_requests=max_outstanding_requests)
-    if window_size is not None:
-      dataset = dataset.merged_window(size=window_size)
-  elif enable_sync_training():
+  if enable_sync_training():
     has_error = False
     try:
       enable_bps = int(os.getenv("MONOLITH_WITH_BYTEPS", "0"))
@@ -1252,6 +1360,42 @@ def distribute(self,
         job_name=job_name,
         element_spec=element_spec,
         max_outstanding_requests=max_outstanding_requests)
+    if window_size is not None:
+      dataset = dataset.merged_window(size=window_size)
+  elif tf_config is not None and 'ps' in map(lambda x: x.lower(),
+                                             tf_config['cluster']):
+    logging.info('PS/Worker mode, use queue to broadcast dataset_id')
+    with tf.compat.v1.device(queue_device):
+      queue = tf.compat.v1.FIFOQueue(capacity=num_worker,
+                                     dtypes=[tf.int64],
+                                     shared_name=f'{job_name}_queue',
+                                     shapes=tuple())
+    if worker_idx == 0:
+      # data service try to register dataset, if the dataset has been registed, return dataset_id drectily
+      # that means get or register dataset. for data parallel, the data pipeline assure to be identity
+      # here we ues queue to ensure the same data pipeline for a job
+      dataset_id = register_dataset(target, self)
+      stacked_dids = tf.stack(values=[dataset_id for _ in range(num_worker)],
+                              name='stacked_dids')
+      enqueue_op = queue.enqueue_many(vals=stacked_dids)
+      with tf.compat.v1.control_dependencies(control_inputs=[enqueue_op]):
+        # to share pipeline, job_name must be specified
+        dataset = dsvc.from_dataset_id(
+            processing_mode="distributed_epoch",
+            service=target,
+            dataset_id=dataset_id,
+            job_name=job_name,
+            element_spec=element_spec,
+            max_outstanding_requests=max_outstanding_requests)
+    else:
+      dataset_id = queue.dequeue()
+      dataset = dsvc.from_dataset_id(
+          processing_mode="distributed_epoch",
+          service=target,
+          dataset_id=dataset_id,
+          job_name=job_name,
+          element_spec=element_spec,
+          max_outstanding_requests=max_outstanding_requests)
     if window_size is not None:
       dataset = dataset.merged_window(size=window_size)
   else:

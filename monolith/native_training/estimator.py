@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from dataclasses_json import dataclass_json
 import os
 import copy
+import json
 import numpy as np
 import collections
 import getpass
@@ -35,6 +36,7 @@ from monolith.native_training.cpu_training import CpuTraining, create_exporter
 from monolith.native_training.runner_utils import RunnerConfig, monolith_discovery
 from monolith.native_training.cpu_training import local_train_internal
 from monolith.native_training.cpu_training import distributed_train
+from monolith.native_training.cpu_training import distributed_sync_train
 from monolith.native_training.service_discovery import ServiceDiscoveryType
 from monolith.native_training.monolith_export import monolith_export
 from monolith.native_training.model_dump.dump_utils import DumpUtils
@@ -46,7 +48,8 @@ from monolith.native_training.data.parsers import get_default_parser_ctx, Parser
 from monolith.native_training.model_export.export_context import \
   is_exporting, is_exporting_distributed, ExportMode
 from monolith.native_training.zk_utils import MonolithKazooClient
-
+from monolith.native_training.distribution_utils import init_sync_train_and_update_conf, try_init_cuda
+from monolith.native_training import device_utils
 
 @monolith_export
 class EstimatorSpec(
@@ -196,13 +199,15 @@ class RunConfig:
         if value != default and getattr(conf, name) != value:
           setattr(conf, name, value)
     # in case US tearm use CONSUL
-    conf.discovery_type = ServiceDiscoveryType.ZK
+    if conf.discovery_type == ServiceDiscoveryType.CONSUL:
+      conf.discovery_type = ServiceDiscoveryType.ZK
 
-    # set default value for embedding prefetch/postpush
-    if conf.embedding_prefetch_capacity <= 0:
-      conf.embedding_prefetch_capacity = 1
-    if not conf.enable_embedding_postpush:
-      conf.enable_embedding_postpush = True
+    if not conf.enable_gpu_training:
+      # set default value for embedding prefetch/postpush
+      if conf.embedding_prefetch_capacity <= 0:
+        conf.embedding_prefetch_capacity = 1
+      if not conf.enable_embedding_postpush:
+        conf.enable_embedding_postpush = True
 
     # [todo] remove this when enable_realtime_training changed to enable_parameter_sync
     if self.enable_parameter_sync:
@@ -413,18 +418,32 @@ class Estimator(object):
       DumpUtils().dump(f'{self._runner_conf.model_dir}/model_dump')
     else:
       DumpUtils().enable = False
+      if self._sync_backend is not None:
+        self._sync_backend.start()
+        self._sync_backend.subscribe_model(self._runner_conf.model_name or
+                                           model.metrics.deep_insight_name)
+      logging.info("Environment vars: %s", os.environ)
+      logging.info("Flags: %s", flags.FLAGS.flag_values_dict())
       logging.info(f'{model.p}')
-      with monolith_discovery(self._runner_conf) as discovery:
-        if self._sync_backend is not None:
-          self._sync_backend.start()
-          self._sync_backend.subscribe_model(self._runner_conf.model_name or
-                                             model.metrics.deep_insight_name)
-        logging.info("Environment vars: %s", os.environ)
-        logging.info("Flags: %s", flags.FLAGS.flag_values_dict())
-        self.__est = distributed_train(config=self._runner_conf,
-                                       discovery=discovery,
-                                       params=model,
-                                       sync_backend=self._sync_backend)
+
+      if self._runner_conf.enable_full_sync_training:
+        init_sync_train_and_update_conf(self._runner_conf)
+        self.__est = distributed_sync_train(self._runner_conf,
+                                            params=model,
+                                            sync_backend=self._sync_backend)
+      else:
+        with monolith_discovery(self._runner_conf) as discovery:
+          if self._runner_conf.enable_gpu_training:
+            device_utils.enable_gpu_training()
+            model.train.use_gpu_emb_table = False
+          if self._runner_conf.enable_partial_sync_training and self._runner_conf.server_type == "worker":
+            try_init_cuda()
+            self._runner_conf.device_fn = device_utils.get_device_fn()
+            model.train.slow_start_steps = 0
+          self.__est = distributed_train(config=self._runner_conf,
+                                         discovery=discovery,
+                                         params=model,
+                                         sync_backend=self._sync_backend)
     self.close()
 
   def evaluate(self, steps=None):
@@ -453,11 +472,25 @@ class Estimator(object):
       logging.info(f'{model.p}')
       logging.info("Environment vars: %s", os.environ)
       logging.info("Flags: %s", flags.FLAGS.flag_values_dict())
-      with monolith_discovery(self._runner_conf) as discovery:
-        self.__est = distributed_train(self._runner_conf,
-                                       discovery,
-                                       model,
-                                       sync_backend=self._sync_backend)
+
+      if self._runner_conf.enable_full_sync_training:
+        init_sync_train_and_update_conf(self._runner_conf)
+        self.__est = distributed_sync_train(self._runner_conf,
+                                            params=model,
+                                            sync_backend=self._sync_backend)
+      else:
+        with monolith_discovery(self._runner_conf) as discovery:
+          if self._runner_conf.enable_gpu_training:
+            device_utils.enable_gpu_training()
+            model.train.use_gpu_emb_table = False
+          if self._runner_conf.enable_partial_sync_training and self._runner_conf.server_type == "worker":
+            try_init_cuda()
+            self._runner_conf.device_fn = device_utils.get_device_fn()
+          self.__est = distributed_train(config=self._runner_conf,
+                                         discovery=discovery,
+                                         params=model,
+                                         sync_backend=self._sync_backend)
+
     self.close()
 
   def predict(self,
@@ -486,11 +519,11 @@ class Estimator(object):
     model_dir = runner_conf.model_dir
     export_dir_base = os.path.join(model_dir, model.serving.export_dir_base)
     warmup_file = runner_conf.warmup_file
-    task = CpuTraining(config=runner_conf, task=model.instantiate())
-    exporter = create_exporter(task, model_dir, warmup_file, export_dir_base,
-                               dense_only)
-    serving_input_receiver_fn = task.create_serving_input_receiver_fn()
     with ParserCtx(enable_fused_layout=enable_fused_layout):
+      task = CpuTraining(config=runner_conf, task=model.instantiate())
+      exporter = create_exporter(task, model_dir, warmup_file, export_dir_base,
+                                 dense_only)
+      serving_input_receiver_fn = task.create_serving_input_receiver_fn()
       exporter.export_saved_model(serving_input_receiver_fn)
 
 

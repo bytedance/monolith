@@ -440,6 +440,7 @@ py_library(
     srcs = ["feature.py"],
     visibility = ["//visibility:public"],
     deps = [
+        ":prefetch_queue",
         "embedding_combiners",
         ":device_utils",
         ":distribution_ops",
@@ -458,6 +459,7 @@ py_library(
     srcs = ["distribution_utils.py"],
     visibility = ["//visibility:public"],
     deps = [
+        "//monolith/native_training/metric:metric_hook",
         "@org_tensorflow//tensorflow:tensorflow_py",
     ],
 )
@@ -981,6 +983,7 @@ py_library(
         ":runner_utils",
         ":service_discovery",
         ":zk_utils",
+        ":distribution_utils",
         "//monolith:utils",
         "//monolith/agent_service:backends",
         "//monolith/agent_service:replica_manager",
@@ -1007,6 +1010,7 @@ py_test(
         "//monolith/native_training/model_export:saved_model_exporters",
     ],
 )
+
 
 # This test is buggy.
 # py_test(
@@ -1042,6 +1046,7 @@ py_library(
     name = "device_utils",
     srcs = ["device_utils.py"],
     deps = [
+        ":distribution_utils",
         "@org_tensorflow//tensorflow:tensorflow_py",
     ],
 )
@@ -1227,5 +1232,8 @@ py_test(
 py_library(
     name = "mlp_utils",
     srcs = ["mlp_utils.py"],
-    # deps = [requirement('mpi4py')],
+    deps = [
+        ":yarn_runtime",
+        ":distribution_utils",
+    ],
 )

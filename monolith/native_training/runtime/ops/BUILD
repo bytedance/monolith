@@ -2,7 +2,6 @@ load("@rules_cc//cc:defs.bzl", "cc_library", "cc_proto_library", "cc_test")
 load("@org_tensorflow//tensorflow:tensorflow.bzl", "cc_header_only_library", "tf_cc_test", "tf_custom_op_library", "tf_gen_op_wrapper_py", "tf_gpu_kernel_library_allow_except", "tf_kernel_library")
 load("@com_google_protobuf//:protobuf.bzl", "py_proto_library")
 load("@rules_proto//proto:defs.bzl", "proto_library")
-
 package(default_visibility = [
     "//monolith:__subpackages__",
     "@org_tensorflow//:__subpackages__",
@@ -256,10 +255,12 @@ py_library(
 tf_kernel_library(
     name = "distribution_ops",
     srcs = [
+        "fused_embedding_to_layout.h",
         "fused_embedding_to_layout.cc",
         "fused_reorder_by_indices.cc",
         "map_id_to_embedding_op.cc",
         "reduce_op.cc",
+        "alloc_utils.h",
         "split_by_indices_op.cc",
         "static_reshape_op.cc",
         "unique_mapping_ops.cc",
@@ -271,6 +272,8 @@ tf_kernel_library(
         "map_id_to_embedding.cu.cc",
         "reduce_op.cu.cc",
         "alloc_utils.h",
+        "fused_embedding_to_layout.h",
+        "fused_embedding_to_layout.cu.cc",
         "aligned_concat_split.cu.cc"
     ],
     # TODO: Figure out how to link "@org_tensorflow//tensorflow/core/kernels:cwise_lib_hdrs" for fill_functor.h
@@ -284,6 +287,36 @@ tf_kernel_library(
         "@com_google_absl//absl/container:flat_hash_map",
         "@org_tensorflow//tensorflow/core:framework_headers_lib",
         "@org_tensorflow//tensorflow/core/kernels:gpu_device_array_for_custom_op",
+    ],
+)
+
+
+tf_kernel_library(
+    name = 'distribution_ops_lib',
+    srcs = [
+    ],
+    gpu_srcs = [
+        "map_id_to_embedding.cu.cc",
+        "reduce_op.cu.cc",
+        "fused_embedding_to_layout.cu.cc",
+    ],
+    copts = [
+        "-std=c++14",
+        "-DGOOGLE_CUDA=1",
+        "-D_ENABLE_AVX",
+        "-mavx",
+        "-mfma",
+    ],
+    deps = [
+        ":distribution_ops",
+        "@org_tensorflow//tensorflow/core/kernels:gpu_device_array_for_custom_op",
+        "//monolith/native_training/data/training_instance:parse_instance_lib",
+        "//monolith/native_training/runtime/hash_table:embedding_hash_table_factory",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "//idl:example_cc_proto",
+        "//monolith/native_training/data/training_instance:data_reader",
+        "//monolith/native_training/runtime/ops:traceme",
     ],
 )
 
@@ -563,6 +596,17 @@ cc_library(
     ] + select({
         "@org_tensorflow//tensorflow:framework_shared_object": [":serving_deps_with_framework_shared_object"],
         "//conditions:default": [],
+    }) + select({
+        ":serving_gpu": [
+            ":distribution_ops_lib",
+        ],
+        "//conditions:default": [],
     }),
     alwayslink = 1,
+)
+
+
+config_setting(
+    name = "serving_gpu",
+    define_values = {"using_cuda": "true"},
 )

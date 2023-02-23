@@ -34,7 +34,7 @@ import monolith.native_training.embedding_combiners as embedding_combiners
 from monolith.native_training.runtime.hash_table import embedding_hash_table_pb2
 from monolith.native_training.data.feature_utils import string_to_variant
 from idl.matrix.proto.example_pb2 import Example
-from monolith.native_training.data.parsers import sharding_sparse_fids
+from monolith.native_training.data.parsers import sharding_sparse_fids, ParserCtx
 
 
 def factory(idx: int, config):
@@ -514,23 +514,24 @@ class PartitionedHashTableTest(tf.test.TestCase):
         for name, dims in cls.feature_to_unmerged_slice_dims.items()
     }
 
-    if cls.use_native_multi_hash_table:
-      cls.sub_table_name_to_config, cls.feature_to_sub_table = \
-        distributed_ps.PartitionedHashTable.no_merge_feature_config(cls.feature_name_to_config)
-    else:
-      cls.sub_table_name_to_config, cls.feature_to_sub_table = \
-        distributed_ps.PartitionedHashTable.merge_feature_config(cls.feature_name_to_config)
-
     cls.layout_configs = cls.gen_out_config(
         cls.feature_to_unmerged_slice_dims,
         layout_names=['bias', 'vec', 'deep'])
-    feature_info = {}
-    for feature_name, sub_table in cls.feature_to_sub_table.items():
-      feature_info[feature_name] = distributed_ps.FeatureInfo(
-          cls.feature_to_unmerged_slice_dims[feature_name],
-          cls.feature_to_combiner[feature_name], sub_table)
-    cls.feature_configs = distributed_ps.PartitionedHashTable.gen_feature_configs(
-        feature_info, cls.layout_configs)
+
+    cls.parser_ctx = ParserCtx(True)
+    cls.parser_ctx.sharding_sparse_fids_op_params = distributed_ps.PartitionedHashTable.gen_feature_configs(
+        num_ps=cls.num_ps,
+        feature_name_to_config=cls.feature_name_to_config,
+        layout_configs=cls.layout_configs,
+        feature_to_combiner=cls.feature_to_combiner,
+        feature_to_unmerged_slice_dims=cls.feature_to_unmerged_slice_dims,
+        use_native_multi_hash_table=cls.use_native_multi_hash_table,
+        unique=lambda: True,
+        transfer_float16=False,
+        enable_gpu_emb=False,
+        use_gpu=False)
+    cls.sub_table_name_to_config = cls.parser_ctx.sharding_sparse_fids_op_params.sub_table_name_to_config
+    cls.feature_configs = cls.parser_ctx.sharding_sparse_fids_op_params.feature_configs
 
   @classmethod
   def gen_data(cls,
@@ -603,13 +604,10 @@ class PartitionedHashTableTest(tf.test.TestCase):
     with tf.compat.v1.Session(servers[0].target, config=config) as sess:
       hash_table = distributed_ps.PartitionedHashTable(
           self.num_ps,
-          self.feature_name_to_config,
           native_multi_hash_table_factory
           if self.use_native_multi_hash_table else multi_table_factory,
-          self.layout_configs,
-          self.feature_to_unmerged_slice_dims,
-          self.feature_to_combiner,
-          use_native_multi_hash_table=self.use_native_multi_hash_table)
+          use_native_multi_hash_table=self.use_native_multi_hash_table,
+          parser_ctx=self.parser_ctx)
 
       if self.use_native_multi_hash_table:
         sess.run(tf.compat.v1.global_variables_initializer())
@@ -640,13 +638,10 @@ class PartitionedHashTableTest(tf.test.TestCase):
     with tf.compat.v1.Session(servers[0].target, config=config) as sess:
       hash_table = distributed_ps.PartitionedHashTable(
           self.num_ps,
-          self.feature_name_to_config,
           native_multi_hash_table_factory
           if self.use_native_multi_hash_table else multi_table_factory,
-          self.layout_configs,
-          self.feature_to_unmerged_slice_dims,
-          self.feature_to_combiner,
-          use_native_multi_hash_table=self.use_native_multi_hash_table)
+          use_native_multi_hash_table=self.use_native_multi_hash_table,
+          parser_ctx=self.parser_ctx)
       hash_table._inner_data_type = 'example'
 
       if self.use_native_multi_hash_table:
@@ -661,8 +656,9 @@ class PartitionedHashTableTest(tf.test.TestCase):
       sparse_features = self.gen_variant_tensor(batch_size=self.num_ps * 3)
       auxiliary_bundle = {}
 
-      layouts = hash_table.lookup(sparse_features,
-                                  auxiliary_bundle=auxiliary_bundle)
+      layouts = hash_table.lookup(
+          {ParserCtx.sharding_sparse_fids_sparse_features_key: sparse_features},
+          auxiliary_bundle=auxiliary_bundle)
       layouts = sess.run(layouts)
       auxiliary_bundle_ret = sess.run(auxiliary_bundle)
 
@@ -709,13 +705,10 @@ class PartitionedHashTableTest(tf.test.TestCase):
     with tf.compat.v1.Session(servers[0].target, config=config) as sess:
       hash_table = distributed_ps.PartitionedHashTable(
           self.num_ps,
-          self.feature_name_to_config,
           native_multi_hash_table_factory
           if self.use_native_multi_hash_table else multi_table_factory,
-          self.layout_configs,
-          self.feature_to_unmerged_slice_dims,
-          self.feature_to_combiner,
-          use_native_multi_hash_table=self.use_native_multi_hash_table)
+          use_native_multi_hash_table=self.use_native_multi_hash_table,
+          parser_ctx=self.parser_ctx)
       hash_table._inner_data_type = 'example'
 
       if self.use_native_multi_hash_table:
@@ -727,10 +720,11 @@ class PartitionedHashTableTest(tf.test.TestCase):
                                                   value=init_val)
       hash_table = hash_table.assign(assign_data)
       sparse_features = self.gen_variant_tensor(batch_size=self.num_ps * 3)
-      auxiliary_bundle = {'sparse_features': sparse_features}
+      auxiliary_bundle = {}
 
-      layouts = hash_table.lookup(sparse_features,
-                                  auxiliary_bundle=auxiliary_bundle)
+      layouts = hash_table.lookup(
+          {ParserCtx.sharding_sparse_fids_sparse_features_key: sparse_features},
+          auxiliary_bundle=auxiliary_bundle)
       layout_grads_and_vars, init_grad = [], 2.0
       for name in sorted(hash_table._feature_configs.out_configs):
         layout = layouts[name]
@@ -738,11 +732,11 @@ class PartitionedHashTableTest(tf.test.TestCase):
             (tf.ones_like(layout, dtype=tf.float32) * init_grad, layout))
 
       global_step = tf.constant(0, dtype=tf.int64)
-      hash_table = hash_table.apply_gradients(layout_grads_and_vars,
-                                              global_step,
-                                              auxiliary_bundle=auxiliary_bundle)
+      apply_gradients_op = hash_table.apply_gradients(
+          layout_grads_and_vars, global_step, auxiliary_bundle=auxiliary_bundle)
       lookup_data, lookup_data_np = self.gen_data(with_emb=False)
-      values = hash_table._lookup_raw(lookup_data)
+      with tf.control_dependencies([apply_gradients_op]):
+        values = hash_table._lookup_raw(lookup_data)
       values = sess.run(values)
       #logging.info(f"xx values: {lookup_data_np} {values}")
 

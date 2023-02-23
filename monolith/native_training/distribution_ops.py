@@ -308,8 +308,9 @@ def fused_embedding_to_layout(
     variant_type: str,
     feature_cfgs: FeatureConfigs,
     ps_num: int,
+    fid_list_emb_row_lenth: tf.Tensor = None,
     parallel_flag: int = 0,
-    version: int = 2,
+    version: int = 3,
 ):
   assert variant_type in {
       'example', 'example_batch', 'examplebatch', 'instance'
@@ -319,7 +320,35 @@ def fused_embedding_to_layout(
   N = 0
   for layout, conf in feature_cfgs.out_configs.items():
     N += len(conf.shape)
-  if version == 2:
+  if version != 4:
+    assert fid_list_emb_row_lenth is None
+  if version == 4:
+    assert fid_list_emb_row_lenth is not None
+    layout_tensors = gen_distribution_ops.monolith_embedding_to_layout_v4(
+        embeddings_list=embeddings_list,
+        fid_list_emb_row_lenth=fid_list_emb_row_lenth,
+        fid_offset=fid_offset,
+        feature_offset=feature_offset,
+        nfl_offset=nfl_offset,
+        batch_size=batch_size,
+        num_out=N,
+        variant_type=variant_type,
+        feature_cfgs=feature_cfgs_str,
+        ps_num=ps_num,
+        parallel_flag=parallel_flag)
+  elif version == 3:
+    layout_tensors = gen_distribution_ops.monolith_embedding_to_layout_v3(
+        embeddings_list=embeddings_list,
+        fid_offset=fid_offset,
+        feature_offset=feature_offset,
+        nfl_offset=nfl_offset,
+        batch_size=batch_size,
+        num_out=N,
+        variant_type=variant_type,
+        feature_cfgs=feature_cfgs_str,
+        ps_num=ps_num,
+        parallel_flag=parallel_flag)
+  elif version == 2:
     layout_tensors = gen_distribution_ops.monolith_embedding_to_layout_v2(
         embeddings_list=embeddings_list,
         fid_list_row_split=fid_list_row_split,
@@ -393,34 +422,130 @@ def _fused_embedding_to_layout_grad_v2(op: tf.Operation, *grads):
   return embeddings_grad_list + [None] * (M + 4)
 
 
-def fused_embedding_to_layout_grad(nfl_offset: tf.Tensor,
-                                   feature_offset: tf.Tensor,
-                                   fid_offset: tf.Tensor,
-                                   batch_size: tf.Tensor,
-                                   embeddings_list: List[tf.Tensor],
-                                   fid_list_row_split: List[tf.Tensor],
-                                   layout_tensors_grad: List[tf.Tensor],
-                                   variant_type: str,
-                                   feature_cfgs: FeatureConfigs,
-                                   ps_num: int,
-                                   parallel_flag=0) -> List[tf.Tensor]:
+@tf.RegisterGradient("MonolithEmbeddingToLayoutV3")
+def _fused_embedding_to_layout_grad_v3(op: tf.Operation, *grads):
+  M = op.get_attr("M")  # fid_num
+  pre = 0
+  embeddings_list = op.inputs[0:M]
+  pre += M
+  fid_offset, feature_offset, nfl_offset, batch_size = op.inputs[
+      pre], op.inputs[pre + 1], op.inputs[pre + 2], op.inputs[pre + 3]
+  variant_type = op.get_attr("variant_type")
+  feature_cfgs_str = op.get_attr("feature_cfgs")
+  ps_num = op.get_attr("ps_num")
+  embeddings_grad_list = gen_distribution_ops.monolith_embedding_to_layout_grad_v3(
+      embeddings_list=embeddings_list,
+      fid_offset=fid_offset,
+      feature_offset=feature_offset,
+      nfl_offset=nfl_offset,
+      batch_size=batch_size,
+      tensors_grad=grads,
+      variant_type=variant_type,
+      feature_cfgs=feature_cfgs_str,
+      ps_num=ps_num,
+      parallel_flag=0)
+  return embeddings_grad_list + [None] * 4
+
+
+@tf.RegisterGradient("MonolithEmbeddingToLayoutV4")
+def _fused_embedding_to_layout_grad_v4(op: tf.Operation, *grads):
+  M = op.get_attr("M")  # fid_num
+  pre = 0
+  embeddings_list = op.inputs[0:M]
+  pre += M
+  fid_list_emb_row_lenth = op.inputs[pre]
+  pre += 1
+  fid_offset, feature_offset, nfl_offset, batch_size = op.inputs[
+      pre], op.inputs[pre + 1], op.inputs[pre + 2], op.inputs[pre + 3]
+  variant_type = op.get_attr("variant_type")
+  feature_cfgs_str = op.get_attr("feature_cfgs")
+  ps_num = op.get_attr("ps_num")
+  embeddings_grad_list = gen_distribution_ops.monolith_embedding_to_layout_grad_v4(
+      embeddings_list=embeddings_list,
+      fid_list_emb_row_lenth=fid_list_emb_row_lenth,
+      fid_offset=fid_offset,
+      feature_offset=feature_offset,
+      nfl_offset=nfl_offset,
+      batch_size=batch_size,
+      tensors_grad=grads,
+      variant_type=variant_type,
+      feature_cfgs=feature_cfgs_str,
+      ps_num=ps_num,
+      parallel_flag=0)
+  return embeddings_grad_list + [None] * 5
+
+
+def fused_embedding_to_layout_grad(
+    nfl_offset: tf.Tensor,
+    feature_offset: tf.Tensor,
+    fid_offset: tf.Tensor,
+    batch_size: tf.Tensor,
+    embeddings_list: List[tf.Tensor],
+    fid_list_row_split: List[tf.Tensor],
+    layout_tensors_grad: List[tf.Tensor],
+    variant_type: str,
+    feature_cfgs: FeatureConfigs,
+    ps_num: int,
+    fid_list_emb_row_lenth: tf.Tensor = None,
+    parallel_flag=0,
+    version: int = 3,
+) -> List[tf.Tensor]:
   feature_cfgs_str = feature_cfgs.SerializeToString()
   assert variant_type in {
       'example', 'example_batch', 'examplebatch', 'instance'
   }
   variant_type = 'example_batch' if variant_type == 'examplebatch' else variant_type
-  embeddings_grad_list = gen_distribution_ops.monolith_embedding_to_layout_grad_v2(
-      embeddings_list=embeddings_list,
-      fid_list_row_split=fid_list_row_split,
-      fid_offset=fid_offset,
-      feature_offset=feature_offset,
-      nfl_offset=nfl_offset,
-      batch_size=batch_size,
-      tensors_grad=layout_tensors_grad,
-      variant_type=variant_type,
-      feature_cfgs=feature_cfgs_str,
-      ps_num=ps_num,
-      parallel_flag=parallel_flag)
+  if version != 4:
+    assert fid_list_emb_row_lenth is None
+  if version == 4:
+    assert fid_list_emb_row_lenth is not None
+    embeddings_grad_list = gen_distribution_ops.monolith_embedding_to_layout_grad_v4(
+        embeddings_list=embeddings_list,
+        fid_list_emb_row_lenth=fid_list_emb_row_lenth,
+        fid_offset=fid_offset,
+        feature_offset=feature_offset,
+        nfl_offset=nfl_offset,
+        batch_size=batch_size,
+        tensors_grad=layout_tensors_grad,
+        variant_type=variant_type,
+        feature_cfgs=feature_cfgs_str,
+        ps_num=ps_num,
+        parallel_flag=parallel_flag)
+  elif version == 3:
+    embeddings_grad_list = gen_distribution_ops.monolith_embedding_to_layout_grad_v3(
+        embeddings_list=embeddings_list,
+        fid_offset=fid_offset,
+        feature_offset=feature_offset,
+        nfl_offset=nfl_offset,
+        batch_size=batch_size,
+        tensors_grad=layout_tensors_grad,
+        variant_type=variant_type,
+        feature_cfgs=feature_cfgs_str,
+        ps_num=ps_num,
+        parallel_flag=parallel_flag)
+  elif version == 2:
+    embeddings_grad_list = gen_distribution_ops.monolith_embedding_to_layout_grad_v2(
+        embeddings_list=embeddings_list,
+        fid_list_row_split=fid_list_row_split,
+        fid_offset=fid_offset,
+        feature_offset=feature_offset,
+        nfl_offset=nfl_offset,
+        batch_size=batch_size,
+        tensors_grad=layout_tensors_grad,
+        variant_type=variant_type,
+        feature_cfgs=feature_cfgs_str,
+        ps_num=ps_num,
+        parallel_flag=parallel_flag)
+  else:
+    embeddings_grad_list = gen_distribution_ops.monolith_embedding_to_layout_grad(
+        embeddings_list=embeddings_list,
+        fid_offset=fid_offset,
+        feature_offset=feature_offset,
+        nfl_offset=nfl_offset,
+        batch_size=batch_size,
+        tensors_grad=layout_tensors_grad,
+        variant_type=variant_type,
+        feature_cfgs=feature_cfgs_str)
   return embeddings_grad_list
 
 

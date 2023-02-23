@@ -93,23 +93,18 @@ def extract_help_info(cls, is_nested=True):
 def extract_flags_decorator(remove_flags=None, is_nested=True):
 
   def decorator(cls):
-    extract_flags(flags, cls, is_nested)
-    if remove_flags is not None:
-      for flag in remove_flags:
-        try:
-          flags.FLAGS.__delattr__(flag)
-        except:
-          pass
+    extract_flags(flags, cls, is_nested, remove_flags)
     return cls
 
   return decorator
 
 
-def extract_flags(gflags, dcls, is_nested=True) -> FlagValues:
+def extract_flags(gflags, dcls, is_nested=True, skip_flags=None) -> FlagValues:
   FLAGS = gflags.FLAGS
   help_info = extract_help_info(dcls, is_nested)
+  skip_flags = set() if skip_flags is None else set(skip_flags)
   for key, dtype in get_type_hints(dcls).items():
-    if key not in help_info.keys():
+    if key not in help_info.keys() or key in skip_flags:
       continue
     default = getattr(dcls, key)
     help_str = "default={}, {}".format(default, help_info.get(key, ""))

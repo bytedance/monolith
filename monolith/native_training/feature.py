@@ -35,6 +35,7 @@ from monolith.native_training.runtime.hash_table import \
     embedding_hash_table_pb2
 from monolith.native_training.model_export.export_context import is_exporting
 from monolith.native_training.monolith_export import monolith_export
+from monolith.native_training import prefetch_queue
 
 _FEATURE_STRAT_END_KEY = "{}:{}_{}"
 
@@ -626,10 +627,14 @@ class EmbeddingLayoutFactory(object):
   def __init__(self,
                hash_table: 'PartitionedHashTable',
                layout_embeddings: Dict[str, Union[tf.Tensor, List[tf.Tensor]]],
-               auxiliary_bundle: Dict[str, tf.Tensor] = None):
+               auxiliary_bundle: Dict[str, tf.Tensor] = None,
+               async_function_mgr: prefetch_queue.AsyncFunctionMgr = None,
+               async_push: bool = False):
     self.hash_table = hash_table
     self.layout_embeddings = layout_embeddings
     self.auxiliary_bundle = auxiliary_bundle
+    self._async_function_mgr = async_function_mgr
+    self._async_push = async_push
 
   def create_feature_slot(self, config: FeatureSlotConfig) -> FeatureSlot:
     table = EmbeddingLayoutFakeTable()
@@ -642,7 +647,10 @@ class EmbeddingLayoutFactory(object):
         layout_grads_and_vars=grads_and_vars,
         global_step=tf.compat.v1.train.get_or_create_global_step(),
         req_time=req_time or self.auxiliary_bundle.get("req_time"),
-        auxiliary_bundle=self.auxiliary_bundle)
+        auxiliary_bundle=self.auxiliary_bundle,
+        async_function_mgr=self._async_function_mgr,
+        async_push=self._async_push,
+    )
 
   def get_layout(self, layout: str) -> Union[tf.Tensor, List[tf.Tensor]]:
     assert layout in self.layout_embeddings

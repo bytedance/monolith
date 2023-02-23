@@ -138,7 +138,7 @@ class ContainerType(Enum):
   NATIVE = 2
 
 
-@gflags_utils.extract_flags_decorator(is_nested=True)
+@gflags_utils.extract_flags_decorator(remove_flags={'device_fn'}, is_nested=True)
 @dataclass
 class RunnerConfig(DistributedCpuTrainingConfig):
   """RunnerConfig for start a running.

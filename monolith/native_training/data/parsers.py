@@ -18,6 +18,7 @@ import struct
 from copy import deepcopy
 from typing import Dict, List, Iterable, Callable
 from collections import deque
+from dataclasses import dataclass
 import traceback
 
 import tensorflow as tf
@@ -41,12 +42,27 @@ _line_id_descriptor = LineId.DESCRIPTOR
 _default_parser_ctx = None
 
 
+@dataclass
+class ShardingSparseFidsOpParams:
+  num_ps: int
+  use_native_multi_hash_table: bool
+  unique: Callable
+  transfer_float16: bool
+  sub_table_name_to_config: Dict
+  feature_configs: FeatureConfigs
+  enable_gpu_emb: bool
+  use_gpu: bool
+
+
 class ParserCtx(object):
+  sharding_sparse_fids_features_prefix = "__sharding_sparse_fids__"
+  sharding_sparse_fids_sparse_features_key = "__sharding_sparse_fids__sparse_features"
 
   def __init__(self, enable_fused_layout: bool = False):
     self._old_parser_ctx = None
     self.parser_type = None
     self.enable_fused_layout = enable_fused_layout
+    self.sharding_sparse_fids_op_params: ShardingSparseFidsOpParams = None
     self._ctx_kv = {}
 
   def __enter__(self):
@@ -59,6 +75,40 @@ class ParserCtx(object):
     global _default_parser_ctx
     _default_parser_ctx = self._old_parser_ctx
     self._old_parser_ctx = None
+
+  @classmethod
+  def sharding_sparse_fids_features_insert_to_features(cls, inputs, features):
+    if isinstance(inputs, Dict):
+      for k, v in inputs.items():
+        if isinstance(v, Dict):
+          for sub_k, sub_v in v.items():
+            features[cls.sharding_sparse_fids_features_prefix + k + "/" +
+                     sub_k] = sub_v
+        elif isinstance(v, List):
+          raise ValueError("not support")
+        else:
+          features[cls.sharding_sparse_fids_features_prefix + k] = v
+    else:
+      raise ValueError("not support")
+
+  @classmethod
+  def sharding_sparse_fids_features_parse_from_features(cls, features):
+    outputs = {}
+    pop_key_list = []
+    for k, v in features.items():
+      if k.startswith(cls.sharding_sparse_fids_features_prefix):
+        name = k[len(cls.sharding_sparse_fids_features_prefix):]
+        level_ouput = outputs
+        level_names = name.split("/")
+        for level_name in level_names[:-1]:
+          if level_name not in level_ouput:
+            level_ouput[level_name] = {}
+          level_ouput = level_ouput[level_name]
+        level_ouput[level_names[-1]] = v
+        pop_key_list.append(k)
+    for k in pop_key_list:
+      features.pop(k)
+    return outputs
 
   def set(self, key, value):
     self._ctx_kv[key] = value
@@ -156,15 +206,21 @@ def _add_extra_features(names: List[str], shapes: List[int],
   types.extend(extra_dtypes)
 
 
-def _assemble(sparse_features, names, shapes, types, out_list, batch_size: int = None):
+def _assemble(sparse_features,
+              names,
+              shapes,
+              types,
+              out_list,
+              batch_size: int = None):
   assert len(out_list) == len(types)
   features = {}
   for i, name in enumerate(names):
     if name in sparse_features:
       value = out_list[i + len(names)]
       if batch_size:
-        batch_size = batch_size[0] if isinstance(batch_size, (list, tuple)) else batch_size
-        split = tf.reshape(out_list[i], shape=(batch_size+1,))
+        batch_size = batch_size[0] if isinstance(batch_size,
+                                                 (list, tuple)) else batch_size
+        split = tf.reshape(out_list[i], shape=(batch_size + 1,))
       else:
         split = out_list[i]
       features[name] = tf.RaggedTensor.from_row_splits(value,
@@ -262,7 +318,10 @@ def parse_instances(tensor: tf.Tensor,
     out_list, instances = parse_instance_ops.parse_instances_v2(
         tensor, [], [], names, shapes, types, extra_features or [])
     features = _assemble([], names, shapes, types, out_list)
-    features["sparse_features"] = instances
+    if get_default_parser_ctx().sharding_sparse_fids_op_params is not None:
+      sharding_sparse_fids_with_context(instances, features)
+    else:
+      features[ParserCtx.sharding_sparse_fids_sparse_features_key] = instances
     if "__FAKE_FEATURE__" in features:
       del features["__FAKE_FEATURE__"]
     return features
@@ -344,7 +403,10 @@ def parse_examples(tensor: tf.Tensor,
     out_list, examples = parse_instance_ops.parse_examples_v2(
         tensor, names, shapes, types, extra_features or [])
     features = _assemble([], names, shapes, types, out_list)
-    features["sparse_features"] = examples
+    if get_default_parser_ctx().sharding_sparse_fids_op_params is not None:
+      sharding_sparse_fids_with_context(examples, features)
+    else:
+      features[ParserCtx.sharding_sparse_fids_sparse_features_key] = examples
     if "__FAKE_FEATURE__" in features:
       del features["__FAKE_FEATURE__"]
     return features
@@ -423,8 +485,12 @@ def parse_example_batch(
       types.append(tf.float32)
     out_list, example_batch = parse_instance_ops.parse_example_batch_v2(
         tensor, names, shapes, types, extra_features or [])
-    features = _assemble([], names, shapes, types, out_list, batch_size=batch_size)
-    features["sparse_features"] = example_batch
+    features = _assemble([], names, shapes, types, out_list)
+    if get_default_parser_ctx().sharding_sparse_fids_op_params is not None:
+      sharding_sparse_fids_with_context(example_batch, features)
+    else:
+      features[
+          ParserCtx.sharding_sparse_fids_sparse_features_key] = example_batch
     if "__FAKE_FEATURE__" in features:
       del features["__FAKE_FEATURE__"]
     return features
@@ -433,7 +499,12 @@ def parse_example_batch(
     out_list = parse_instance_ops.parse_example_batch(tensor, names, shapes,
                                                       types, extra_features or
                                                       [])
-    return _assemble(sparse_features, names, shapes, types, out_list, batch_size=batch_size)
+    return _assemble(sparse_features,
+                     names,
+                     shapes,
+                     types,
+                     out_list,
+                     batch_size=batch_size)
 
 
 @monolith_export
@@ -444,7 +515,7 @@ def sharding_sparse_fids(tensor: tf.Tensor,
                          input_type: str,
                          parallel_flag: int = 0,
                          fid_list_ret_list: bool = False,
-                         version: int = 2):
+                         version: int = 3):
   assert input_type in ["example", "examplebatch", "example_batch", "instance"]
   input_type = 'examplebatch' if input_type == 'example_batch' else input_type
   table_name_list = []
@@ -452,12 +523,32 @@ def sharding_sparse_fids(tensor: tf.Tensor,
     if cfg.table not in table_name_list:
       table_name_list.append(cfg.table)
   table_name_list.sort()
-  logging.info(
-      f"num of multi_type_hashtable is {len(table_name_list)}: [{table_name_list}]"
-  )
   ps_num = 1 if ps_num == 0 else ps_num
+  logging.info(
+      f"num of multi_type_hashtable is {ps_num} {len(table_name_list)}: [{table_name_list}]"
+  )
   table_count = len(table_name_list) * ps_num
-  if version == 2:
+  fid_list_emb_row_lenth = None
+  fid_list_table_row_length = None
+  fid_list_shard_row_lenth = None
+  if version == 4:
+    fid_list, fid_list_row_splits, fid_list_table_row_length, fid_list_shard_row_lenth, fid_list_emb_row_lenth, fid_offset, feature_offset, nfl_offset, batch_size = parse_instance_ops.sharding_sparse_fids_v4(
+        pb_input=tensor,
+        ps_num=ps_num,
+        feature_cfgs=feature_cfgs.SerializeToString(),
+        unique=unique,
+        input_type=input_type,
+        parallel_flag=parallel_flag)
+  elif version == 3:
+    fid_list, fid_list_row_splits, fid_offset, feature_offset, nfl_offset, batch_size = parse_instance_ops.sharding_sparse_fids_v3(
+        pb_input=tensor,
+        ps_num=ps_num,
+        feature_cfgs=feature_cfgs.SerializeToString(),
+        N=table_count,
+        unique=unique,
+        input_type=input_type,
+        parallel_flag=parallel_flag)
+  elif version == 2:
     fid_list, fid_list_row_splits, fid_offset, feature_offset, nfl_offset, batch_size = parse_instance_ops.sharding_sparse_fids_v2(
         pb_input=tensor,
         ps_num=ps_num,
@@ -476,22 +567,86 @@ def sharding_sparse_fids(tensor: tf.Tensor,
         input_type=input_type,
         parallel_flag=parallel_flag)
     fid_list_row_splits = [None] * table_count
-  assert len(fid_list) == table_count
-  assert len(fid_list_row_splits) == table_count
-  if fid_list_ret_list:
-    return fid_list, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits
+  if version != 4:
+    assert len(fid_list) == table_count
+    assert len(fid_list_row_splits) == table_count
+  if fid_list_ret_list or version == 4:
+    return fid_list, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, fid_list_table_row_length, fid_list_shard_row_lenth
   ret = {}
   ret_row_split = {}
-  ret_ragged_ts = {}
   index = 0
-  for table_name in table_name_list:
+  for table_idx in range(len(table_name_list)):
+    table_name = table_name_list[table_idx]
     for ps_index in range(ps_num):
-      #logging.info(f"xxxx {table_name}:{ps_index} {fid_list_row_splits[index]}")
       ret[table_name + ":" + str(ps_index)] = fid_list[index]
       ret_row_split[table_name + ":" +
                     str(ps_index)] = fid_list_row_splits[index]
       index += 1
-  return ret, fid_offset, feature_offset, nfl_offset, batch_size, ret_row_split
+  return ret, fid_offset, feature_offset, nfl_offset, batch_size, ret_row_split, fid_list_emb_row_lenth, fid_list_table_row_length, fid_list_shard_row_lenth
+
+
+def sharding_sparse_fids_with_context(sparse_features: tf.Tensor, features):
+  parser_ctx = get_default_parser_ctx()
+  shards, fid_offset, feature_offset, nfl_offset, batch_size, shards_row_split, fid_list_emb_row_lenth, \
+    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
+      sparse_features,
+      ps_num=parser_ctx.sharding_sparse_fids_op_params.num_ps,
+      feature_cfgs=parser_ctx.sharding_sparse_fids_op_params.feature_configs,
+      unique=parser_ctx.sharding_sparse_fids_op_params.unique(),
+      input_type=parser_ctx.parser_type,
+      fid_list_ret_list=parser_ctx.sharding_sparse_fids_op_params.enable_gpu_emb,
+      parallel_flag=1 if parser_ctx.sharding_sparse_fids_op_params.use_gpu else 0,
+      version=4 if parser_ctx.sharding_sparse_fids_op_params.enable_gpu_emb else 3)
+  if parser_ctx.sharding_sparse_fids_op_params.enable_gpu_emb:
+    '''
+    table_count = len(shards) // parser_ctx.sharding_sparse_fids_op_params.num_ps
+
+    def tensor_list_to_ragged_tensor(tensor_list):
+      if len(tensor_list) == 1:
+        shard_ragged_tensor = tf.RaggedTensor.from_row_starts(
+            tensor_list[0], tf.constant([0], dtype=tf.int32), validate=False)
+      else:
+        shard_ragged_tensor = tf.ragged.stack(tensor_list)
+      return shard_ragged_tensor
+
+    shards_new_order_list = []
+    for ps_i in range(parser_ctx.sharding_sparse_fids_op_params.num_ps):
+      for table_i in range(table_count):
+        shards_new_order_list.append(shards[ps_i + table_i * parser_ctx.sharding_sparse_fids_op_params.num_ps])
+    shard_ragged_tensor = tensor_list_to_ragged_tensor(shards_new_order_list)
+    shards_value = shard_ragged_tensor.values
+    shards_table_row_lengths = shard_ragged_tensor.row_lengths()
+    shards_row_lengths = tf.reduce_sum(tf.reshape(shards_table_row_lengths,
+                                                  [parser_ctx.sharding_sparse_fids_op_params.num_ps, table_count]),
+                                       axis=-1)
+    '''
+    shards_value = shards
+    shards_row_lengths = fid_list_shard_row_lenth
+    shards_table_row_lengths = fid_list_table_row_length
+
+    parser_ctx.sharding_sparse_fids_features_insert_to_features(
+        {
+            "shards_value": shards_value,
+            "shards_row_lengths": shards_row_lengths,
+            "shards_table_row_lengths": shards_table_row_lengths,
+            "fid_offset": fid_offset,
+            "feature_offset": feature_offset,
+            "nfl_offset": nfl_offset,
+            "batch_size": batch_size,
+            "fid_list_emb_row_lenth": fid_list_emb_row_lenth,
+        }, features)
+  else:
+    features_dict = {
+        "shards": shards,
+        "fid_offset": fid_offset,
+        "feature_offset": feature_offset,
+        "nfl_offset": nfl_offset,
+        "batch_size": batch_size,
+    }
+    if parser_ctx.sharding_sparse_fids_op_params.use_native_multi_hash_table:
+      features_dict.update({"shards_row_split": shards_row_split})
+    parser_ctx.sharding_sparse_fids_features_insert_to_features(
+        features_dict, features)
 
 
 def parse_example_batch_list(

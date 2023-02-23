@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from contextlib import nullcontext
 import logging
 import string
 import numpy as np
@@ -28,7 +29,7 @@ from monolith.native_training import distribution_ops
 from idl.matrix.proto.example_pb2 import ExampleBatch, Example, FeatureListType, \
   SliceConfig, PoolingType, OutType, OutConfig, FeatureConfig, FeatureConfigs, TensorShape
 from monolith.native_training.data.parsers import parse_instances, parse_examples, parse_example_batch, \
-    sharding_sparse_fids, get_default_parser_ctx
+    sharding_sparse_fids, get_default_parser_ctx, ParserCtx
 
 SHARD_BIT = 0x80000000
 
@@ -173,13 +174,15 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
     return feature_cfg, table_cfg, feature_name_sort, table_name_sort
 
   def test_fused_embedding_to_layout(self,
-                                     use_shard_op=False,
-                                     parallel_flag=0x11):
-    batch_size = 10
+                                     shard_op_version=None,
+                                     op_version=2,
+                                     parallel_flag=1,
+                                     use_gpu=False):
+    batch_size = 256
     num_ps = 5
-    slot_count = 12
-    slot_table_split = [5,
-                        8]  #slot split for [table_one, table_two, table_three]
+    slot_count = 200
+    slot_table_split = [50, 100
+                       ]  #slot split for [table_one, table_two, table_three]
     max_sequence_length = 3
     feature_cfgs = FeatureConfigs()
     bias = OutConfig()
@@ -341,7 +344,7 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
     #sparse_features_str = tf.constant(value=sparse_features.SerializeToString(),
     #                                  dtype=tf.string)
 
-    if use_shard_op:
+    if shard_op_version:
       get_default_parser_ctx().enable_fused_layout = True
       parsed_results = parse_example_batch(sparse_features.SerializeToString(),
                                            sparse_features=[],
@@ -350,35 +353,55 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
                                            dense_feature_types=[],
                                            extra_features=[],
                                            extra_feature_shapes=[])
-      sparse_varint = parsed_results.pop("sparse_features")
-      fid_list, fid_offset_list_ts, feature_offset_list_ts, nfl_offset_list_ts, batch_size_ts, fid_row_split_list_ts = sharding_sparse_fids(
+      sparse_varint = parsed_results.pop(
+          ParserCtx.sharding_sparse_fids_sparse_features_key)
+      fid_list, fid_offset_list_ts, feature_offset_list_ts, nfl_offset_list_ts, batch_size_ts, fid_row_split_list_ts, fid_list_emb_row_lenth, \
+    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
           sparse_varint,
           num_ps,
           feature_cfgs,
           False,
           "examplebatch",
           parallel_flag=0,
-          fid_list_ret_list=True)
+          fid_list_ret_list=True,
+          version=shard_op_version)
     else:
       fid_row_split_list_ts = fid_row_split_list
       fid_offset_list_ts = tf.constant(fid_offset_list, dtype=tf.uint64)
       feature_offset_list_ts = tf.constant(feature_offset_list[:-1],
                                            dtype=tf.int32)
       nfl_offset_list_ts = tf.constant(nfl_offset_list[:-1], dtype=tf.uint32)
-      batch_size_ts = tf.constant([batch_size], dtype=tf.int32)
+      fid_list_emb_row_lenth = None
+      if op_version >= 3:
+        raise TypeError('Not imple')
+        batch_size_ts = tf.constant([0] * batch_size, dtype=tf.int32)
+      else:
+        batch_size_ts = tf.constant([batch_size], dtype=tf.int32)
 
     variant_type = 'example_batch'
-    layouts_op = distribution_ops.fused_embedding_to_layout(
-        embeddings_list,
-        fid_row_split_list_ts,
-        fid_offset_list_ts,
-        feature_offset_list_ts,
-        nfl_offset_list_ts,
-        batch_size_ts,
-        variant_type,
-        feature_cfgs,
-        num_ps,
-        parallel_flag=parallel_flag)
+    if use_gpu:
+      assert op_version >= 3
+    if op_version == 4:
+      embeddings_list_new = []
+      for ps_i in range(num_ps):
+        for table_i in range(len(table_name_sort)):
+          embeddings_list_new.append(embeddings_list[table_i * num_ps + ps_i])
+      embeddings_list = [tf.concat(embeddings_list_new, axis=-1)]
+
+    with test_util.use_gpu() if use_gpu else tf.device("CPU:0"):
+      layouts_op = distribution_ops.fused_embedding_to_layout(
+          embeddings_list,
+          fid_row_split_list_ts,
+          fid_offset_list_ts,
+          feature_offset_list_ts,
+          nfl_offset_list_ts,
+          batch_size_ts,
+          variant_type,
+          feature_cfgs,
+          num_ps,
+          fid_list_emb_row_lenth=fid_list_emb_row_lenth,
+          parallel_flag=parallel_flag,
+          version=op_version)
     with self.session() as sess:
       layouts = sess.run(layouts_op)
     #logging.info(f"show layouts: {layouts}")
@@ -493,14 +516,34 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
       assert flag
 
   def test_fused_embedding_to_layout_use_shard_op(self):
-    self.test_fused_embedding_to_layout(use_shard_op=True)
+    self.test_fused_embedding_to_layout(shard_op_version=2)
+
+  def test_fused_embedding_to_layout_use_shard_op3(self):
+    self.test_fused_embedding_to_layout(shard_op_version=3, op_version=3)
+
+  def test_fused_embedding_to_layout_use_shard_op3_gpu(self):
+    self.test_fused_embedding_to_layout(shard_op_version=3,
+                                        op_version=3,
+                                        use_gpu=True)
+
+  def test_fused_embedding_to_layout_use_shard_op4(self):
+    self.test_fused_embedding_to_layout(shard_op_version=4, op_version=4)
+
+  def test_fused_embedding_to_layout_use_shard_op4_gpu(self):
+    self.test_fused_embedding_to_layout(shard_op_version=4,
+                                        op_version=4,
+                                        use_gpu=True)
 
   def test_fused_embedding_to_layout_parallel(self):
-    self.test_fused_embedding_to_layout(parallel_flag=0x00)
+    self.test_fused_embedding_to_layout(parallel_flag=0)
 
-  def test_fused_embedding_to_layout_grad(self, parallel_flag=0x11):
-    batch_size = 4
-    num_ps = 2
+  def test_fused_embedding_to_layout_grad(self,
+                                          shard_op_version=None,
+                                          op_version=2,
+                                          parallel_flag=1,
+                                          use_gpu=False):
+    batch_size = 256
+    num_ps = 3
     slot_num = 30
     slot_table_split = [10,
                         20]  #slot split for [table_one, table_two, table_three]
@@ -515,8 +558,6 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
     ffm2 = OutConfig()
     firstN = OutConfig()
 
-    slot2fid = dict()
-    slot2fid_offset = defaultdict(list)
     for slot in range(1, slot_num):
       feature_name = f"fc_slot_{alphabet_name[slot - 1]}"
       fconf = FeatureConfig()
@@ -577,9 +618,31 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
     feature_cfg, table_cfg, feature_name_sort, table_name_sort = self.get_feature_cfg(
         feature_cfgs, num_ps)
 
+    # gen all fids
+    slot2fid = defaultdict(list)
+    sparse_features = [Example() for i in range(batch_size)]
+    fid_idx_list_batch = defaultdict(lambda: [[] for i in range(batch_size)])
+    for slot in range(1, slot_num):
+      feature_name = f"fc_slot_{alphabet_name[slot - 1]}"
+      fids = list(
+          set([(slot << 48) + randint(100, 1000000)
+               for _ in range(randint(batch_size + 1, batch_size + 10))]))
+      slot2fid[slot] = fids
+
+      for bi in range(batch_size):
+        sparse_feature = sparse_features[bi]
+        named_feature = sparse_feature.named_feature.add()
+        named_feature.name = feature_name
+        fid_idx_list = [i for i in range(bi, len(fids) - batch_size + 1 + bi)]
+        fid_idx_list_batch[slot][bi] = fid_idx_list
+
+        fid_list = [fids[idx] for idx in fid_idx_list]
+        named_feature.feature.fid_v2_list.value.extend(fid_list)
+
+    # gen offset
+    slot2fid_offset = defaultdict(list)
     embedding_fid_list = [[] for _ in range(num_ps * len(table_cfg))]
     fid_row_split_list = [[0] for _ in range(num_ps * len(table_cfg))]
-
     # record the truth
     truth = defaultdict(lambda: defaultdict(list))
     for slot in range(1, slot_num):
@@ -587,12 +650,8 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
       f_cfg = feature_cfg[feature_name]
       dim_sum = f_cfg["dim_sum"]
       table_idx = f_cfg["table_index"]
-      fids = list(
-          set([(slot << 48) + randint(100, 1000000)
-               for _ in range(randint(2, 10))]))
-      slot2fid[slot] = fids
+      fids = slot2fid[slot]
       embedding_fid_list_tmp = [[] for _ in range(num_ps)]
-
       for fid in fids:
         ps_index = fid % num_ps
         index1 = table_idx * num_ps + ps_index
@@ -610,26 +669,17 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
         index1 = table_idx * num_ps + ps_i
         fid_row_split_list[index1].append(len(embedding_fid_list[index1]))
 
+    # gen offset
     fid_offset_list = list()
     feature_offset_list = [0]
     nfl_offset_list = [0]
-    embeddings_list = list()
-    #sparse_features = [Example() for i in range(batch_size)]
-
     for slot in range(1, slot_num):
       feature_name = f"fc_slot_{alphabet_name[slot - 1]}"
       feature_config = feature_cfgs.feature_configs[feature_name]
       pooling_type = feature_config.pooling_type
       max_length = feature_config.max_sequence_length
       for bi in range(batch_size):
-        #sparse_feature = sparse_features[bi]
-        #named_feature = sparse_feature.named_feature.add()
-        #named_feature.name = f"fc_slot_{alphabet_name[slot - 1]}"
-        all_fids = slot2fid[slot]
-        fid_num = randint(0, len(all_fids))
-        fid_idx_list = [randint(1, len(all_fids) - 1) for i in range(fid_num)]
-        #fid_list = [all_fids[idx] for idx in fid_idx_list]
-        #named_feature.feature.fid_v2_list.value.extend(fid_list)
+        fid_idx_list = fid_idx_list_batch[slot][bi]
 
         for i, idx in enumerate(fid_idx_list):
           index1, index2, full_index, feature_index = slot2fid_offset[slot][idx]
@@ -637,6 +687,8 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
           fid_offset_list.append(fid_offset)
           if pooling_type == PoolingType.FIRSTN and i >= max_length:
             pass
+          elif pooling_type == PoolingType.MEAN:
+            truth[index1][index2][0] += 1 / len(fid_idx_list)
           else:
             truth[index1][index2][0] += 1
 
@@ -644,6 +696,8 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
       nfl_index = len(feature_offset_list) - 1
       nfl_offset_list.append(nfl_index)
 
+    # gen emb
+    embeddings_list = list()
     for idx, embedding_fid in enumerate(embedding_fid_list):
       dim_sum = 0
       for fid, dim in embedding_fid:
@@ -654,27 +708,96 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
           tf.reshape(tf.constant(value=emb, dtype=tf.float32), [-1]))
 
     with self.session() as sess:
-      fid_offset_list_ts = tf.constant(fid_offset_list, dtype=tf.uint64)
-      feature_offset_list_ts = tf.constant(feature_offset_list[:-1],
-                                           dtype=tf.int32)
-      nfl_offset_list_ts = tf.constant(nfl_offset_list[:-1], dtype=tf.uint32)
-      batch_size_ts = tf.constant([batch_size], dtype=tf.int32)
+      if shard_op_version:
+        get_default_parser_ctx().enable_fused_layout = True
+        parsed_results = parse_examples(
+            [sparse.SerializeToString() for sparse in sparse_features],
+            sparse_features=[],
+            dense_features=[],
+            dense_feature_shapes=[],
+            dense_feature_types=[],
+            extra_features=[],
+            extra_feature_shapes=[])
+        sparse_varint = parsed_results.pop(
+            ParserCtx.sharding_sparse_fids_sparse_features_key)
+        fid_list, fid_offset_list_ts, feature_offset_list_ts, nfl_offset_list_ts, batch_size_ts, fid_row_split_list, fid_list_emb_row_lenth, \
+    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
+            sparse_varint,
+            num_ps,
+            feature_cfgs,
+            True,
+            "example",
+            parallel_flag=0,
+            fid_list_ret_list=True,
+            version=shard_op_version)
+
+        assert op_version == shard_op_version
+      else:
+        fid_offset_list_ts = tf.constant(fid_offset_list, dtype=tf.uint64)
+        feature_offset_list_ts = tf.constant(feature_offset_list[:-1],
+                                             dtype=tf.int32)
+        nfl_offset_list_ts = tf.constant(nfl_offset_list[:-1], dtype=tf.uint32)
+        batch_size_ts = tf.constant([batch_size], dtype=tf.int32)
+        fid_list_emb_row_lenth = None
+        if op_version >= 3:
+          raise TypeError('Not imple')
+
+      if use_gpu:
+        assert op_version >= 3
+      if op_version == 4:
+        embeddings_list_new = []
+        for ps_i in range(num_ps):
+          for table_i in range(len(table_name_sort)):
+            embeddings_list_new.append(embeddings_list[table_i * num_ps + ps_i])
+        embeddings_list = [tf.concat(embeddings_list_new, axis=-1)]
 
       variant_type = 'example'
-      layouts = distribution_ops.fused_embedding_to_layout(
+      with test_util.use_gpu() if use_gpu else tf.device("CPU:0"):
+        layouts = distribution_ops.fused_embedding_to_layout(
+            embeddings_list,
+            fid_row_split_list,
+            fid_offset_list_ts,
+            feature_offset_list_ts,
+            nfl_offset_list_ts,
+            batch_size_ts,
+            variant_type,
+            feature_cfgs,
+            num_ps,
+            fid_list_emb_row_lenth=fid_list_emb_row_lenth,
+            parallel_flag=parallel_flag,
+            version=op_version)
+        #layouts_ret = sess.run(layouts)
+        #logging.info(f"show result: {layouts_ret}")
+        test_grads = tf.gradients(layouts, embeddings_list)
+        if op_version == 4:
+          recv_embeddings_split = tf.split(test_grads[0],
+                                           fid_list_emb_row_lenth)
+
+          test_grads = [None] * (num_ps * len(table_name_sort))
+          recv_embeddings_split_index = 0
+          for ps_index in range(num_ps):
+            for table_idx in range(len(table_name_sort)):
+              test_grads[
+                  table_idx * num_ps +
+                  ps_index] = recv_embeddings_split[recv_embeddings_split_index]
+              recv_embeddings_split_index += 1
+      ''' TODO
+      test_grads = distribution_ops.fused_embedding_to_layout_grad(
+          nfl_offset_list_ts,
+          feature_offset_list_ts,
+          fid_offset_list_ts,
+          batch_size_ts,
           embeddings_list,
           fid_row_split_list,
-          fid_offset_list_ts,
-          feature_offset_list_ts,
-          nfl_offset_list_ts,
-          batch_size_ts,
+          layouts,
           variant_type,
           feature_cfgs,
           num_ps,
-          parallel_flag=parallel_flag)
-      #layouts_ret = sess.run(layouts)
-      #logging.info(f"show result: {layouts_ret}")
-      test_grads = tf.gradients(layouts, embeddings_list)
+          parallel_flag=parallel_flag,
+          version=2,
+      )
+      '''
+
       grads = sess.run(test_grads)
       logging.info(f"show result: {grads}")
       logging.info(f"show truth: {truth}")
@@ -689,12 +812,31 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
           assert len(np.unique(grad[offset: offset + dim])) == 1, \
                     f"Alert All The Same! [{i}, {j}] [{(t, dim)}, {grad[offset: offset + dim]}]"
           # The gound truth should be the fid used times
-          assert t == grad[offset], \
+          assert np.allclose(t, grad[offset], rtol=1e-04, atol=1e-07, equal_nan=False), \
             f"Alert Equal! [{i}, {j}] [{t} {grad[offset]}]"
           offset += dim
 
   def test_fused_embedding_to_layout_grad_no_parallel(self):
-    self.test_fused_embedding_to_layout_grad(parallel_flag=0x00)
+    self.test_fused_embedding_to_layout_grad(parallel_flag=0)
+
+  def test_fused_embedding_to_layout_grad_use_shard_op(self):
+    self.test_fused_embedding_to_layout_grad(shard_op_version=2, op_version=2)
+
+  def test_fused_embedding_to_layout_grad_use_shard_op3(self):
+    self.test_fused_embedding_to_layout_grad(shard_op_version=3, op_version=3)
+
+  def test_fused_embedding_to_layout_grad_use_shard_op3_gpu(self):
+    self.test_fused_embedding_to_layout_grad(shard_op_version=3,
+                                             op_version=3,
+                                             use_gpu=True)
+
+  def test_fused_embedding_to_layout_grad_use_shard_op4(self):
+    self.test_fused_embedding_to_layout_grad(shard_op_version=4, op_version=4)
+
+  def test_fused_embedding_to_layout_grad_use_shard_op4_gpu(self):
+    self.test_fused_embedding_to_layout_grad(shard_op_version=4,
+                                             op_version=4,
+                                             use_gpu=True)
 
 
 class FusedEmbeddingToLayoutFitPreTest(tf.test.TestCase):
@@ -1056,6 +1198,10 @@ class FusedEmbeddingToLayoutFitPreTest(tf.test.TestCase):
     sparse_features = [Example() for i in range(batch_size)]
 
     for slot in range(1, slot_num):
+      feature_name = f"fc_slot_{alphabet_name[slot - 1]}"
+      feature_config = feature_cfgs.feature_configs[feature_name]
+      pooling_type = feature_config.pooling_type
+      max_length = feature_config.max_sequence_length
       for bi in range(batch_size):
         sparse_feature = sparse_features[bi]
         named_feature = sparse_feature.named_feature.add()
@@ -1070,7 +1216,12 @@ class FusedEmbeddingToLayoutFitPreTest(tf.test.TestCase):
           index1, index2 = slot2fid_offset[slot][idx]
           fid_offset = index1 << 32 | index2
           fid_offset_list.append(fid_offset)
-          truth[index1][index2] += 1
+          if pooling_type == PoolingType.FIRSTN and i >= max_length:
+            pass
+          elif pooling_type == PoolingType.MEAN:
+            truth[index1][index2] += 1 / len(fid_idx_list)
+          else:
+            truth[index1][index2] += 1
 
         feature_offset_list.append(len(fid_offset_list))
       nfl_index = len(feature_offset_list) - 1
@@ -1118,7 +1269,8 @@ class FusedEmbeddingToLayoutFitPreTest(tf.test.TestCase):
           # The gound truth should be the fid used times
           logging.info(
               f"fused_embedding_to_layout grad show {truth[i][j]} {grad[j, 0]}")
-          assert truth[i][j] == grad[j, 0], "Alert Equal! [{}, {}]".format(i, j)
+          assert np.allclose(truth[i][j],grad[j, 0], rtol=1e-04, atol=1e-07, equal_nan=False), \
+            "Alert Equal! [{}, {}]".format(i, j)
 
 
 if __name__ == "__main__":

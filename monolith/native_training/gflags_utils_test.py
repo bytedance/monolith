@@ -96,16 +96,18 @@ class TestConfig5(TestConfig5Base):
 
 class GflagUtilsTest(tf.test.TestCase):
 
-  def _check_help_info(self, cls):
+  def _check_help_info(self, cls, skip_flags=set()):
     help_info = utils.extract_help_info(cls)
     for key, _ in get_type_hints(cls).items():
+      if key in skip_flags:
+        continue
       self.assertIn(key, help_info,
                     '{} is not in {}, please add a help info'.format(key, cls))
 
   def test_extract_help_info(self):
-    self._check_help_info(CpuTrainingConfig)
-    self._check_help_info(DistributedCpuTrainingConfig)
-    self._check_help_info(RunnerConfig)
+    self._check_help_info(CpuTrainingConfig, {'device_fn'})
+    self._check_help_info(DistributedCpuTrainingConfig, {'device_fn'})
+    self._check_help_info(RunnerConfig, {'device_fn'})
 
     res = utils.extract_help_info(TestConfig)
     self.assertIn("test_int1", res)

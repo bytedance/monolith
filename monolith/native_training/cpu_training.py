@@ -40,6 +40,9 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.python.lib.io import file_io
 from tensorflow.python.training.summary_io import SummaryWriterCache
+from tensorflow.python.ops import resources
+from tensorflow.python.ops import variables as tfvariables
+from tensorflow.python.ops.control_flow_ops import NoOp
 
 from monolith.agent_service.agent_service_pb2 import ServerType
 from monolith.agent_service.backends import SyncBackend
@@ -48,9 +51,9 @@ from monolith.native_training import barrier_ops
 from monolith.native_training import basic_restore_hook
 from monolith.native_training import cluster_manager
 from monolith.native_training import device_utils
-from monolith.native_training import distributed_ps_factory
-from monolith.native_training import distributed_ps_sync
+from monolith.native_training import distributed_ps_factory, distributed_ps
 from monolith.native_training import distribution_ops
+from monolith.native_training import distributed_ps_sync
 from monolith.native_training import embedding_combiners
 from monolith.native_training import entry
 from monolith.native_training import feature
@@ -105,11 +108,14 @@ from monolith.native_training.runtime.parameter_sync import \
     parameter_sync_pb2
 from monolith.native_training.service_discovery import ServiceDiscovery
 from monolith.native_training.service_discovery import TfConfigServiceDiscovery
+from monolith.native_training.service_discovery import MLPServiceDiscovery
 from monolith.native_training.data.training_instance.python import parser_utils
 from monolith.native_training.model_dump.dump_utils import DumpUtils, DRY_RUN
 from monolith.native_training.data.parsers import ParserCtx, get_default_parser_ctx
 from monolith.native_training.dense_reload_utils import CustomRestoreListenerKey, CustomRestoreListener
 from monolith.native_training.data.item_pool_hook import ItemPoolSaveRestoreHook, POOL_KEY
+from monolith.native_training.distribution_utils import get_sync_run_hooks, \
+  update_session_config_for_gpu, get_mpi_rank, get_mpi_size, get_mpi_local_rank
 
 flags.DEFINE_string(
     "monolith_chief_alert_proto", "",
@@ -291,6 +297,9 @@ class CpuTrainingConfig:
     :param enable_embedding_postpush: Whether enable embedding post push.
     :param enable_variable_postpush: Whether enable variable post push.
     :param enable_sync_training: Whether use MPI or RPC for the distributed training.
+    :param enable_partial_sync_training: Whether use sparse_dense mode to train.
+    :param enable_gpu_training: Whethere to also use GPU for training besides CPU.
+    :param processes_per_gpu: Integer number of mpi processes on GPU (for sync training).
     :param merge_sync_training_ckpt: Whether merge sync ckpt and skip non-worker0 dense variable save.
     :param mode: The running mode, must be train/eval/infer.
     :param partial_recovery: Whether enable partial recovery when failover.
@@ -348,6 +357,9 @@ class CpuTrainingConfig:
   enable_variable_prefetch: bool = False
   enable_variable_postpush: bool = False
   enable_sync_training: bool = False
+  enable_partial_sync_training: bool = False
+  enable_gpu_training: bool = False
+  processes_per_gpu: int = 1
   merge_sync_training_ckpt: bool = True
   mode: str = tf.estimator.ModeKeys.TRAIN
   partial_recovery: bool = None
@@ -388,6 +400,11 @@ class CpuTrainingConfig:
   reload_alias_map: Dict[str, int] = None
   enable_alias_map_auto_gen: bool = None
   enable_model_dump: bool = False
+  device_fn: Callable[[tf.Operation], str] = None
+
+  @property
+  def enable_full_sync_training(self):
+    return self.enable_sync_training and not self.enable_partial_sync_training
 
 
 def _make_serving_config_from_training_config(
@@ -402,6 +419,8 @@ def _make_serving_config_from_training_config(
   if serving_config.enable_sync_training:
     serving_config.enable_sync_training = False
     serving_config.num_ps = training_config.num_workers
+  if serving_config.enable_partial_sync_training:
+    serving_config.enable_partial_sync_training = False
   return serving_config
 
 
@@ -450,10 +469,13 @@ class CpuTraining:
         config.partial_recovery = True
       if config.dense_only_save_checkpoints_secs is None and config.dense_only_save_checkpoints_steps is None:
         config.dense_only_save_checkpoints_secs = 30 * 60
-    if config.use_native_multi_hash_table is None:
-        config.use_native_multi_hash_table = True
 
+    if config.use_native_multi_hash_table is None:
+      config.use_native_multi_hash_table = True
     get_default_parser_ctx().enable_fused_layout = config.enable_fused_layout
+
+    FLAGS.dataset_worker_idx = config.index
+    FLAGS.dataset_num_workers = config.num_workers
 
     self._config_do_not_refer_directly = copy.deepcopy(config)
     self._serving_config_do_not_refer_directly = _make_serving_config_from_training_config(
@@ -464,6 +486,12 @@ class CpuTraining:
     self._slot_to_occurrence_threshold = {}
     self._slot_to_expire_time = {}
     self._sync_backend = sync_backend
+    if export_context.is_exporting():
+      self._enable_gpu_emb = False
+      self._use_gpu = export_context.get_current_export_ctx().with_remote_gpu
+    else:
+      self._enable_gpu_emb = self._params.train.use_gpu_emb_table
+      self._use_gpu = config.enable_gpu_training
 
     # Gather extra configs for initialization earlier here.
     with native_task_context.with_ctx(
@@ -498,6 +526,24 @@ class CpuTraining:
       if not self.config.use_native_multi_hash_table:
         self._dummy_merged_table = multi_type_hash_table.MergedMultiTypeHashTable(
           self.feature_configs[0], lambda *args, **kwargs: None)
+
+    if get_default_parser_ctx().enable_fused_layout:
+      # same param to fused_layout
+      (feature_name_config, feature_to_unmerged_slice_dims,
+       feature_to_combiner) = self.feature_configs
+      get_default_parser_ctx(
+      ).sharding_sparse_fids_op_params = distributed_ps.PartitionedHashTable.gen_feature_configs(
+          num_ps=self.config.num_workers
+          if self._enable_gpu_emb else self.config.num_ps,
+          feature_name_to_config=feature_name_config,
+          layout_configs=self._task.layout_dict,
+          feature_to_combiner=feature_to_combiner,
+          feature_to_unmerged_slice_dims=feature_to_unmerged_slice_dims,
+          use_native_multi_hash_table=self.config.use_native_multi_hash_table,
+          unique=lambda: False if is_exporting() else True,
+          transfer_float16=False,
+          enable_gpu_emb=self._enable_gpu_emb,
+          use_gpu=self._use_gpu)
 
   @property
   def config(self) -> CpuTrainingConfig:
@@ -581,7 +627,8 @@ class CpuTraining:
       return wrapped_parse_fn
 
     if (mode != tf.estimator.ModeKeys.PREDICT and
-        self.config.reorder_fids_in_data_pipeline):
+        self.config.reorder_fids_in_data_pipeline and
+        not self.config.enable_fused_layout):
       # Assumption: use_reduced_alltoall
       parser_utils.add_extra_parse_step(_create_parse_fn())
 
@@ -618,7 +665,9 @@ class CpuTraining:
       if is_exporting():
         hash_filters = [None] * max(1, self.config.num_ps)
       else:
-        with device_utils.maybe_device_if_allowed('/device:GPU:0'):
+        with device_utils.maybe_device_if_allowed(
+            '/device:GPU:0'
+        ) if self._enable_gpu_emb else contextlib.nullcontext():
           hash_filters = hash_filter_ops.create_hash_filters(
               self.config.num_ps,
               self._enable_hash_filter,
@@ -639,24 +688,17 @@ class CpuTraining:
           config.table_config.slot_expire_time_config.CopyFrom(
               slot_to_expire_time_config)
 
-      unique = False if is_exporting() else True
       sync_clients = [None] * max(1, self.config.num_ps)
       if self.config.enable_realtime_training and not is_exporting():
         sync_clients = distributed_serving_ops.create_parameter_sync_clients(
             self.config.num_ps)
-      if not self.config.enable_sync_training:
+      if not self.config.enable_full_sync_training:
         if self.config.enable_fused_layout:
           return distributed_ps_factory.create_partitioned_hash_table(
               num_ps=self.config.num_ps,
-              feature_name_to_config=feature_name_config,
-              layout_configs=self._task.layout_dict,
-              feature_to_combiner=feature_to_combiner,
-              feature_to_unmerged_slice_dims=feature_to_unmerged_slice_dims,
               use_native_multi_hash_table=self.config.
               use_native_multi_hash_table,
               max_rpc_deadline_millis=self.config.max_rpc_deadline_millis,
-              unique=unique,
-              transfer_float16=False,
               hash_filters=hash_filters,
               sync_clients=sync_clients), hash_filters
         elif self.config.use_native_multi_hash_table:
@@ -685,18 +727,17 @@ class CpuTraining:
 
         if self.config.enable_fused_layout:
           return distributed_ps_factory.create_partitioned_hash_table(
-              num_ps=self.config.num_ps,
-              feature_name_to_config=feature_name_config,
-              layout_configs=self._task.layout_dict,
-              feature_to_combiner=feature_to_combiner,
-              feature_to_unmerged_slice_dims=feature_to_unmerged_slice_dims,
+              num_ps=self.config.num_workers
+              if self._enable_gpu_emb else self.config.num_ps,
               use_native_multi_hash_table=self.config.
               use_native_multi_hash_table,
               max_rpc_deadline_millis=self.config.max_rpc_deadline_millis,
-              unique=unique,
-              transfer_float16=False,
-              hash_filters=hash_filters,
-              sync_clients=sync_clients), hash_filters
+              hash_filters=hash_filters *
+              self.config.num_workers if self._enable_gpu_emb else hash_filters,
+              sync_clients=sync_clients *
+              self.config.num_workers if self._enable_gpu_emb else sync_clients,
+              enable_gpu_emb=self._enable_gpu_emb,
+              queue_configs=queue_configs), hash_filters
         elif self.config.use_native_multi_hash_table:
           return distributed_ps_factory.create_in_worker_native_multi_hash_table(
               self.config.num_workers,
@@ -766,7 +807,7 @@ class CpuTraining:
     self._slot_to_occurrence_threshold = feature_factory.slot_to_occurrence_threshold
     self._slot_to_expire_time = feature_factory.slot_to_expire_time
 
-    if self.config.enable_sync_training:
+    if self.config.enable_full_sync_training:
       # To improve hash table performance
       for config in feature_to_config.values():
         config.table_config.entry_type = embedding_hash_table_pb2.EmbeddingHashTableConfig.RAW
@@ -800,7 +841,7 @@ class CpuTraining:
               basename,
               hash_filters,
               self._enable_hash_filter,
-              enable_save_restore=(not self.config.enable_sync_training)),
+              enable_save_restore=(not self.config.enable_full_sync_training)),
           CustomRestoreListener(
               self.config.reload_alias_map,
               self.config.clear_nn,
@@ -887,7 +928,7 @@ class CpuTraining:
 
       def create_saver():
         return save_utils.PartialRecoverySaver(
-            sharded=not self.config.enable_sync_training,
+            sharded=not self.config.enable_full_sync_training,
             max_to_keep=self.config.checkpoints_max_to_keep,
             keep_checkpoint_every_n_hours=24,
             ps_monitor=ps_monitor,
@@ -908,11 +949,11 @@ class CpuTraining:
               basename,
               hash_filters,
               self._enable_hash_filter,
-              enable_save_restore=(not self.config.enable_sync_training))
+              enable_save_restore=(not self.config.enable_full_sync_training))
       ]
 
       include_graphs = None
-      if self.config.enable_sync_training:
+      if self.config.enable_full_sync_training:
         include_graphs = [f"ps_{self.config.index}"]
         if is_root_node:
           include_graphs.append("entry")
@@ -1122,30 +1163,40 @@ class CpuTraining:
         with get_cached_variable_context(), get_partitioner_variable_context():
           spec = raw_model_fn(features=features, mode=mode, config=config)
 
-        return spec
+          return spec
 
       if self.config.enable_fused_layout:
         self._task.ctx.feature_factory = None
-        sparse_features = features.pop('sparse_features')
-        auxiliary_bundle.update(features)
-        layout_embeddings = hash_table.lookup(sparse_features, auxiliary_bundle)
-        # embedding_prefetch
-        (deq_layout_embeddings,
-         deq_auxiliary_bundle), queue = enqueue_dicts_with_queue_return(
-             (layout_embeddings, auxiliary_bundle),
-             capacity=self.config.embedding_prefetch_capacity)
-        if queue:
-          hash_table.add_queue_hook(EnqueueHook(queue))
-
-        dequeued_features = {key: deq_auxiliary_bundle[key] for key in features}
-        # args are data we will transfer to remote deivce if needed.
-        args = (deq_layout_embeddings, dequeued_features)
+        fused_layout_callable_fn = hash_table.lookup(
+            features,
+            auxiliary_bundle,
+            ret_fused_layout_callable_fn=True,
+            embedding_prefetch_capacity=self.config.embedding_prefetch_capacity)
 
         def call_model_fn(args):
+          # add fused_layout_callable_fn here to support with_remote_gpu
+          logging.info(
+              f"hash_table lookup when enable_fused_layout input: {args}")
+          auxiliary_bundle_ = args[0]
+          features_ = args[1]
+          layout_embeddings = fused_layout_callable_fn(auxiliary_bundle_,
+                                                       features_)
+          logging.info(
+              f"hash_table lookup when enable_fused_layout res: {layout_embeddings} {auxiliary_bundle_} {features_}"
+          )
+          auxiliary_bundle_.update(features_)
+
           # set layout_factory, this step must after embedding_prefetch
           self._task.ctx.layout_factory = feature.EmbeddingLayoutFactory(
-              hash_table, args[0], auxiliary_bundle=deq_auxiliary_bundle)
-          return call_raw_model_fn(args[1])
+              hash_table,
+              layout_embeddings,
+              auxiliary_bundle=auxiliary_bundle_,
+              async_function_mgr=async_function_mgr,
+              async_push=self.config.enable_embedding_postpush)
+          return call_raw_model_fn(features_)
+
+        #args are data we will transfer to remote deivce if needed.
+        args = (auxiliary_bundle, features)
       else:
         if self.config.reorder_fids_in_data_pipeline:
           features, res_pack = features
@@ -1225,7 +1276,7 @@ class CpuTraining:
         # will automatically add send/recv if tensors are on the different graph.
         def call_model_fn(args):
           self._task.ctx.layout_factory = None
-          if self.config.enable_sync_training:
+          if self.config.enable_full_sync_training:
             # TODO(zouxuan): enable this for async training later on.
             self._task.ctx.feature_factory = _FusedCpuFeatureFactory(
                 hash_table,
@@ -1321,12 +1372,41 @@ class CpuTraining:
 
         predicting_hooks = (get_hooks_for_restore(config.model_dir,
                                                   hash_filters, ps_monitor))
+        if self.config.enable_partial_sync_training and self.config.index != 0:
+          elements = []
+          local_init_ops = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.LOCAL_INIT_OP)
+          if local_init_ops:
+            elements.extend(local_init_ops)
+          else:
+            local_init_op = tf.compat.v1.train.Scaffold.get_or_default(
+              'local_init_op', tf.compat.v1.GraphKeys.LOCAL_INIT_OP,
+              tf.compat.v1.train.Scaffold.default_local_init_op)
+            elements.append(local_init_op)
 
+          init_ops = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.INIT_OP)
+          if init_ops:
+            elements.extend(init_ops)
+          else:
+            def default_init_op():
+              return tf.group(
+                  tfvariables.global_variables_initializer(),
+                  resources.initialize_resources(resources.shared_resources()))
+
+            init_op = tf.compat.v1.train.Scaffold.get_or_default(
+              'init_op', tf.compat.v1.GraphKeys.INIT_OP, default_init_op)
+            elements.append(init_op)
+
+          logging.info(f'local_init_op is {elements}')
+          scaffold = tf.compat.v1.train.Scaffold(local_init_op=tf.group(elements) if elements else None,
+          ready_for_local_init_op=NoOp())
+        else:
+          scaffold = None
         spec = spec._replace(
             training_chief_hooks=training_chief_hooks +
             spec.training_chief_hooks,
             training_hooks=training_hooks + spec.training_hooks,
-            prediction_hooks=predicting_hooks + spec.prediction_hooks)
+            prediction_hooks=predicting_hooks + spec.prediction_hooks,
+            scaffold=scaffold)
 
         logging.info("Training Chief Hooks: {}".format(
             spec.training_chief_hooks))
@@ -1362,8 +1442,6 @@ class DistributedCpuTrainingConfig(CpuTrainingConfig):
     :param uuid: uuid of cpu training.
     :param operation_timeout_in_ms: Global timeout for all blocking operations in this session.
     :param session_creation_timeout_secs: Max time workers should wait for a session to become available.
-    :param enable_gpu_training: Whethere to also use GPU for training besides CPU.
-    :param processes_per_gpu: Integer number of mpi processes on GPU (for sync training).
     :param max_retry_times: Maximum retry times for workers to start train.
     :param retry_wait_in_secs: Sleep time interval to wait for worker retry.
     :param fountain_zk_host: zk_host for fountain service.
@@ -1381,9 +1459,6 @@ class DistributedCpuTrainingConfig(CpuTrainingConfig):
 
   operation_timeout_in_ms: int = -1
   session_creation_timeout_secs: int = 7200
-
-  enable_gpu_training: bool = False
-  processes_per_gpu: int = 1
 
   max_retry_times: int = 0
   retry_wait_in_secs: int = 30
@@ -1514,6 +1589,7 @@ def _do_worker_train(config: DistributedCpuTrainingConfig,
 
   session_config = cluster_manager.generate_session_config((cluster, task))
   session_config.operation_timeout_in_ms = config.operation_timeout_in_ms
+
   check_addrs = _get_blocked_addrs(cluster=cluster, ignored_jobs={'worker'})
   alive_checker = net_utils.NodeAliveChecker(check_addrs, timeout=60)
   if not alive_checker.all_nodes_alive():
@@ -1521,12 +1597,14 @@ def _do_worker_train(config: DistributedCpuTrainingConfig,
         alive_checker.get_dead_nodes())))
   os.environ["TF_CONFIG"] = json.dumps({"cluster": cluster, "task": task})
   try:
+    update_session_config_for_gpu(session_config)
     run_config = tf.estimator.RunConfig(
         model_dir=config.model_dir,
         session_config=session_config,
         save_summary_steps=100 * config.num_workers,
         log_step_count_steps=100 * config.num_workers,
-        session_creation_timeout_secs=config.session_creation_timeout_secs)
+        session_creation_timeout_secs=config.session_creation_timeout_secs,
+        device_fn=config.device_fn)
 
     training = CpuTraining(config, native_task)
     estimator = tf.estimator.Estimator(training.create_model_fn(),
@@ -1534,8 +1612,9 @@ def _do_worker_train(config: DistributedCpuTrainingConfig,
 
     if is_chief(config):
       _save_debugging_info(config, cluster, training)
-
+    run_hooks = get_sync_run_hooks(False)
     estimator.train(training.create_input_fn(config.mode),
+                    hooks=run_hooks,
                     max_steps=params.train.max_steps)
   finally:
     # TODO(leqi.zou): we have some thread safety issue in the test.
@@ -1690,8 +1769,9 @@ def distributed_train(config: DistributedCpuTrainingConfig,
   server_config = tf.compat.v1.ConfigProto(
       intra_op_parallelism_threads=config.intra_op_parallelism_threads,
       inter_op_parallelism_threads=config.inter_op_parallelism_threads)
-  if isinstance(discovery, TfConfigServiceDiscovery):
+  if isinstance(discovery, (MLPServiceDiscovery, TfConfigServiceDiscovery)):
     addr = discovery.addr
+    config.index = discovery.index
     server = tf.distribute.Server({"local": [addr]}, config=server_config)
   else:
     assert isinstance(discovery, ServiceDiscovery)
@@ -1760,6 +1840,9 @@ def distributed_train(config: DistributedCpuTrainingConfig,
             estimator = _do_worker_feature_engineering(server.target, config,
                                                        params, cluster, task)
           else:
+            if config.enable_gpu_training:
+              device_utils.enable_gpu_training()
+              params.train.use_gpu_emb_table = False
             estimator = _do_worker_train(config, params, cluster, task)
           break
         except (tf.errors.DeadlineExceededError, tf.errors.UnavailableError,
@@ -1836,17 +1919,12 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
 
   """
 
-  enable_bps = int(os.getenv("MONOLITH_WITH_BYTEPS", "0"))
-  # Import horovod/byteps on demand, which should've already been initialized.
-  if enable_bps:
-    import byteps.tensorflow as hvd
-  else:
-    import horovod.tensorflow as hvd
-  assert hvd.rank(
-  ) == config.index, "Given RunConfig.index should be consistent with hvd.rank()."
+  assert get_mpi_rank() == config.index, \
+    "Given RunConfig.index should be consistent with hvd.rank()."
 
   # To remove this contraint future
   if config.enable_gpu_training:
+    device_utils.enable_gpu_training()
     params.train.use_gpu_emb_table = True
 
   task = params.instantiate()
@@ -1857,22 +1935,7 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
   session_config.intra_op_parallelism_threads = config.intra_op_parallelism_threads
   session_config.inter_op_parallelism_threads = config.inter_op_parallelism_threads
   # GPU Configs
-  if config.enable_gpu_training:
-    device_utils.enable_gpu_training()
-    if os.environ.get('MONOLITH_FORCE_GPU_COMPATIBLE', '1') == '1':
-      session_config.gpu_options.force_gpu_compatible = True
-      logging.info("set force_gpu_compatible=True")
-    if enable_bps and (os.environ.get('MONOLITH_WITH_BYTEPS_FWD_GDR', '0') == '1' or \
-       os.environ.get('MONOLITH_WITH_BYTEPS_BWD_GDR', '0') == '1'):
-      # if GDR alltoall is enabled, GPU memory need to be registered for UCX
-      # ahead of time. Therefore, we disable the allow_growth option for GPU.
-      # The cuda visible devices are also limited to one device only.
-      session_config.gpu_options.allow_growth = False
-      session_config.gpu_options.per_process_gpu_memory_fraction = 0.4
-      session_config.gpu_options.visible_device_list = '0'
-    else:
-      session_config.gpu_options.allow_growth = True
-      session_config.gpu_options.visible_device_list = '0'
+  update_session_config_for_gpu(session_config)
   # By default the grappler (meta_optimizer) is enabled.
   # session_config.graph_options.rewrite_options.disable_meta_optimizer = True
   session_config.graph_options.rewrite_options.memory_optimization = 1
@@ -1909,22 +1972,12 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
 
   estimator = tf.estimator.Estimator(training.create_model_fn(),
                                      config=run_config)
-  enable_bps_bcast = int(os.getenv("MONOLITH_WITH_BYTEPS_BCAST", "1"))
-  if enable_bps and enable_bps_bcast == -1:
-    run_hooks = []
-  elif enable_bps and enable_bps_bcast:
-    import byteps.tensorflow as bps
-    logging.info('Enabled BPS for bcast')
-    run_hooks = [bps.BroadcastGlobalVariablesHook(0)]
-    run_hooks.append(ByteCCLTelemetryHook(50))
-  else:
-    import horovod.tensorflow as hvd
-    run_hooks = [hvd.BroadcastGlobalVariablesHook(0)]
+  run_hooks = get_sync_run_hooks(True)
 
   # When we use distributed training, we always use rank 1 to profile
   # because rank 0 might not get embedding shard due to partition logic
   # for np >= 4.
-  if hvd.size() == 1 or hvd.rank() == 1:
+  if get_mpi_size() == 1 or get_mpi_rank() == 1:
     tf.profiler.experimental.server.start(6666)
     if config.profile_some_steps_from:
       start_step = config.profile_some_steps_from

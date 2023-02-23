@@ -33,7 +33,6 @@ from monolith.native_training.zk_utils import default_zk_servers
 from monolith.native_training.mlp_utils import MLPEnv, check_port
 
 
-
 class ServiceDiscoveryType(Enum):
   PRIMUS = 1
   CONSUL = 2
@@ -394,6 +393,7 @@ class MLPServiceDiscovery(ServiceDiscovery):
   def __init__(self):
     self._mlp_env = MLPEnv()
     self._filters = set()
+    self.addr = f"{self._mlp_env.host}:{self._mlp_env.port}"
 
   def _check(self, name: str, index: int, addr: str):
     if self._mlp_env is None:
@@ -410,7 +410,9 @@ class MLPServiceDiscovery(ServiceDiscovery):
 
   def register(self, name: str, index: int, addr: str):
     self._check(name, index, addr)
-    self._filters.remove(f'{name.lower()}:{index}')
+    key = f'{name.lower()}:{index}'
+    if key in self._filters:
+      self._filters.remove(key)
 
   def deregister(self, name: str, index: int, addr: str):
     self._check(name, index, addr)
@@ -429,7 +431,7 @@ class MLPServiceDiscovery(ServiceDiscovery):
         result[idx] = addr
         if name.lower() == 'ps' and not skip_port_check:
           host, port = addr.split(':')
-          assert check_port(host, int(port), timeout=3600)
+          assert check_port(host, int(port), timeout=3600), f'{addr} connect error!'
     return result
 
   def deregister_all(self) -> Dict[str, Dict[int, str]]:

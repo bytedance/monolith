@@ -14,7 +14,14 @@
 
 import os
 import time
+from absl import flags, logging
 import tensorflow as tf
+from monolith.native_training.metric.metric_hook import ByteCCLTelemetryHook
+
+FLAGS = flags.FLAGS
+_SYNC_TRAIN_INITED = False
+
+enable_bps = int(os.getenv("MONOLITH_WITH_BYTEPS", "0"))
 
 
 def bps_init(uuid: str):
@@ -236,36 +243,200 @@ def byteps_benchmark_a2a(total_len,
 
 
 def bps_comm_benchmark():
-  benchmark_bps = os.environ.get("MONOLITH_BENCHMARK_BPS", "none")
-  benchmark_iters = int(os.getenv("MONOLITH_BENCHMARK_ITERS", "200"))
-  gpus = tf.config.experimental.list_physical_devices('GPU')
-  for gpu in gpus:
-    tf.config.experimental.set_memory_growth(gpu, True)
-  assert benchmark_bps in ("c2g", "g2g", "c2c", "g2c", "ar",
-                           "all"), benchmark_bps
-  benchmarks = ["c2g", "g2g", "c2c", "g2c", "ar"
-               ] if benchmark_bps == "all" else [benchmark_bps]
-  for benchmark in benchmarks:
-    results = []
-    dst_gpu = benchmark in ("c2g", "g2g")
-    src_gpu = benchmark in ("g2c", "g2g")
-    if benchmark == "ar":
-      total_len = int(os.getenv("MONOLITH_BENCHMARK_BPS_AR_LEN", "65536000"))
-      goodputs_cpu = byteps_benchmark_ar(total_len,
-                                         total_niter=benchmark_iters,
-                                         use_cpu=True)
-      results.append((total_len, sum(goodputs_cpu) / len(goodputs_cpu)))
-      goodputs_gpu = byteps_benchmark_ar(total_len,
-                                         total_niter=benchmark_iters,
-                                         use_cpu=False)
-      results.append((total_len, sum(goodputs_gpu) / len(goodputs_gpu)))
+    benchmark_bps = os.environ.get("MONOLITH_BENCHMARK_BPS", "none")
+    benchmark_iters = int(os.getenv("MONOLITH_BENCHMARK_ITERS", "200"))
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    for gpu in gpus:
+       tf.config.experimental.set_memory_growth(gpu, True)
+    assert benchmark_bps in ("c2g", "g2g", "c2c", "g2c", "ar", "all"), benchmark_bps
+    benchmarks = ["c2g", "g2g", "c2c", "g2c", "ar"] if benchmark_bps == "all" else [benchmark_bps]
+    for benchmark in benchmarks:
+      results = []
+      dst_gpu = benchmark in ("c2g", "g2g")
+      src_gpu = benchmark in ("g2c", "g2g")
+      if benchmark == "ar":
+        total_len = int(os.getenv("MONOLITH_BENCHMARK_BPS_AR_LEN", "65536000"))
+        goodputs_cpu = byteps_benchmark_ar(total_len, total_niter=benchmark_iters, use_cpu=True)
+        results.append((total_len, sum(goodputs_cpu) / len(goodputs_cpu)))
+        goodputs_gpu = byteps_benchmark_ar(total_len, total_niter=benchmark_iters, use_cpu=False)
+        results.append((total_len, sum(goodputs_gpu) / len(goodputs_gpu)))
+      else:
+        total_len = int(os.getenv("MONOLITH_BENCHMARK_BPS_A2A_LEN", "65536000"))
+        for _ in range(3):
+          goodputs = byteps_benchmark_a2a(total_len, total_niter=benchmark_iters,
+                                          dst_gpu=dst_gpu, src_gpu=src_gpu)
+          results.append((total_len, sum(goodputs) / len(goodputs)))
+          total_len = total_len // 2
+      print(benchmark + "_summary:", results)
+
+
+def init_sync_train_and_update_conf(dct_config):
+  global _SYNC_TRAIN_INITED
+  logging.info("Entering synchronous training.")
+  # Import and init horovod/byteps on demand.
+  try:
+    if enable_bps:
+      if not _SYNC_TRAIN_INITED:
+        bps_init(dct_config.uuid)
+      import byteps.tensorflow as hvd
+
+      enable_bps_bcast = int(os.getenv("MONOLITH_WITH_BYTEPS_BCAST", "1"))
+      enable_bps_allreduce = int(
+          os.getenv("MONOLITH_WITH_BYTEPS_ALLREDUCE", "1"))
+      if enable_bps_bcast == 0 or enable_bps_allreduce == 0:
+        import horovod.tensorflow as hvd
+        if not _SYNC_TRAIN_INITED:
+          hvd.init()
+          _SYNC_TRAIN_INITED = True
+          if not dct_config.merge_sync_training_ckpt:
+            model_dir_suffix = 'index-{:04}'.format(hvd.rank())
+            model_dir = os.path.join(dct_config.model_dir, dct_config.uuid,
+                                     model_dir_suffix)
+            dct_config.model_dir = model_dir
     else:
-      total_len = int(os.getenv("MONOLITH_BENCHMARK_BPS_A2A_LEN", "65536000"))
-      for _ in range(3):
-        goodputs = byteps_benchmark_a2a(total_len,
-                                        total_niter=benchmark_iters,
-                                        dst_gpu=dst_gpu,
-                                        src_gpu=src_gpu)
-        results.append((total_len, sum(goodputs) / len(goodputs)))
-        total_len = total_len // 2
-    print(benchmark + "_summary:", results)
+      local_size = int(os.environ.get('OMPI_COMM_WORLD_LOCAL_SIZE'))
+      rank = int(os.environ.get('OMPI_COMM_WORLD_RANK'))
+      local_rank = rank % local_size
+      os.environ['CUDA_VISIBLE_DEVICES'] = str(local_rank)
+      import horovod.tensorflow as hvd
+      if not _SYNC_TRAIN_INITED:
+        hvd.init()
+        _SYNC_TRAIN_INITED = True
+        if not dct_config.merge_sync_training_ckpt:
+          model_dir_suffix = 'index-{:04}'.format(hvd.rank())
+          model_dir = os.path.join(dct_config.model_dir, dct_config.uuid,
+                                   model_dir_suffix)
+          dct_config.model_dir = model_dir
+
+    dct_config.num_ps = 0
+    dct_config.reorder_fids_in_data_pipeline = True
+    dct_config.index = hvd.rank()
+    dct_config.num_workers = hvd.size()
+    dct_config.enable_variable_partition = False
+  except (ImportError, tf.errors.NotFoundError) as e:
+    logging.warning(f'init_sync_train_and_get_index error {e}')
+
+
+def get_mpi_rank():
+  rank = 0
+  if 'OMPI_COMM_WORLD_RANK' in os.environ:
+    rank = int(os.environ.get('OMPI_COMM_WORLD_RANK'))
+  else:
+    logging.warning(f"get_mpi_rank use default 0")
+  return rank
+
+
+def get_mpi_local_rank():
+  local_rank = 0
+  if 'OMPI_COMM_WORLD_LOCAL_RANK' in os.environ:
+    local_rank = int(os.environ.get('OMPI_COMM_WORLD_LOCAL_RANK'))
+  else:
+    logging.warning(f"get_mpi_local_rank use default 0")
+  return local_rank
+
+
+def get_mpi_size():
+  size = 1
+  if 'OMPI_COMM_WORLD_SIZE' in os.environ:
+    size = int(os.environ.get('OMPI_COMM_WORLD_SIZE'))
+  else:
+    logging.warning(f"get_mpi_size use default 1")
+  return size
+
+
+def get_mpi_local_size():
+  local_size = 1
+  if 'OMPI_COMM_WORLD_LOCAL_SIZE' in os.environ:
+    local_size = int(os.environ.get('OMPI_COMM_WORLD_LOCAL_SIZE'))
+  else:
+    logging.warning(f"get_mpi_local_size use default 1")
+  return local_size
+
+
+def enable_sync_training():
+  try:
+    return FLAGS.enable_sync_training and 'OMPI_COMM_WORLD_LOCAL_RANK' in os.environ
+  except:
+    return False
+
+
+def try_init_cuda():
+  if 'CUDA_VISIBLE_DEVICES' not in os.environ and 'OMPI_COMM_WORLD_LOCAL_RANK' in os.environ:
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(get_mpi_local_rank())
+  global _SYNC_TRAIN_INITED
+  if 'OMPI_COMM_WORLD_LOCAL_RANK' in os.environ:
+    if not _SYNC_TRAIN_INITED:
+      try:
+        if FLAGS.enable_sync_training:
+          enable_bps = int(os.getenv("MONOLITH_WITH_BYTEPS", "0"))
+          enable_hvd = int(os.getenv("MONOLITH_WITH_HOROVOD", "0"))
+          if enable_bps:
+            import byteps.tensorflow as hvd
+          elif enable_hvd:
+            import horovod.tensorflow as hvd
+          else:
+            raise Exception('no allreduce tools found!')
+          hvd.init()
+          _SYNC_TRAIN_INITED = True
+      except Exception as e:
+        logging.info(str(e))
+
+
+def get_device_str(force_on_cpu: bool = False):
+  global _GPU_PLACEMENT_ALLOWED
+  is_mpi_mode = True if 'OMPI_COMM_WORLD_LOCAL_RANK' in os.environ else False
+  is_ps_mode = True if FLAGS.num_ps > 0 else False
+  device = 'GPU' if FLAGS.enable_gpu_training or _GPU_PLACEMENT_ALLOWED else 'CPU'
+  device = 'CPU' if force_on_cpu else device
+  if is_mpi_mode and FLAGS.enable_sync_training:
+    if is_ps_mode:
+      rank = get_mpi_rank()
+      job = 'chief' if rank == 0 else 'worker'
+      task = rank if rank == 0 else rank - 1
+      return f'/job:{job}/replica:0/task:{task}/device:{device}:0'
+    else:
+      return ''
+  else:
+    return f'/device:{device}:0'
+
+
+def get_sync_run_hooks(is_full_sync: bool = False):
+  if enable_sync_training():
+    enable_bps = int(os.getenv("MONOLITH_WITH_BYTEPS", "0"))
+    enable_bps_bcast = int(os.getenv("MONOLITH_WITH_BYTEPS_BCAST", "1"))
+    if enable_bps and enable_bps_bcast == -1:
+      run_hooks = []
+    elif enable_bps and enable_bps_bcast:
+      import byteps.tensorflow as bps
+      logging.info('Enabled BPS for bcast')
+      run_hooks = [bps.BroadcastGlobalVariablesHook(0, device=get_device_str())]
+      if is_full_sync:
+        run_hooks.append(ByteCCLTelemetryHook(50))
+    else:
+      import horovod.tensorflow as hvd
+      run_hooks = [hvd.BroadcastGlobalVariablesHook(0, device=get_device_str())]
+    return run_hooks
+  else:
+    return []
+
+
+def update_session_config_for_gpu(session_config):
+  enable_bps = int(os.getenv("MONOLITH_WITH_BYTEPS", "0"))
+  if enable_sync_training():
+    if os.environ.get('MONOLITH_FORCE_GPU_COMPATIBLE', '1') == '1':
+      session_config.gpu_options.force_gpu_compatible = True
+      logging.info("set force_gpu_compatible=True")
+    if enable_bps and (os.environ.get('MONOLITH_WITH_BYTEPS_FWD_GDR', '0') == '1' or \
+       os.environ.get('MONOLITH_WITH_BYTEPS_BWD_GDR', '0') == '1'):
+      # if GDR alltoall is enabled, GPU memory need to be registered for UCX
+      # ahead of time. Therefore, we disable the allow_growth option for GPU.
+      # The cuda visible devices are also limited to one device only.
+      session_config.gpu_options.allow_growth = False
+      session_config.gpu_options.per_process_gpu_memory_fraction = 0.4
+      session_config.gpu_options.visible_device_list = '0'
+    else:
+      session_config.gpu_options.allow_growth = True
+      session_config.gpu_options.visible_device_list = '0'
+  else:
+    session_config.gpu_options.allow_growth = True

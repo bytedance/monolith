@@ -212,10 +212,10 @@ def create_in_worker_native_multi_hash_table(
   # DistributedMultiTypeHashTableMpi -> alltoall -> multi_hash_table
   def table_factory(idx):
     return multi_hash_table_ops.MultiHashTable.from_configs(
-      configs=slot_to_config,
-      hash_filter=hash_filter,
-      sync_client=sync_client,
-      name_suffix=str(idx))
+        configs=slot_to_config,
+        hash_filter=hash_filter,
+        sync_client=sync_client,
+        name_suffix=str(idx))
 
   return distributed_ps_sync.DistributedMultiTypeHashTableMpi(
       shard_num, table_factory, queue_configs)
@@ -223,16 +223,12 @@ def create_in_worker_native_multi_hash_table(
 
 def create_partitioned_hash_table(
     num_ps: int,
-    feature_name_to_config: Dict[str, entry.HashTableConfigInstance],
-    layout_configs: Dict[str, OutConfig],
-    feature_to_combiner: Dict[str, embedding_combiners.Combiner],
-    feature_to_unmerged_slice_dims: Dict[str, List[int]],
     use_native_multi_hash_table: bool,
     max_rpc_deadline_millis: int = 30,
-    unique: bool = False,
-    transfer_float16: bool = False,
     hash_filters: List[tf.Tensor] = None,
-    sync_clients: List[tf.Tensor] = None
+    sync_clients: List[tf.Tensor] = None,
+    enable_gpu_emb: bool = False,
+    queue_configs: Dict[str, int] = None,
 ) -> distributed_ps.PartitionedHashTable:
   num_ps_tmp = num_ps if num_ps > 0 else 1
   if hash_filters is None:
@@ -241,6 +237,7 @@ def create_partitioned_hash_table(
     sync_clients = [None] * num_ps_tmp
 
   if use_native_multi_hash_table:
+    # assert enable_gpu_emb == False, "gpu_emb not imple native_multi_hash_table"
     multi_type_factory = MultiHashTableFactory(hash_filters, sync_clients)
   else:
 
@@ -258,8 +255,8 @@ def create_partitioned_hash_table(
       return multi_type_hash_table.MultiTypeHashTable(slot_to_config_on_ps,
                                                       factory)
 
-  return distributed_ps.PartitionedHashTable(
-      num_ps, feature_name_to_config, multi_type_factory, layout_configs,
-      feature_to_unmerged_slice_dims, feature_to_combiner,
-      use_native_multi_hash_table, max_rpc_deadline_millis, unique,
-      transfer_float16)
+  return distributed_ps.PartitionedHashTable(num_ps,
+                                             multi_type_factory,
+                                             use_native_multi_hash_table,
+                                             max_rpc_deadline_millis,
+                                             queue_configs=queue_configs)

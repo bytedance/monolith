@@ -217,7 +217,8 @@ def apply_gradients_with_var_optimizer(
     sparse_clip_norm: float = None,
     sparse_norm_warmup_steps: int = None,
     dense_reduce_mean: bool = False,
-    batch_size: int = 1) -> tf.Operation:
+    batch_size: int = 1,
+    is_fused_layout: bool = False) -> tf.Operation:
   """
   A helper function that applies gradient to both dense params and embedding params.
   Args:
@@ -230,13 +231,23 @@ def apply_gradients_with_var_optimizer(
   with device_utils.maybe_device_if_allowed('/device:GPU:0'):
     assert isinstance(var_opt, tf.compat.v1.train.Optimizer)
     feature_columns = list(feature_columns)
-    all_embeddings = [fc.get_all_embeddings_concat() for fc in feature_columns]
+    if is_fused_layout:
+      layout_factory: feature.EmbeddingLayoutFactory = ctx.layout_factory
+      all_embeddings = layout_factory.flattened_layout()
+    else:
+      all_embeddings = [fc.get_all_embeddings_concat() for fc in feature_columns]
     variables = tf.compat.v1.trainable_variables()
     grads_and_vars = var_opt.compute_gradients(loss,
                                                variables + all_embeddings,
                                                colocate_gradients_with_ops=True)
 
     # Some variables are created but unused and we need to filter them out.
+    if is_fused_layout:
+      grads_and_vars_tmp = grads_and_vars[:len(variables)]
+      for gv in grads_and_vars[len(variables):]:
+        grads_and_vars_tmp.append((gv[0] if gv[0] is not None else tf.zeros_like(gv[1]), gv[1]))
+      grads_and_vars = grads_and_vars_tmp
+
     unused_filter = [
         True if gv[0] is not None else False for gv in grads_and_vars
     ]
@@ -246,9 +257,12 @@ def apply_gradients_with_var_optimizer(
     all_embeddings = [
         e for e, used in zip(all_embeddings, unused_emb_filter) if used
     ]
-    feature_columns = [
-        fc for fc, used in zip(feature_columns, unused_emb_filter) if used
-    ]
+    if is_fused_layout:
+      feature_columns = []
+    else:
+      feature_columns = [
+          fc for fc, used in zip(feature_columns, unused_emb_filter) if used
+      ]
     grads_and_vars = [
         gv for gv, used in zip(grads_and_vars, unused_filter) if used
     ]
@@ -420,7 +434,8 @@ def apply_gradients(ctx: NativeContext,
                     clip_type: GradClipType = GradClipType.ClipByGlobalNorm,
                     clip_norm: float = None,
                     dense_weight_decay: float = 0.0,
-                    global_step=None):
+                    global_step=None,
+                    use_allreduce: bool = False):
   layout_factory: feature.EmbeddingLayoutFactory = ctx.layout_factory
   variables = tf.compat.v1.trainable_variables()
   layout_embeddings = layout_factory.flattened_layout()
@@ -461,6 +476,10 @@ def apply_gradients(ctx: NativeContext,
   # dense apply_gradients
   if variables:
     dense_clipped_grads = clipped_grads[:len(variables)]
+    if use_allreduce and enable_hvd:
+      dense_clipped_grads = allreduce_cond(
+        dense_clipped_grads)
+
     if dense_weight_decay > 0:
       grads_and_vars = [(g + dense_weight_decay * v, v)
                         for g, v in zip(dense_clipped_grads, variables)]
@@ -477,6 +496,6 @@ def apply_gradients(ctx: NativeContext,
   if layout_embeddings:
     sparse_clipped_grads = clipped_grads[len(variables):]
     grads_and_vars = list(zip(sparse_clipped_grads, layout_embeddings))
-    train_ops.append(ctx.apply_embedding_gradients(grads_and_vars).as_op())
+    train_ops.append(ctx.apply_embedding_gradients(grads_and_vars))
 
   return tf.group(*train_ops)

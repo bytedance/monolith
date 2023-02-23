@@ -488,7 +488,7 @@ class DistributedTrainTest(tf.test.TestCase):
         "--test_dir={}".format(self._test_dir()), "--num_ps={}".format(num_ps),
         "--num_workers={}".format(num_workers),
         "--uuid={}".format(self._testMethodName),
-        f"--use_native_multi_hash_table={FLAGS.use_native_multi_hash_table}"
+        f"--use_native_multi_hash_table={True if FLAGS.use_native_multi_hash_table else False}"
     ]
     return args
 

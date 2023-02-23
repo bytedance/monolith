@@ -62,6 +62,8 @@ from monolith.native_training.metric.metric_hook import KafkaMetricHook, FileMet
 from idl.matrix.proto.example_pb2 import OutConfig, OutType, TensorShape
 from monolith.native_training.data.datasets import POOL_KEY
 from monolith.native_training.model_dump.graph_utils import _node_name
+from monolith.native_training.distribution_utils import enable_sync_training
+from monolith.native_training.device_utils import input_device_fn, model_device_fn, serving_input_device_fn, maybe_device_if_allowed
 
 FLAGS = flags.FLAGS
 dump_utils = DumpUtils(enable=False)
@@ -165,6 +167,55 @@ def get_softmax_loss_and_pred(name, logits, label, mode):
   return loss, pred
 
 
+class DeviceCtxType(object):
+  INPUT_FN: str = 'input_fn'
+  MODEL_FN: str = 'model_fn'
+  INPUT_RECEIVER_FN: str = 'input_receiver_fn'
+  OTHERS: str = 'others'
+
+  @classmethod
+  def all_types(cls):
+    return {cls.INPUT_FN, cls.MODEL_FN, cls.INPUT_RECEIVER_FN, cls.OTHERS}
+
+
+class MonolithDeviceCtx(object):
+
+  def __init__(self, ctx_type: str):
+    assert ctx_type is not None and ctx_type in DeviceCtxType.all_types()
+    self.ctx_type = ctx_type
+    self._current = None
+    self._device_fn = None
+
+  def __enter__(self):
+    if not enable_sync_training() or export_context.is_exporting():
+      return
+
+    if self.ctx_type == DeviceCtxType.INPUT_FN:
+      self._device_fn = input_device_fn
+    elif self.ctx_type == DeviceCtxType.MODEL_FN:
+      self._device_fn = model_device_fn
+    elif self.ctx_type == DeviceCtxType.INPUT_RECEIVER_FN:
+      self._device_fn = serving_input_device_fn
+    else:
+      return
+    self._current = tf.compat.v1.device(self._device_fn)
+    return self._current.__enter__()
+
+  def __exit__(self, exc_type, exc_val, exc_tb):
+    if self._current is not None:
+      if self.ctx_type == DeviceCtxType.MODEL_FN:
+        self.ensure_variables_in_device()
+      self._current.__exit__(exc_type, exc_val, exc_tb)
+      self._current = None
+      self._device_fn = None
+
+  def ensure_variables_in_device(self):
+    graph = tf.compat.v1.get_default_graph()
+    for op in graph.get_operations():
+      if op.name.startswith('global_step'):
+        graph._apply_device_functions(op)
+
+
 
 
 @monolith_export
@@ -194,8 +245,8 @@ class MonolithBaseModel(NativeTask, ABC):
     # feature_name -> slice_name -> FeatureSlice(feature_slot, start, end)
     self.slice_dict = {}
     self._layout_dict = {}
-    self.valid_label_threshold = 0
     self._occurrence_threshold = {}
+    self._use_dense_allreduce = FLAGS.enable_sync_training
 
   def __getattr__(self, name):
     if "p" in self.__dict__:
@@ -302,7 +353,8 @@ class MonolithBaseModel(NativeTask, ABC):
 
   @property
   def _global_step(self):
-    return tf.compat.v1.train.get_or_create_global_step()
+    with maybe_device_if_allowed('/device:GPU:0'):
+      return tf.compat.v1.train.get_or_create_global_step()
 
   @property
   def _training_hooks(self):
@@ -326,12 +378,14 @@ class MonolithBaseModel(NativeTask, ABC):
     self.fs_dict = {}
     self.fc_dict = {}
     self.slice_dict = {}  # slot_id -> Dict[slot_id, slice]
-    self.valid_label_threshold = 0
     self._occurrence_threshold = {}
 
   def create_input_fn(self, mode):
     """生成input_fn"""
-    return partial(self.input_fn, mode)
+    def input_fn_internal():
+      with MonolithDeviceCtx(ctx_type=DeviceCtxType.INPUT_FN):
+        return self.input_fn(mode)
+    return input_fn_internal
 
   def create_model_fn(self):
     """生成model_fn"""
@@ -343,7 +397,8 @@ class MonolithBaseModel(NativeTask, ABC):
 
       global_step = self._global_step
       real_mode = self._get_real_mode(mode)
-      local_spec = self.model_fn(features, real_mode)
+      with MonolithDeviceCtx(ctx_type=DeviceCtxType.MODEL_FN):
+        local_spec = self.model_fn(features, real_mode)
 
       # get label, loss, pred and head_name from model_fn result
       if isinstance(local_spec, EstimatorSpec):
@@ -524,13 +579,13 @@ class MonolithBaseModel(NativeTask, ABC):
         elif self.metrics.enable_file_metrics:
           self.add_training_hook(
               FileMetricHook(deep_insight_op,
-                             worker_id=get().worker_index,
-                             parse_fn=self.metrics.parse_fn,
-                             key_fn=self.metrics.key_fn or vepfs_key_fn,
-                             layout_fn=self.metrics.layout_fn or
-                             vepfs_layout_fn,
-                             base_name=self.metrics.file_base_name,
-                             file_ext=self.metrics.file_ext))
+                            worker_id=get().worker_index,
+                            parse_fn=self.metrics.parse_fn,
+                            key_fn=self.metrics.key_fn or vepfs_key_fn,
+                            layout_fn=self.metrics.layout_fn or
+                            vepfs_layout_fn,
+                            base_name=self.metrics.file_base_name,
+                            file_ext=self.metrics.file_ext))
         logging.info("model_name: {}, target {}".format(model_name, head_name))
 
       if real_mode == tf.estimator.ModeKeys.EVAL:
@@ -565,30 +620,20 @@ class MonolithBaseModel(NativeTask, ABC):
           raise Exception("dense_optimizer not found!")
         dump_utils.add_optimizer(dense_optimizer)
 
-        if self.is_fused_layout():
-          train_ops.append(
-              feature_utils.apply_gradients(
-                  self.ctx,
-                  dense_optimizer,
-                  loss,
-                  clip_type=feature_utils.GradClipType.ClipByGlobalNorm,
-                  clip_norm=self.clip_norm,
-                  dense_weight_decay=self.dense_weight_decay,
-                  global_step=global_step))
-        else:
-          train_ops.append(
-              feature_utils.apply_gradients_with_var_optimizer(
-                  self.ctx,
-                  self.fc_dict.values(),
-                  dense_optimizer,
-                  loss,
-                  clip_type=feature_utils.GradClipType.ClipByGlobalNorm,
-                  clip_norm=self.clip_norm,
-                  sparse_norm_warmup_steps=self.sparse_norm_warmup_steps,
-                  dense_weight_decay=self.dense_weight_decay,
-                  global_step=global_step,
-                  grads_and_vars_summary=self.enable_grads_and_vars_summary,
-                  use_allreduce=FLAGS.enable_sync_training))
+        train_ops.append(
+            feature_utils.apply_gradients_with_var_optimizer(
+                self.ctx,
+                self.fc_dict.values(),
+                dense_optimizer,
+                loss,
+                clip_type=feature_utils.GradClipType.ClipByGlobalNorm,
+                clip_norm=self.clip_norm,
+                dense_weight_decay=self.dense_weight_decay,
+                global_step=self._global_step,
+                grads_and_vars_summary=self.enable_grads_and_vars_summary,
+                sparse_norm_warmup_steps=self.sparse_norm_warmup_steps,
+                is_fused_layout=self.is_fused_layout(),
+                use_allreduce=self._use_dense_allreduce))
 
         return tf.estimator.EstimatorSpec(mode,
                                           loss=loss,
@@ -599,7 +644,10 @@ class MonolithBaseModel(NativeTask, ABC):
 
   def create_serving_input_receiver_fn(self):
     """生在Serving数据流, serving_input_receiver_fn"""
-    return dump_utils.record_receiver(self.serving_input_receiver_fn)
+    def serving_input_receiver_fn_internal():
+      with MonolithDeviceCtx(ctx_type=DeviceCtxType.INPUT_RECEIVER_FN):
+        return self.serving_input_receiver_fn()
+    return dump_utils.record_receiver(serving_input_receiver_fn_internal)
 
   @abstractmethod
   def input_fn(self, mode: tf.estimator.ModeKeys) -> DatasetV2:

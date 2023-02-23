@@ -30,11 +30,6 @@ model_name = 'estimator_test'
 model_dir = "{}/{}/ckpt".format(get_test_tmp_dir(), model_name)
 export_base = "{}/{}/ckpt/exported_models".format(get_test_tmp_dir(),
                                                   model_name)
-conf = RunnerConfig(is_local=True,
-                    num_ps=0,
-                    model_dir=model_dir,
-                    use_native_multi_hash_table=False)
-
 
 def get_saved_model_path(export_base):
   try:
@@ -66,21 +61,25 @@ class EstimatorTrainTest(unittest.TestCase):
     params.serving.shared_embedding = True
 
     cls.params = params
+    cls.conf = RunnerConfig(is_local=True,
+                            num_ps=0,
+                            model_dir=model_dir,
+                            use_native_multi_hash_table=False)
 
   def train(self):
-    estimator = Estimator(self.params, conf)
+    estimator = Estimator(self.params, self.conf)
     estimator.train(steps=10)
 
   def eval(self):
-    estimator = Estimator(self.params, conf)
+    estimator = Estimator(self.params, self.conf)
     estimator.evaluate(steps=10)
 
   def predict(self):
-    estimator = Estimator(self.params, conf)
+    estimator = Estimator(self.params, self.conf)
     estimator.predict()
 
   def export_saved_model(self):
-    estimator = Estimator(self.params, conf)
+    estimator = Estimator(self.params, self.conf)
     estimator.export_saved_model()
 
   def import_saved_model(self):
@@ -110,4 +109,4 @@ class EstimatorTrainTest(unittest.TestCase):
 
 if __name__ == "__main__":
   tf.compat.v1.disable_eager_execution()
-  unittest.main()
+  tf.test.main()

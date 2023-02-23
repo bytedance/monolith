@@ -16,15 +16,17 @@ from collections import defaultdict
 from copy import deepcopy
 import os
 import time
+from typing import Callable, Dict, Iterable, List, Set, Tuple
 
 import tensorflow as tf
 
 from absl import logging
 import numpy as np
 from struct import unpack
+import random
 
 from monolith.native_training.data.parsers import parse_instances, parse_examples, parse_example_batch, \
-    sharding_sparse_fids, get_default_parser_ctx
+    sharding_sparse_fids, get_default_parser_ctx, ParserCtx
 from monolith.native_training.model_export.data_gen_utils import gen_fids_v1, gen_fids_v2, fill_line_id, \
   gen_instance, FeatureMeta
 from idl.matrix.proto.example_pb2 import Example, ExampleBatch, FeatureConfigs, FeatureConfig, FeatureListType
@@ -61,7 +63,7 @@ class DataOpsV2Test(tf.test.TestCase):
   def __init__(self, *args, **kwargs):
     super(DataOpsV2Test, self).__init__(*args, **kwargs)
     self.mask = (1 << 48) - 1
-    #self.version = 2
+    self.version = 3
 
   def fid_v1_to_v2(self, fid_v1):
     slot_id = (fid_v1 >> 54)
@@ -78,8 +80,11 @@ class DataOpsV2Test(tf.test.TestCase):
       row_split[t_cfg["table_name"] + ":" + str(ps_i)].append(lenth)
 
   def get_pre_output_offset(self, shard, f_cfg):
-    return f_cfg["pre_output_index"] + shard * f_cfg[
-        "table_feature_count"] + f_cfg["feature_in_table_index"]
+    if self.version == 2:
+      return f_cfg["pre_output_index"] + shard * f_cfg[
+          "table_feature_count"] + f_cfg["feature_in_table_index"]
+    else:
+      return f_cfg["pre_output_index"] + shard
 
   def get_feature_cfg(self, raw_feature_cfgs, ps_num):
     feature_cfg = defaultdict(dict)
@@ -93,6 +98,7 @@ class DataOpsV2Test(tf.test.TestCase):
           "feature_in_table_index": -1,
           "table_feature_count": 0,
           "pre_output_index": 0,
+          "dims_sum": sum(cfg.slice_dims),
       }
       if cfg.table not in table_cfg:
         table_cfg[cfg.table] = {
@@ -123,9 +129,13 @@ class DataOpsV2Test(tf.test.TestCase):
       t_cfg["feature_count"] = len(t_cfg["feature_list"])
       for feature_name in t_cfg["feature_list"]:
         f_cfg = feature_cfg[feature_name]
-        f_cfg["pre_output_index"] = pre_index
+        f_cfg[
+            "pre_output_index"] = pre_index if self.version == 2 else idx * ps_num
         f_cfg["table_feature_count"] = t_cfg["feature_count"]
       pre_index += max(t_cfg["feature_count"], 1) * ps_num
+
+    logging.info(f"show feature_cfg: {feature_cfg}")
+    logging.info(f"show table_cfg: {table_cfg}")
     return feature_cfg, table_cfg, feature_name_sort, table_name_sort
 
   def handle_feature(self, fid_v1_list, fid_v2_list, f_cfg, t_cfg, ps_num,
@@ -136,20 +146,17 @@ class DataOpsV2Test(tf.test.TestCase):
       for fid in fid_v1_list:
         slot_id, fid_v2 = self.fid_v1_to_v2(fid)
         value_list.append(fid_v2)
-        #print("aaaaaa {} -> {}".format(fid, fid_v2))
     elif len(fid_v2_list) != 0:
       value_list = fid_v2_list
     for value in value_list:
       shard = value % ps_num
       key = f_cfg["feature_name"] + ":" + str(shard)
-      fid_offset = self.get_pre_output_offset(shard, f_cfg) << 32
-      fid_offset_list.append(fid_offset | len(fid_map_t[key]))
+      fid_offset_list.append((len(fid_map_t[key]), shard))
       fid_map_t[key].append(value)
-      # print("aaaaaa {} {} {}".format(table_name, shard, value))
       if value not in fid_map_unique_map[key]:
         fid_map_unique_map[key][value] = len(fid_map_unique_map[key])
         fid_map_unique_t[key].append(value)
-      fid_offset_list2.append(fid_offset | fid_map_unique_map[key][value])
+      fid_offset_list2.append((fid_map_unique_map[key][value], shard))
 
   def get_offset_result(self,
                         feature_name_sort,
@@ -162,12 +169,50 @@ class DataOpsV2Test(tf.test.TestCase):
                         fid_map_t_in,
                         fid_map_unique_t_in,
                         sparse_feature_shared=set()):
-    #print('xxxxx', sparse_feature_shared)
+
+    fid_map_t = defaultdict(list)
+    fid_map_table_pre_offset = defaultdict(lambda: 0)
+    fid_map_feature_pre_offset = defaultdict(lambda: 0)
+    fid_map_unique_t = defaultdict(list)
+    fid_map_unique_table_pre_offset = defaultdict(lambda: 0)
+    fid_map_unique_feature_pre_offset = defaultdict(lambda: 0)
+    for table_name in table_name_sort:
+      t_cfg = table_cfg[table_name]
+      for ps_i in range(ps_num):
+        to_key = table_name + ":" + str(ps_i)
+        table_pre_offset = fid_map_table_pre_offset[to_key]
+        unique_table_pre_offset = fid_map_unique_table_pre_offset[to_key]
+        for feature_name in t_cfg["feature_list"]:
+          key = feature_name + ":" + str(ps_i)
+          f_cfg = feature_cfg[feature_name]
+          dims_sum = f_cfg["dims_sum"]
+          fid_map_t[to_key].extend(fid_map_t_in[key])
+          fid_map_feature_pre_offset[key] = table_pre_offset
+          table_pre_offset += dims_sum * len(fid_map_t_in[key])
+
+          fid_map_unique_t[to_key].extend(fid_map_unique_t_in[key])
+          fid_map_unique_feature_pre_offset[key] = unique_table_pre_offset
+          unique_table_pre_offset += dims_sum * len(fid_map_unique_t_in[key])
+
     feature_offset_t = []
     nfl_offset_t = []
     fid_offset_list = []
     fid_offset_list_unique = []
+
+    def rewrie_fid_offset(feature_name, pre_offset_dict, f_cfg, fid_list,
+                          fid_offset_list_):
+      for mix_offset in fid_list:
+        fid_offset = mix_offset[0]
+        shard = mix_offset[1]
+        feat_offset = self.get_pre_output_offset(shard, f_cfg)
+        if self.version == 3 or self.version == 4:
+          fid_offset *= f_cfg['dims_sum']
+          fid_offset += pre_offset_dict[feature_name + ":" + str(shard)]
+        fid_offset_list_.append(feat_offset << 32 | fid_offset)
+        #logging.info(f"xxxxx {pre_offset}")
+
     for sparse_key in feature_name_sort:
+      f_cfg = feature_cfg[sparse_key]
       if sparse_key in sparse_feature_shared:
         nfl_offset = len(feature_offset_t) | 1 << 31
         #pass
@@ -178,20 +223,11 @@ class DataOpsV2Test(tf.test.TestCase):
         continue
       for fid_list in fid_offset_map[sparse_key]:
         feature_offset_t.append(len(fid_offset_list))
-        fid_offset_list.extend(fid_list)
+        rewrie_fid_offset(sparse_key, fid_map_feature_pre_offset, f_cfg,
+                          fid_list, fid_offset_list)
       for fid_list in fid_offset_map_unique[sparse_key]:
-        fid_offset_list_unique.extend(fid_list)
-
-    fid_map_t = defaultdict(list)
-    fid_map_unique_t = defaultdict(list)
-    for table_name in table_name_sort:
-      t_cfg = table_cfg[table_name]
-      for ps_i in range(ps_num):
-        to_key = table_name + ":" + str(ps_i)
-        for feature_name in t_cfg["feature_list"]:
-          key = feature_name + ":" + str(ps_i)
-          fid_map_t[to_key].extend(fid_map_t_in[key])
-          fid_map_unique_t[to_key].extend(fid_map_unique_t_in[key])
+        rewrie_fid_offset(sparse_key, fid_map_unique_feature_pre_offset, f_cfg,
+                          fid_list, fid_offset_list_unique)
 
     print('==' * 10 + "fid_map_t" + '==' * 10)
     #print(fid_map_t)
@@ -201,38 +237,109 @@ class DataOpsV2Test(tf.test.TestCase):
     #print(fid_offset_map)
     return nfl_offset_t, feature_offset_t, fid_offset_list, fid_offset_list_unique, fid_map_t, fid_map_unique_t
 
-  def diff_test(self, input_type, parse_func, input_str_list, ps_num,
-                feature_cfgs, sparse_features, dense_features, extra_features,
-                nfl_offset_t, feature_offset_t, fid_offset_list,
-                fid_offset_list_unique, fid_map_t, fid_map_row_split_t,
-                fid_map_unique_t, fid_map_row_split_unique_t):
+  def diff_test(self, input_type, parse_func, input_str_list, feature_name_sort,
+                table_name_sort, ps_num, feature_cfg, table_cfg, feature_cfgs,
+                sparse_features, dense_features, extra_features, nfl_offset_t,
+                feature_offset_t, fid_offset_list, fid_offset_list_unique,
+                fid_map_t, fid_map_row_split_t, fid_map_unique_t,
+                fid_map_row_split_unique_t):
+
+    if self.version == 4:
+      fid_list_table_row_length_t = [0] * (ps_num * len(table_name_sort))
+      fid_list_shard_row_lenth_t = [0] * ps_num
+      fid_list_emb_row_lenth_t = [0] * (ps_num * len(table_name_sort))
+
+      fid_list_table_row_length_unique_t = [0] * (ps_num * len(table_name_sort))
+      fid_list_shard_row_lenth_unique_t = [0] * ps_num
+      fid_list_emb_row_lenth_unique_t = [0] * (ps_num * len(table_name_sort))
+
+      fid_map_t2, fid_map_row_split_t2, fid_map_unique_t2, fid_map_row_split_unique_t2 = [], [], [], []
+
+      table_count = len(table_name_sort)
+      for ps_i in range(ps_num):
+        for table_i in range(table_count):
+          table_name = table_name_sort[table_i]
+
+          #t_cfg = table_cfg[table_name]
+          to_key = table_name + ":" + str(ps_i)
+          fid_map_t2.extend(fid_map_t[to_key])
+          fid_map_row_split_t2.extend(fid_map_row_split_t[to_key])
+          fid_list_table_row_length_t[ps_i * table_count + table_i] = len(
+              fid_map_t[to_key])
+          fid_list_shard_row_lenth_t[ps_i] += len(fid_map_t[to_key])
+
+          fid_map_unique_t2.extend(fid_map_unique_t[to_key])
+          fid_map_row_split_unique_t2.extend(fid_map_row_split_unique_t[to_key])
+          fid_list_table_row_length_unique_t[ps_i * table_count +
+                                             table_i] = len(
+                                                 fid_map_unique_t[to_key])
+          fid_list_shard_row_lenth_unique_t[ps_i] += len(
+              fid_map_unique_t[to_key])
+
+          emb_dim_sum, emb_dim_sum_unique = 0, 0
+          t_cfg = table_cfg[table_name]
+          assert len(t_cfg["feature_list"]) + 1 == len(
+              fid_map_row_split_t[to_key])
+          for feature_idx in range(len(t_cfg["feature_list"])):
+            feature_name = t_cfg["feature_list"][feature_idx]
+            f_cfg = feature_cfg[feature_name]
+            dims_sum = f_cfg["dims_sum"]
+            emb_dim_sum += dims_sum * (
+                fid_map_row_split_t[to_key][feature_idx + 1] -
+                fid_map_row_split_t[to_key][feature_idx])
+            emb_dim_sum_unique += dims_sum * (
+                fid_map_row_split_unique_t[to_key][feature_idx + 1] -
+                fid_map_row_split_unique_t[to_key][feature_idx])
+
+          fid_list_emb_row_lenth_t[ps_i * table_count + table_i] = \
+              emb_dim_sum
+          fid_list_emb_row_lenth_unique_t[ps_i * table_count + table_i] = \
+              emb_dim_sum_unique
+
+      fid_map_t, fid_map_row_split_t, fid_map_unique_t, fid_map_row_split_unique_t = \
+        fid_map_t2, fid_map_row_split_t2, fid_map_unique_t2, fid_map_row_split_unique_t2
+
     with tf.Graph().as_default():
       config = tf.compat.v1.ConfigProto()
       config.graph_options.rewrite_options.disable_meta_optimizer = True
       input_placeholder = tf.compat.v1.placeholder(dtype=tf.string,
                                                    shape=(None,))
       parsed_results_base, parsed_results = parse_func(input_placeholder)
-      example_batch_varint = parsed_results.pop("sparse_features")
+      example_batch_varint = parsed_results.pop(
+          ParserCtx.sharding_sparse_fids_sparse_features_key)
 
-      parallel_flag_list = [1, 2, 3, 4]
+      parallel_flag_list = [0, 1]
       fid_map_list = []
       fid_map_unique_list = []
       for parallel_flag in parallel_flag_list:
-        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, fid_map_row_split = sharding_sparse_fids(
-            example_batch_varint, ps_num, feature_cfgs, False, input_type,
-            parallel_flag)
+        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, fid_map_row_split, fid_list_emb_row_lenth, \
+    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
+            example_batch_varint,
+            ps_num,
+            feature_cfgs,
+            False,
+            input_type,
+            parallel_flag,
+            version=self.version)
         fid_map_list.append([
             fid_map, fid_offset, feature_offset, nfl_offset, fid_map_row_split
         ])
-        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, fid_map_unique_row_split = sharding_sparse_fids(
-            example_batch_varint, ps_num, feature_cfgs, True, input_type,
-            parallel_flag)
+        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, fid_map_unique_row_split, fid_list_emb_row_lenth_unique, \
+    fid_list_table_row_length_unique, fid_list_shard_row_lenth_unique = sharding_sparse_fids(
+            example_batch_varint,
+            ps_num,
+            feature_cfgs,
+            True,
+            input_type,
+            parallel_flag,
+            version=self.version)
         fid_map_unique_list.append([
             fid_map_unique, fid_offset, feature_offset, nfl_offset,
             fid_map_unique_row_split
         ])
 
       with self.session(config=config) as sess:
+
         parsed_results_base1, parsed_results1 = sess.run(
             fetches=[parsed_results_base, parsed_results],
             feed_dict={input_placeholder: input_str_list})
@@ -293,21 +400,22 @@ class DataOpsV2Test(tf.test.TestCase):
           diff("nfl_offset2", nfl_offset2, nfl_offset_t)
           diff("feature_offset", feature_offset1, feature_offset_t)
           diff("feature_offset2", feature_offset2, feature_offset_t)
-          #print(f"xxxx fid_offset_list_unique {fid_offset_list_unique}",
-          #      flush=True)
-          #print(f"xxxx fid_offset2 {list(fid_offset2)}", flush=True)
           diff("fid_offset2", fid_offset2, fid_offset_list_unique)
           diff("fid_offset", fid_offset1, fid_offset_list)
 
-          assert (len(fid_map_t) == len(fid_map1))
-          assert (len(fid_map_unique_t) == len(fid_map2))
+          if isinstance(fid_map_t, Dict):
+            assert (len(fid_map_t) == len(fid_map1))
+            assert (len(fid_map_unique_t) == len(fid_map2))
 
           def fid_diff(a, b):
-            for k, v in a.items():
-              assert (k in b)
-              diff(k, v.tolist(), b[k])  #.numpy()
-            for k, v in b.items():
-              assert (k in a)
+            if isinstance(a, Dict):
+              for k, v in a.items():
+                assert (k in b)
+                diff(k, v.tolist(), b[k])  #.numpy()
+              for k, v in b.items():
+                assert (k in a)
+            else:
+              diff("main", a.tolist(), b)
 
           print('==' * 10 + "diff fid_map1 " +
                 str(parallel_flag_list[fid_map_index]) + '==' * 10,
@@ -315,8 +423,8 @@ class DataOpsV2Test(tf.test.TestCase):
           #print(f"xxxx fid_map1 {fid_map1} ", flush=True)
           #print(f"xxxx fid_map_t {fid_map_t} ", flush=True)
           fid_diff(fid_map1, fid_map_t)
-          print(f"xxxx fid_map_row_split1 {fid_map_row_split1}", flush=True)
-          print(f"xxxx fid_map_row_split_t {fid_map_row_split_t}", flush=True)
+          #print(f"xxxx fid_map_row_split1 {fid_map_row_split1}", flush=True)
+          #print(f"xxxx fid_map_row_split_t {fid_map_row_split_t}", flush=True)
           fid_diff(fid_map_row_split1, fid_map_row_split_t)
           print('==' * 10 + "diff fid_map_unique1 " +
                 str(parallel_flag_list[fid_map_index]) + '==' * 10,
@@ -327,6 +435,26 @@ class DataOpsV2Test(tf.test.TestCase):
           #      flush=True)
           fid_diff(fid_map2, fid_map_unique_t)
           fid_diff(fid_map_unique_row_split1, fid_map_row_split_unique_t)
+
+        if self.version == 4:
+          fid_list_table_row_length_1, fid_list_shard_row_lenth_1, \
+             fid_list_table_row_length_unique_1, fid_list_shard_row_lenth_unique_1, \
+              fid_list_emb_row_lenth_1, fid_list_emb_row_lenth_unique_1 = \
+            sess.run(fetches=[fid_list_table_row_length, fid_list_shard_row_lenth, \
+                fid_list_table_row_length_unique, fid_list_shard_row_lenth_unique, \
+                  fid_list_emb_row_lenth, fid_list_emb_row_lenth_unique], \
+              feed_dict={input_placeholder: input_str_list})
+          diff("", fid_list_table_row_length_1.tolist(),
+               fid_list_table_row_length_t)
+          diff("", fid_list_shard_row_lenth_1.tolist(),
+               fid_list_shard_row_lenth_t)
+          diff("", fid_list_table_row_length_unique_1.tolist(),
+               fid_list_table_row_length_unique_t)
+          diff("", fid_list_shard_row_lenth_unique_1.tolist(),
+               fid_list_shard_row_lenth_unique_t)
+          diff("", fid_list_emb_row_lenth_1.tolist(), fid_list_emb_row_lenth_t)
+          diff("", fid_list_emb_row_lenth_unique_1.tolist(),
+               fid_list_emb_row_lenth_unique_t)
 
   def testExampleBatchSharding(self):
     file_name = "monolith/native_training/data/training_instance/examplebatch.data"
@@ -375,6 +503,7 @@ class DataOpsV2Test(tf.test.TestCase):
     for sparse_key in sparse_features:
       cfg = FeatureConfig()
       cfg.table = 'table_{}'.format(index % 3)
+      cfg.slice_dims.extend(random.sample(range(1, 6), 3))
       #print(sparse_key, cfg.table)
       feature_cfgs.feature_configs[sparse_key].CopyFrom(cfg)
       index += 1
@@ -477,11 +606,13 @@ class DataOpsV2Test(tf.test.TestCase):
           extra_feature_shapes=extra_feature_shapes)
       return parsed_results_base, parsed_results
 
-    self.diff_test("examplebatch", parse_func, [eb_str], ps_num, feature_cfgs,
-                   sparse_features, dense_features, extra_features,
-                   nfl_offset_t, feature_offset_t, fid_offset_list,
-                   fid_offset_list_unique, fid_map_t, fid_map_row_split_t,
-                   fid_map_unique_t, fid_map_row_split_unique_t)
+    self.diff_test("examplebatch", parse_func, [eb_str], feature_name_sort,
+                   table_name_sort, ps_num, feature_cfg, table_cfg,
+                   feature_cfgs, sparse_features, dense_features,
+                   extra_features, nfl_offset_t, feature_offset_t,
+                   fid_offset_list, fid_offset_list_unique, fid_map_t,
+                   fid_map_row_split_t, fid_map_unique_t,
+                   fid_map_row_split_unique_t)
     #assert (False)
 
   def testExampleSharding(self):
@@ -557,6 +688,7 @@ class DataOpsV2Test(tf.test.TestCase):
     for sparse_key in sparse_features:
       cfg = FeatureConfig()
       cfg.table = 'table_{}'.format(index % 3)
+      cfg.slice_dims.extend(random.sample(range(1, 6), 3))
       table_name_index_map[cfg.table] = -1
       feature_cfgs.feature_configs[sparse_key].CopyFrom(cfg)
       index += 1
@@ -637,7 +769,8 @@ class DataOpsV2Test(tf.test.TestCase):
       return parsed_results_base, parsed_results
 
     #example_tensor = tf.convert_to_tensor(example_str_list)
-    self.diff_test("example", parse_func, example_str_list, ps_num,
+    self.diff_test("example", parse_func, example_str_list, feature_name_sort,
+                   table_name_sort, ps_num, feature_cfg, table_cfg,
                    feature_cfgs, sparse_features, dense_features,
                    extra_features, nfl_offset_t, feature_offset_t,
                    fid_offset_list, fid_offset_list_unique, fid_map_t,
@@ -699,6 +832,7 @@ class DataOpsV2Test(tf.test.TestCase):
     for sparse_key in sparse_features:
       cfg = FeatureConfig()
       cfg.table = 'table_{}'.format(index % 3)
+      cfg.slice_dims.extend(random.sample(range(1, 6), 3))
       table_name_index_map[cfg.table] = -1
       feature_cfgs.feature_configs[sparse_key].CopyFrom(cfg)
       index += 1
@@ -797,13 +931,28 @@ class DataOpsV2Test(tf.test.TestCase):
           extra_feature_shapes=extra_feature_shapes)
       return parsed_results_base, parsed_results
 
-    self.diff_test("instance", parse_func, instance_str_list, ps_num,
+    self.diff_test("instance", parse_func, instance_str_list, feature_name_sort,
+                   table_name_sort, ps_num, feature_cfg, table_cfg,
                    feature_cfgs, sparse_features, dense_features,
                    extra_features, nfl_offset_t, feature_offset_t,
                    fid_offset_list, fid_offset_list_unique, fid_map_t,
                    fid_map_row_split_t, fid_map_unique_t,
                    fid_map_row_split_unique_t)
     #assert (False)
+
+
+class DataOpsV2TestFitPreV2(DataOpsV2Test):
+
+  def __init__(self, *args, **kwargs):
+    super(DataOpsV2TestFitPreV2, self).__init__(*args, **kwargs)
+    self.version = 2
+
+
+class DataOpsV2Testv4(DataOpsV2Test):
+
+  def __init__(self, *args, **kwargs):
+    super(DataOpsV2Testv4, self).__init__(*args, **kwargs)
+    self.version = 4
 
 
 class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
@@ -982,13 +1131,15 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
           dense_feature_types=dense_feature_types,
           extra_features=extra_features,
           extra_feature_shapes=extra_feature_shapes)
-      example_batch_varint = parsed_results.pop("sparse_features")
+      example_batch_varint = parsed_results.pop(
+          ParserCtx.sharding_sparse_fids_sparse_features_key)
 
-      parallel_flag_list = [1, 2, 3, 4]
+      parallel_flag_list = [0, 1]
       fid_map_list = []
       fid_map_unique_list = []
       for parallel_flag in parallel_flag_list:
-        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits = sharding_sparse_fids(
+        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, \
+    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             example_batch_varint,
             ps_num,
             feature_cfgs,
@@ -997,7 +1148,8 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
             parallel_flag,
             version=1)
         fid_map_list.append([fid_map, fid_offset, feature_offset, nfl_offset])
-        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits = sharding_sparse_fids(
+        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, \
+    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             example_batch_varint,
             ps_num,
             feature_cfgs,
@@ -1239,12 +1391,14 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
                                       dense_feature_types=dense_feature_types,
                                       extra_features=extra_features,
                                       extra_feature_shapes=extra_feature_shapes)
-      examples_varint = parsed_results.pop("sparse_features")
-      parallel_flag_list = [1, 2, 3, 4]
+      examples_varint = parsed_results.pop(
+          ParserCtx.sharding_sparse_fids_sparse_features_key)
+      parallel_flag_list = [0, 1]
       fid_map_list = []
       fid_map_unique_list = []
       for parallel_flag in parallel_flag_list:
-        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits = sharding_sparse_fids(
+        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, \
+    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             examples_varint,
             ps_num,
             feature_cfgs,
@@ -1253,7 +1407,8 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
             parallel_flag,
             version=1)
         fid_map_list.append([fid_map, fid_offset, feature_offset, nfl_offset])
-        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits = sharding_sparse_fids(
+        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, \
+    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             examples_varint,
             ps_num,
             feature_cfgs,
@@ -1528,12 +1683,14 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
           dense_feature_types=dense_feature_types,
           extra_features=extra_features,
           extra_feature_shapes=extra_feature_shapes)
-      examples_varint = parsed_results.pop("sparse_features")
-      parallel_flag_list = [1, 2, 3, 4]
+      examples_varint = parsed_results.pop(
+          ParserCtx.sharding_sparse_fids_sparse_features_key)
+      parallel_flag_list = [0, 1]
       fid_map_list = []
       fid_map_unique_list = []
       for parallel_flag in parallel_flag_list:
-        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits = sharding_sparse_fids(
+        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, \
+    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             examples_varint,
             ps_num,
             feature_cfgs,
@@ -1542,7 +1699,8 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
             parallel_flag,
             version=1)
         fid_map_list.append([fid_map, fid_offset, feature_offset, nfl_offset])
-        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits = sharding_sparse_fids(
+        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, \
+    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             examples_varint,
             ps_num,
             feature_cfgs,
