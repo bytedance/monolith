@@ -52,7 +52,8 @@ struct AsyncPack {
                 p_lock_ctxs,
             std::function<void()> p_done, int p_thread_num)
       : ctx(p_ctx),
-        basename(p_basename),
+        basename(std::move(p_basename)),
+        record_count(0),
         mtable(std::move(p_mtable)),
         lock_ctxs(std::move(p_lock_ctxs)),
         done(std::move(p_done)),
@@ -69,6 +70,7 @@ struct AsyncPack {
 
   OpKernelContext* ctx;
   std::string basename;
+  mutable std::atomic_long record_count;
   core::RefCountPtr<TableType> mtable;
   std::vector<std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx>> lock_ctxs;
   std::function<void()> done;
@@ -77,10 +79,12 @@ struct AsyncPack {
   mutable std::vector<Status> status;
 };
 
+template <typename TableType>
 struct EntryDumpIter {
   explicit EntryDumpIter(io::SequentialRecordReader* reader_, int64_t limit_)
       : reader(reader_), limit(limit_), offset(0) {}
-  bool GetNext(EmbeddingHashTableTfBridge::EntryDump* dump, Status* status) {
+  bool GetNext(const AsyncPack<TableType>* p,
+               EmbeddingHashTableTfBridge::EntryDump* dump, Status* status) {
     *status = Status::OK();
     if (offset >= limit) return false;
     tstring s;
@@ -90,6 +94,8 @@ struct EntryDumpIter {
       return false;
     }
     offset++;
+    p->record_count.fetch_add(1);
+
     return true;
   }
 
@@ -293,7 +299,8 @@ class MultiHashTableRestoreOp : public AsyncOpKernel {
                     std::shared_ptr<const AsyncPack<TableType>> p) {
     p->status[shard.idx] = RestoreOneShard(shard, p.get());
     if (p->finish_num.fetch_add(1) == p->thread_num - 1) {
-      int64_t total_byte_size = 0, total_uncompressed_byte_size = 0;
+      int64_t total_byte_size = 0, total_uncompressed_byte_size = 0,
+              total_size = 0;
       for (int i = 0; i < p->mtable->size(); ++i) {
         auto t = p->mtable->table(i);
         auto name = p->mtable->name(i);
@@ -301,8 +308,12 @@ class MultiHashTableRestoreOp : public AsyncOpKernel {
         LOG(INFO) << absl::StrFormat("Hash table: %s, summary: %s", name,
                                      summary);
         LogSummary(summary, &total_byte_size, &total_uncompressed_byte_size);
+        total_size += t->Size();
       }
 
+      LOG(INFO) << absl::StrFormat(
+          "Restore read %ld records, skip %ld zero embeddings", p->record_count,
+          p->record_count - total_size);
       LOG(INFO) << absl::StrFormat(
           "total memory: %s, total memory if not compressed: %s",
           HumanReadableNumBytes(total_byte_size),
@@ -367,10 +378,10 @@ class MultiHashTableRestoreOp : public AsyncOpKernel {
       tables_in_shard.insert(meta.table_name());
       EmbeddingHashTableTfBridge* table = p->mtable->table(name_iter->second);
 
-      EntryDumpIter entry_iter(&reader, meta.num_entries());
+      EntryDumpIter<TableType> entry_iter(&reader, meta.num_entries());
       auto get_fn = [&](EmbeddingHashTableTfBridge::EntryDump* dump,
                         int64_t* max_update_ts) {
-        if (!entry_iter.GetNext(dump, &restore_status)) return false;
+        if (!entry_iter.GetNext(p, dump, &restore_status)) return false;
         if (!dump->has_last_update_ts_sec()) {
           dump->set_last_update_ts_sec(0);
         }

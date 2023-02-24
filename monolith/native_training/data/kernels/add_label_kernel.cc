@@ -22,6 +22,7 @@
 #include "monolith/native_training/data/kernels/internal/label_utils.h"
 #include "monolith/native_training/data/training_instance/cc/instance_utils.h"
 #include "monolith/native_training/data/training_instance/cc/pb_variant.h"
+#include "monolith/native_training/runtime/common/linalg_utils.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
@@ -34,6 +35,7 @@ using IFeature = ::idl::matrix::proto::Feature;
 using Instance = ::parser::proto::Instance;
 using Example = ::monolith::io::proto::Example;
 using LineId = ::idl::matrix::proto::LineId;
+using ::monolith::common::IsAlmostEqual;
 
 class AddLabelOp : public OpKernel {
  public:
@@ -125,7 +127,7 @@ class AddLabelOp : public OpKernel {
 
  private:
   bool SelectedByNegativeSampling(const internal::TaskConfig &t) {
-    return internal::IsAlmostEqual(t.sample_rate, 1.0f) ||
+    return IsAlmostEqual(t.sample_rate, 1.0f) ||
            random_neg_sample_(random_generator_) < t.sample_rate;
   }
 

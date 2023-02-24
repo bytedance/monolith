@@ -25,6 +25,7 @@ cc_library(
         ":transform_config_cc_proto",
         "//monolith/native_training/data/training_instance:instance_utils",
         "//monolith/native_training/data/kernels/internal:label_utils",
+        "//monolith/native_training/runtime/common:linalg_utils",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
     ],

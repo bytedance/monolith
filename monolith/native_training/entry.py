@@ -309,14 +309,13 @@ class FTRLWithGroupSparsityOptimizer(Optimizer):
 @monolith_export
 class AdaGradWithGroupLassoOptimizer(Optimizer):
 
-  def __init__(
-      self,
-      learning_rate=None,
-      beta=None,
-      initial_accumulator_value=None,
-      l2_regularization=None,
-      weight_decay_factor=0.0,
-      warmup_steps=0):
+  def __init__(self,
+               learning_rate=None,
+               beta=None,
+               initial_accumulator_value=None,
+               l2_regularization=None,
+               weight_decay_factor=0.0,
+               warmup_steps=0):
     self.learning_rate = learning_rate
     self.beta = beta
     self.initial_accumulator_value = initial_accumulator_value

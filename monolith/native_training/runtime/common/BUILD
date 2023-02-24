@@ -25,3 +25,21 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "linalg_utils",
+    hdrs = ["linalg_utils.h"],
+    visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "linalg_utils_test",
+    srcs = [
+        "linalg_utils_test.cc",
+    ],
+    deps = [
+        ":linalg_utils",
+        "@com_google_glog//:glog",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+

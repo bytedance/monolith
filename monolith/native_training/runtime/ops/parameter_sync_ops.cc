@@ -139,8 +139,7 @@ class ParameterSyncClientOp
 
 class ParameterSyncOp : public OpKernel {
  public:
-  explicit ParameterSyncOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
-  }
+  explicit ParameterSyncOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
     ParameterSyncClientTfBridge* client = nullptr;
@@ -154,7 +153,6 @@ class ParameterSyncOp : public OpKernel {
                 errors::InvalidArgument("Unable to parse config. Make "
                                         "sure it is serialized version of "
                                         "ClientConfig"));
-
 
     client->TryReplace(config.targets());
     LOG_EVERY_N_SEC(INFO, 600) << client->DebugString();

@@ -426,20 +426,18 @@ class DistributedExporter(BaseExporter):
   
   """
 
-  def __init__(
-      self,
-      model_fn: Callable,
-      model_dir: str,
-      export_dir_base: str,
-      shared_embedding=False,
-      warmup_file: str = None,
-      dense_only=False,
-      allow_gpu=False,
-      with_remote_gpu=False,
-      clear_entry_devices=False,
-      include_graphs: List[str] = None,
-      global_step_as_timestamp: bool = False,
-  ):
+  def __init__(self,
+               model_fn: Callable,
+               model_dir: str,
+               export_dir_base: str,
+               shared_embedding=False,
+               warmup_file: str = None,
+               dense_only=False,
+               allow_gpu=False,
+               with_remote_gpu=False,
+               clear_entry_devices=False,
+               include_graphs: List[str] = None,
+               global_step_as_timestamp: bool = False):
     super(DistributedExporter,
           self).__init__(model_fn, model_dir, export_dir_base, shared_embedding,
                          warmup_file)

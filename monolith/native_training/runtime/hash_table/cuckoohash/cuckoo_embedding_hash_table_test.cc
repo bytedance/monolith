@@ -26,10 +26,26 @@ namespace proto2 = google::protobuf;
 using ::testing::ElementsAre;
 
 std::tuple<EmbeddingHashTableConfig, std::vector<float>>
-GetTestOneDimSgdHashTable(EmbeddingHashTableConfig::EntryType type =
-                              EmbeddingHashTableConfig::PACKED) {
+GetTestOneDimSgdHashTable(
+    EmbeddingHashTableConfig::EntryType type = EmbeddingHashTableConfig::PACKED,
+    bool skip_zero_embedding = false) {
   EmbeddingHashTableConfig config;
-  EXPECT_TRUE(proto2::TextFormat::ParseFromString(R"(
+  if (skip_zero_embedding) {
+    EXPECT_TRUE(proto2::TextFormat::ParseFromString(R"(
+    entry_config {
+      segments {
+        dim_size: 1
+        comp_config { fp32 {} }
+      }
+      entry_type: SERVING
+    }
+    initial_capacity: 1
+    cuckoo {}
+    skip_zero_embedding: true
+  )",
+                                                    &config));
+  } else {
+    EXPECT_TRUE(proto2::TextFormat::ParseFromString(R"(
     entry_config {
       segments {
         dim_size: 1
@@ -40,7 +56,9 @@ GetTestOneDimSgdHashTable(EmbeddingHashTableConfig::EntryType type =
     initial_capacity: 1
     cuckoo {}
   )",
-                                                  &config));
+                                                    &config));
+  }
+
   config.set_entry_type(type);
   std::vector<float> learning_rates(1, 0.01f);
   return std::make_tuple(config, learning_rates);
@@ -60,6 +78,11 @@ INSTANTIATE_TEST_CASE_P(OneTimeEvict, EmbeddingHashTableEvictTest,
 
 INSTANTIATE_TEST_CASE_P(EvictWhileRehash, EmbeddingHashTableEvictTest,
                         ::testing::Values(GetTestOneDimSgdHashTable()));
+
+INSTANTIATE_TEST_CASE_P(SkipZeroEmbedding,
+                        EmbeddingHashTableSkipZeroEmbeddingTest,
+                        ::testing::Values(GetTestOneDimSgdHashTable(
+                            EmbeddingHashTableConfig::PACKED, true)));
 
 }  // namespace
 }  // namespace hash_table

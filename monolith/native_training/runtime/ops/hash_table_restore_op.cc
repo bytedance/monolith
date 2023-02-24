@@ -15,14 +15,17 @@
 #include <atomic>
 #include <cstring>
 #include <string>
+#include <utility>
 
 #include "absl/strings/str_cat.h"
 #include "monolith/native_training/runtime/ops/embedding_hash_table_tf_bridge.h"
 #include "monolith/native_training/runtime/ops/file_utils.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/kernels/ops_util.h"
+#include "tensorflow/core/lib/io/path.h"
 #include "tensorflow/core/lib/io/record_reader.h"
 #include "tensorflow/core/platform/threadpool.h"
+
 namespace tensorflow {
 namespace monolith_tf {
 namespace {
@@ -34,7 +37,8 @@ struct AsyncPack {
             std::string p_basename, std::function<void()> p_done,
             int p_thread_num)
       : ctx(p_ctx),
-        basename(p_basename),
+        basename(std::move(p_basename)),
+        record_count(0),
         hash_table(p_hash_table),
         done(std::move(p_done)),
         thread_num(p_thread_num),
@@ -47,6 +51,7 @@ struct AsyncPack {
 
   OpKernelContext* ctx;
   std::string basename;
+  std::atomic_long record_count;
   EmbeddingHashTableTfBridge* hash_table;
   std::function<void()> done;
   const int thread_num;
@@ -95,8 +100,12 @@ class HashTableRestoreOp : public AsyncOpKernel {
     p->status[shard.idx] = RestoreOneShard(shard, p);
     if (p->finish_num.fetch_add(1) == p->thread_num - 1) {
       auto summary = p->hash_table->Summary();
-      LOG(INFO) << absl::StrFormat("Hash table: %s, summary: %s", p->basename,
-                                   summary);
+      auto basename = tensorflow::io::Basename(p->basename);
+      LOG(INFO) << absl::StrFormat(
+          "Hash table: %s, summary: %s, restore read %ld records, skip %ld "
+          "zero embeddings",
+          basename, summary, p->record_count,
+          p->record_count - p->hash_table->Size());
       Cleanup(p);
     }
   }
@@ -112,7 +121,7 @@ class HashTableRestoreOp : public AsyncOpKernel {
     opts.buffer_size = 10 * 1024 * 1024;
     io::SequentialRecordReader reader(f.get(), opts);
     Status restore_status;
-    auto get_fn = [&reader, &restore_status, &filename](
+    auto get_fn = [&reader, &restore_status, &p](
                       EmbeddingHashTableTfBridge::EntryDump* dump,
                       int64_t* max_update_ts) {
       Status s = GetRecord(&reader, dump);
@@ -122,6 +131,7 @@ class HashTableRestoreOp : public AsyncOpKernel {
         }
         return false;
       }
+      p->record_count.fetch_add(1);
       if (!dump->has_last_update_ts_sec()) {
         dump->set_last_update_ts_sec(0);
       }
@@ -143,6 +153,7 @@ class HashTableRestoreOp : public AsyncOpKernel {
       return errors::FailedPrecondition(
           "Unable to parse data. Data might be corrupted");
     }
+
     return Status::OK();
   }
 

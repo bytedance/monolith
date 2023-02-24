@@ -51,6 +51,7 @@ from monolith.native_training.zk_utils import MonolithKazooClient
 from monolith.native_training.distribution_utils import init_sync_train_and_update_conf, try_init_cuda
 from monolith.native_training import device_utils
 
+
 @monolith_export
 class EstimatorSpec(
     collections.namedtuple(

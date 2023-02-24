@@ -173,8 +173,7 @@ def create_exporter(task,
         export_with_cleared_entry_devices,
         include_graphs=include_graphs,
         global_step_as_timestamp=task.config.enable_sync_training,
-        with_remote_gpu=task._params.serving.with_remote_gpu,
-    )
+        with_remote_gpu=task._params.serving.with_remote_gpu)
   else:
     raise ValueError("Invalid export_mode: {}".format(
         task._params.serving.export_mode))
@@ -230,14 +229,19 @@ class _CpuFeatureFactory(feature.FeatureFactoryFromEmbeddings):
 
 class _FusedCpuFeatureFactory(feature.FeatureFactoryFromEmbeddings):
 
-  def __init__(self, hash_table: Union[
-                multi_type_hash_table.MergedMultiTypeHashTable, # when use_native_multi_hash_table=False
-                distributed_ps_sync.DistributedMultiTypeHashTableMpi # when use_native_multi_hash_table=True
-               ],
-               name_to_embeddings: Dict[str, tf.Tensor],
-               name_to_embedding_slices: Dict[str, tf.Tensor],
-               req_time: tf.Tensor, auxiliary_bundle: Dict[str, tf.RaggedTensor],
-               use_native_multi_hash_table: bool):
+  def __init__(
+      self,
+      hash_table: Union[
+          multi_type_hash_table.
+          MergedMultiTypeHashTable,  # when use_native_multi_hash_table=False
+          distributed_ps_sync.
+          DistributedMultiTypeHashTableMpi  # when use_native_multi_hash_table=True
+      ],
+      name_to_embeddings: Dict[str, tf.Tensor],
+      name_to_embedding_slices: Dict[str, tf.Tensor],
+      req_time: tf.Tensor,
+      auxiliary_bundle: Dict[str, tf.RaggedTensor],
+      use_native_multi_hash_table: bool):
     super().__init__(name_to_embeddings, name_to_embedding_slices)
     self._hash_table = hash_table
     self._embeddings = name_to_embeddings
@@ -275,6 +279,7 @@ def get_req_time(features):
     return features["req_time"][0]
   else:
     return None
+
 
 @dataclasses.dataclass
 class CpuTrainingConfig:
@@ -319,6 +324,7 @@ class CpuTrainingConfig:
     :param save_checkpoints_secs: Save checkpoint every save_checkpoints_secs
     :param save_checkpoints_steps: Save checkpoint every save_checkpoints_steps
     :param warmup_file: The warmup file name.
+    :param skip_zero_embedding_when_serving: Whether skip to restore zero embedding(L2 norm = 0) when serving
     :param max_rpc_deadline_millis: Timeout for remote predict op in millisenconds.
     :param dense_only_save_checkpoints_secs: Save dense checkpoint every save_checkpoints_secs
     :param dense_only_save_checkpoints_steps: Save dense checkpoint every save_checkpoints_steps
@@ -383,6 +389,7 @@ class CpuTrainingConfig:
   dense_only_save_checkpoints_steps: int = None
   dense_only_stop_training_when_save: bool = False
   warmup_file: str = './warmup_file'
+  skip_zero_embedding_when_serving: bool = False
   max_rpc_deadline_millis: int = 30000
   checkpoints_max_to_keep: int = 10
   submit_time_secs: int = None
@@ -424,11 +431,13 @@ def _make_serving_config_from_training_config(
   return serving_config
 
 
-def _make_serving_feature_configs_from_training_configs(feature_configs):
+def _make_serving_feature_configs_from_training_configs(
+    feature_configs, skip_zero_embedding: bool):
   serving_feature_configs = copy.deepcopy(feature_configs)
   for config in serving_feature_configs[0].values():
     # config: entry.HashTableConfigInstance
     config.table_config.entry_config.entry_type = embedding_hash_table_pb2.EntryConfig.EntryType.SERVING
+    config.table_config.skip_zero_embedding = skip_zero_embedding
   return serving_feature_configs
 
 
@@ -472,6 +481,7 @@ class CpuTraining:
 
     if config.use_native_multi_hash_table is None:
       config.use_native_multi_hash_table = True
+
     get_default_parser_ctx().enable_fused_layout = config.enable_fused_layout
 
     FLAGS.dataset_worker_idx = config.index
@@ -521,11 +531,12 @@ class CpuTraining:
           dump_utils.feature_combiners = self._feature_configs_do_not_refer_directly[
               2]
       self._serving_feature_configs_do_not_refer_directly = _make_serving_feature_configs_from_training_configs(
-          self._feature_configs_do_not_refer_directly)
+          self._feature_configs_do_not_refer_directly,
+          self.config.skip_zero_embedding_when_serving)
 
       if not self.config.use_native_multi_hash_table:
         self._dummy_merged_table = multi_type_hash_table.MergedMultiTypeHashTable(
-          self.feature_configs[0], lambda *args, **kwargs: None)
+            self.feature_configs[0], lambda *args, **kwargs: None)
 
     if get_default_parser_ctx().enable_fused_layout:
       # same param to fused_layout
@@ -585,18 +596,20 @@ class CpuTraining:
         }
         if self.config.use_native_multi_hash_table:
           # when multi hash table is used, this is unmerged
-          merged_slot_dims = multi_hash_table_ops.infer_dims(feature_name_config)
+          merged_slot_dims = multi_hash_table_ops.infer_dims(
+              feature_name_config)
           sorted_slot_keys = sorted(embedding_feature_names)
-          sorted_input = [embedding_ragged_ids[k].values for k in sorted_slot_keys]
+          sorted_input = [
+              embedding_ragged_ids[k].values for k in sorted_slot_keys
+          ]
         else:
           merged_slot_to_id, merged_slot_to_sizes = self._dummy_merged_table._get_merged_to_indexed_tensor(
-            { k: v.values for k, v in embedding_ragged_ids.items() })
+              {k: v.values for k, v in embedding_ragged_ids.items()})
           merged_slot_dims = self._dummy_merged_table.get_table_dim_sizes()
           sorted_slot_keys = sorted(merged_slot_to_id.keys())
           sorted_input = [merged_slot_to_id[k] for k in sorted_slot_keys]
         reordered_pack = distribution_ops.fused_reorder_by_indices(
-            sorted_input, self.config.num_workers, merged_slot_dims
-        )
+            sorted_input, self.config.num_workers, merged_slot_dims)
         reordered_pack = (*reordered_pack, get_req_time(dense_features))
         if self.config.use_native_multi_hash_table:
           # DistributedMultiTypeHashTableMpi.lookup
@@ -604,9 +617,9 @@ class CpuTraining:
         else:
           # merged_multi_type_hash_table.lookup
           lookup_args = (
-            merged_slot_to_sizes,
-            # DistributedMultiTypeHashTableMpi.lookup
-            reordered_pack)
+              merged_slot_to_sizes,
+              # DistributedMultiTypeHashTableMpi.lookup
+              reordered_pack)
         # Results include the following intermediate tensors
         res = (
             dense_features,  # Dense features
@@ -744,8 +757,7 @@ class CpuTraining:
               feature_name_config,
               hash_filter=hash_filters[0],
               sync_client=sync_clients[0],
-              queue_configs=queue_configs
-          ), hash_filters
+              queue_configs=queue_configs), hash_filters
         else:
           return distributed_ps_factory.create_in_worker_multi_type_hash_table(
               self.config.num_workers,
@@ -1284,7 +1296,8 @@ class CpuTraining:
                 args[1],
                 get_req_time(args[0]),
                 auxiliary_bundle=auxiliary_bundle,
-                use_native_multi_hash_table=self.config.use_native_multi_hash_table)
+                use_native_multi_hash_table=self.config.
+                use_native_multi_hash_table)
           else:
             self._task.ctx.feature_factory = _CpuFeatureFactory(
                 hash_table,
@@ -1374,31 +1387,34 @@ class CpuTraining:
                                                   hash_filters, ps_monitor))
         if self.config.enable_partial_sync_training and self.config.index != 0:
           elements = []
-          local_init_ops = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.LOCAL_INIT_OP)
+          local_init_ops = tf.compat.v1.get_collection(
+              tf.compat.v1.GraphKeys.LOCAL_INIT_OP)
           if local_init_ops:
             elements.extend(local_init_ops)
           else:
             local_init_op = tf.compat.v1.train.Scaffold.get_or_default(
-              'local_init_op', tf.compat.v1.GraphKeys.LOCAL_INIT_OP,
-              tf.compat.v1.train.Scaffold.default_local_init_op)
+                'local_init_op', tf.compat.v1.GraphKeys.LOCAL_INIT_OP,
+                tf.compat.v1.train.Scaffold.default_local_init_op)
             elements.append(local_init_op)
 
           init_ops = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.INIT_OP)
           if init_ops:
             elements.extend(init_ops)
           else:
+
             def default_init_op():
               return tf.group(
                   tfvariables.global_variables_initializer(),
                   resources.initialize_resources(resources.shared_resources()))
 
             init_op = tf.compat.v1.train.Scaffold.get_or_default(
-              'init_op', tf.compat.v1.GraphKeys.INIT_OP, default_init_op)
+                'init_op', tf.compat.v1.GraphKeys.INIT_OP, default_init_op)
             elements.append(init_op)
 
           logging.info(f'local_init_op is {elements}')
-          scaffold = tf.compat.v1.train.Scaffold(local_init_op=tf.group(elements) if elements else None,
-          ready_for_local_init_op=NoOp())
+          scaffold = tf.compat.v1.train.Scaffold(
+              local_init_op=tf.group(elements) if elements else None,
+              ready_for_local_init_op=NoOp())
         else:
           scaffold = None
         spec = spec._replace(
@@ -1776,7 +1792,8 @@ def distributed_train(config: DistributedCpuTrainingConfig,
   else:
     assert isinstance(discovery, ServiceDiscovery)
     ip = yarn_runtime.get_local_host()
-    server = tf.distribute.Server({"local": [net_utils.concat_ip_and_port(ip, 0)]}, config=server_config)
+    server = tf.distribute.Server(
+        {"local": [net_utils.concat_ip_and_port(ip, 0)]}, config=server_config)
     addr = urlparse(server.target).netloc
 
   _prepare_server(server.target, config)

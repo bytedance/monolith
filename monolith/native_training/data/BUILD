@@ -75,6 +75,7 @@ cc_library(
         "//monolith/native_training/data/training_instance:parse_instance_lib",
         "//monolith/native_training/data/training_instance:reader_util",
         "//monolith/native_training/runtime/common:metrics",
+        "//monolith/native_training/runtime/common:linalg_utils",
         "//monolith/native_training/runtime/concurrency:queue",
         "//monolith/native_training/runtime/ops:traceme",
         "//third_party/nlohmann:json",

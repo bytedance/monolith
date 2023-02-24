@@ -429,8 +429,8 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
 
   # This is a very concise API that supports fused lookup, without mapping the
   # IDs to its slots.
-  def fused_lookup(self, 
-                   ids: tf.Tensor, 
+  def fused_lookup(self,
+                   ids: tf.Tensor,
                    fused_slot_size: tf.Tensor,
                    num_of_shards: int,
                    req_time=None) -> Tuple[tf.Tensor]:
@@ -439,7 +439,7 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
     return hash_table_ops.monolith_multi_hash_table_fused_lookup(
         mtable=self._handle,
         ids=ids,
-        fused_slot_size=fused_slot_size, 
+        fused_slot_size=fused_slot_size,
         num_of_shards=num_of_shards,
         req_time=req_time)
 
@@ -458,7 +458,7 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
       num_of_shards: int,
       enable_grad_accumulation: bool = False) -> "MultiHashTable":
     handle = hash_table_ops.monolith_multi_hash_table_fused_optimize(
-        mtable=self._handle, 
+        mtable=self._handle,
         ids=ids,
         indices=indices,
         fused_slot_size=fused_slot_size,

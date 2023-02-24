@@ -25,7 +25,8 @@ std::unique_ptr<EmbeddingHashTableInterface> NewCuckooEmbeddingHashTable(
     CuckooEmbeddingHashTableConfig config,
     std::unique_ptr<EntryAccessorInterface> accessor,
     EmbeddingHashTableConfig::EntryType type, uint64_t initial_capacity,
-    const SlotExpireTimeConfig& slot_expire_time_config);
+    const SlotExpireTimeConfig& slot_expire_time_config,
+    bool skip_zero_embedding);
 
 }  // namespace hash_table
 }  // namespace monolith

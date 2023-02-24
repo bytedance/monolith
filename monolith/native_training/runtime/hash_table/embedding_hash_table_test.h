@@ -392,6 +392,139 @@ TEST_P(EmbeddingHashTableEvictTest, EvictWhileRehash) {
   }
 }
 
+class EmbeddingHashTableSkipZeroEmbeddingTest
+    : public ::testing::TestWithParam<
+          std::tuple<EmbeddingHashTableConfig, std::vector<float>>> {};
+
+TEST_P(EmbeddingHashTableSkipZeroEmbeddingTest, AssignSkipZeroEmbedding) {
+  auto p = GetParam();
+  auto table =
+      EmbeddingHashTableHelper(NewEmbeddingHashTableFromConfig(std::get<0>(p)));
+  const int kNumThreads = 10;
+  const int kNumIds = 3000;
+
+  auto AssignFn = [&]() {
+    for (int i = 0; i < kNumIds; ++i) {
+      table.Assign({i}, {{static_cast<float>(i % 2)}});
+    }
+  };
+  std::vector<std::unique_ptr<std::thread>> threads;
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back(std::make_unique<std::thread>(AssignFn));
+  }
+  for (auto& thread : threads) {
+    thread->join();
+  }
+
+  for (int64_t i = 0; i < kNumIds; ++i) {
+    std::vector<float> nums(1);
+    table.Lookup(i, absl::MakeSpan(nums));
+    ASSERT_THAT(nums[0], i % 2);
+    if (i % 2 == 0) {
+      EXPECT_FALSE(table.Contains(i));
+    } else {
+      EXPECT_TRUE(table.Contains(i));
+    }
+  }
+}
+
+TEST_P(EmbeddingHashTableSkipZeroEmbeddingTest, RestoreSkipZeroEmbedding) {
+  EmbeddingHashTableConfig config;
+  EXPECT_TRUE(proto2::TextFormat::ParseFromString(R"(
+    entry_config {
+      segments {
+        dim_size: 1
+        init_config { zeros {} }
+        opt_config { sgd {} }
+      }
+    }
+    initial_capacity: 1
+    cuckoo {}
+  )",
+                                                  &config));
+  auto table =
+      EmbeddingHashTableHelper(NewEmbeddingHashTableFromConfig(config));
+  const int kNumThreads = 10;
+  const int kNumIds = 3000;
+
+  // Assign
+  auto AssignFn = [&]() {
+    for (int i = 0; i < kNumIds; ++i) {
+      table.Assign({i}, {{static_cast<float>(i % 2)}});
+    }
+  };
+  std::vector<std::unique_ptr<std::thread>> threads;
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back(std::make_unique<std::thread>(AssignFn));
+  }
+  for (auto& thread : threads) {
+    thread->join();
+  }
+
+  for (int64_t i = 0; i < kNumIds; ++i) {
+    std::vector<float> nums(1);
+    table.Lookup(i, absl::MakeSpan(nums));
+    ASSERT_THAT(nums[0], i % 2);
+    EXPECT_TRUE(table.Contains(i));
+  }
+
+  // Save
+  std::vector<EntryDump> dumps;
+  absl::Mutex mu;
+  auto write_fn = [&dumps, &mu](EntryDump dump) {
+    absl::MutexLock l(&mu);
+    dumps.push_back(dump);
+    return true;
+  };
+  std::vector<std::unique_ptr<std::thread>> save_threads;
+  for (int i = 0; i < kNumThreads; ++i) {
+    auto save_func = [kNumThreads, kNumIds, &table, &write_fn](int i) {
+      EmbeddingHashTableInterface::DumpShard shard{i, kNumThreads};
+      table.Save(shard, write_fn);
+      return true;
+    };
+    save_threads.push_back(std::make_unique<std::thread>(save_func, i));
+  }
+  for (int i = 0; i < kNumThreads; ++i) {
+    save_threads[i]->join();
+  }
+  ASSERT_THAT(dumps.size(), kNumIds);
+
+  // Restore
+  auto p = GetParam();
+  auto table2 =
+      EmbeddingHashTableHelper(NewEmbeddingHashTableFromConfig(std::get<0>(p)));
+  std::vector<std::unique_ptr<std::thread>> restore_threads;
+  for (int i = 0; i < kNumThreads; ++i) {
+    auto restore_fn = [&table2, &dumps, kNumThreads, kNumIds](int i) {
+      const int kPerThreadIds = kNumIds / kNumThreads;
+      int idx = i * kPerThreadIds;
+      int end_idx = (i + 1) * kPerThreadIds;
+      auto get_fn = [&dumps, &idx, &end_idx](EntryDump* dump, int64_t*) {
+        if (idx == end_idx) return false;
+        *dump = dumps[idx++];
+        return true;
+      };
+      table2.Restore({i, kNumThreads}, get_fn);
+    };
+    restore_threads.push_back(std::make_unique<std::thread>(restore_fn, i));
+  }
+  for (int i = 0; i < kNumThreads; ++i) {
+    restore_threads[i]->join();
+  }
+
+  for (int64_t i = 0; i < kNumIds; ++i) {
+    std::vector<float> nums(1);
+    table2.Lookup(i, absl::MakeSpan(nums));
+    ASSERT_THAT(nums[0], i % 2);
+    if (i % 2 == 0) {
+      EXPECT_FALSE(table2.Contains(i));
+    } else {
+      EXPECT_TRUE(table2.Contains(i));
+    }
+  }
+}
+
 }  // namespace hash_table
 }  // namespace monolith
 

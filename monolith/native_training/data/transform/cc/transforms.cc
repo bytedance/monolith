@@ -20,6 +20,7 @@
 #include "glog/logging.h"
 #include "monolith/native_training/data/kernels/internal/label_utils.h"
 #include "monolith/native_training/data/training_instance/cc/instance_utils.h"
+#include "monolith/native_training/runtime/common/linalg_utils.h"
 #include "tensorflow/core/platform/logging.h"
 #include "third_party/nlohmann/json.hpp"
 
@@ -28,6 +29,7 @@ namespace monolith_tf {
 
 using ::google::protobuf::RepeatedField;
 using ::idl::matrix::proto::LineId;
+using ::monolith::common::IsAlmostEqual;
 using ::monolith::io::proto::Example;
 using ::monolith::io::proto::ExampleBatch;
 using ::parser::proto::Instance;
@@ -336,7 +338,7 @@ class AddLabel : public TransformInterface {
   }
 
   bool SelectedByNegativeSampling(const internal::TaskConfig& t) {
-    return internal::IsAlmostEqual(t.sample_rate, 1.0f) ||
+    return IsAlmostEqual(t.sample_rate, 1.0f) ||
            random_neg_sample_(random_generator_) < t.sample_rate;
   }
 

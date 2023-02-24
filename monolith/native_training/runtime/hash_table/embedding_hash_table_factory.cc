@@ -27,10 +27,15 @@ std::unique_ptr<EmbeddingHashTableInterface> NewEmbeddingHashTableFromConfig(
     EmbeddingHashTableConfig config, GpuExtraArgs args) {
   switch (config.type_case()) {
     case EmbeddingHashTableConfig::kCuckoo:
+      if (config.skip_zero_embedding() &&
+          config.entry_config().entry_type() != EntryConfig_EntryType_SERVING) {
+        throw std::invalid_argument(
+            "Only EntryConfig_EntryType_SERVING supports skip_zero_embedding!");
+      }
       return NewCuckooEmbeddingHashTable(
           config.cuckoo(), NewEntryAccessor(config.entry_config()),
           config.entry_type(), config.initial_capacity(),
-          config.slot_expire_time_config());
+          config.slot_expire_time_config(), config.skip_zero_embedding());
     default:
       throw std::invalid_argument(absl::StrFormat(
           "Unknown type of hash table. %s", config.ShortDebugString()));

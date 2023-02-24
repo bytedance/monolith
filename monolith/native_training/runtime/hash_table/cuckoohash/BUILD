@@ -28,6 +28,7 @@ cc_library(
     deps = [
         ":cuckoohash",
         "//monolith/native_training/runtime/allocator:block_allocator",
+        "//monolith/native_training/runtime/common:linalg_utils",
         "//monolith/native_training/runtime/hash_table:embedding_hash_table_cc_proto",
         "//monolith/native_training/runtime/hash_table:embedding_hash_table_interface",
         "//monolith/native_training/runtime/hash_table:entry_accessor",

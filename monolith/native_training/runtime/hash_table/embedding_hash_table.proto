@@ -85,6 +85,9 @@ message EmbeddingHashTableConfig {
   optional bool enable_feature_eviction = 7;
   // Trigger features eviction every n hours.
   optional int32 feature_evict_every_n_hours = 8 [default = 240];
+
+  // Whether to erase zero embeddings(l2norm = 0) when serving
+  optional bool skip_zero_embedding = 10 [default = false];
 }
 
 message MultiEmbeddingHashTableConfig {

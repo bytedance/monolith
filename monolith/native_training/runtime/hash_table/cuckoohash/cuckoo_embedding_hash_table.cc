@@ -21,6 +21,7 @@
 #include "absl/synchronization/mutex.h"
 #include "monolith/native_training/data/training_instance/cc/reader_util.h"
 #include "monolith/native_training/runtime/allocator/block_allocator.h"
+#include "monolith/native_training/runtime/common/linalg_utils.h"
 #include "monolith/native_training/runtime/hash_table/cuckoohash/cuckoohash_map.hpp"
 #include "monolith/native_training/runtime/hash_table/entry_defs.h"
 
@@ -30,6 +31,8 @@ namespace {
 
 using allocator::EntryAddress;
 using allocator::TSEmbeddingBlockAllocator;
+using common::IsAlmostEqual;
+using common::L2NormSquare;
 
 const int64_t kSecPerDay = 24 * 60 * 60;
 
@@ -108,6 +111,7 @@ struct Params {
   std::unique_ptr<EntryAccessorInterface> accessor;
   uint64_t initial_capacity;
   SlotExpireTimeConfig slot_expire_time_config;
+  bool skip_zero_embedding = false;
 };
 
 template <class EntryType>
@@ -120,6 +124,7 @@ class CuckooEmbeddingHashTable : public EmbeddingHashTableInterface {
         accessor_(std::move(p.accessor)),
         entry_helper_(std::move(entry_helper)),
         default_expire_time_(p.slot_expire_time_config.default_expire_time()),
+        skip_zero_embedding_(p.skip_zero_embedding),
         m_(p.initial_capacity) {
     slot_to_expire_time_ =
         std::make_unique<absl::flat_hash_map<int64_t, int>>();
@@ -128,6 +133,7 @@ class CuckooEmbeddingHashTable : public EmbeddingHashTableInterface {
       (*slot_to_expire_time_)[slot_expire_time.slot()] =
           slot_expire_time.expire_time();
     }
+    LOG_FIRST_N(INFO, 1) << "skip_zero_embedding: " << skip_zero_embedding_;
   }
 
   // Returns the corresponding entry for |ids|.
@@ -183,10 +189,17 @@ class CuckooEmbeddingHashTable : public EmbeddingHashTableInterface {
       int64_t id = ids[i];
       auto update = updates[i];
 
-      UpsertEntry(id, [&](EntryType& entry) {
-        entry.SetTimestamp(update_time);
-        accessor_->Assign(update, entry_helper_.Get(entry));
-      });
+      if (skip_zero_embedding_ &&
+          IsAlmostEqual(L2NormSquare(update.data(), update.size()), 0.f)) {
+        m_.erase(id);
+        LOG_EVERY_N(INFO, 10000)
+            << "Assign erase " << google::COUNTER << " zero embeddings.";
+      } else {
+        UpsertEntry(id, [&](EntryType& entry) {
+          entry.SetTimestamp(update_time);
+          accessor_->Assign(update, entry_helper_.Get(entry));
+        });
+      }
     }
   }
 
@@ -275,6 +288,14 @@ class CuckooEmbeddingHashTable : public EmbeddingHashTableInterface {
     EntryDump dump;
     int64_t max_update_ts = 0;
     while (get_fn(&dump, &max_update_ts)) {
+      if (skip_zero_embedding_ &&
+          IsAlmostEqual(L2NormSquare(dump.num().data(), dump.num_size()),
+                        0.f)) {
+        LOG_EVERY_N(INFO, 1000000)
+            << "Restore skip " << google::COUNTER << " zero embeddings.";
+        continue;
+      }
+
       UpsertEntry(dump.id(), [&](EntryType& entry) {
         uint32_t timestamp_sec = 0;
         accessor_->Restore(entry_helper_.Get(entry), &timestamp_sec,
@@ -323,6 +344,7 @@ class CuckooEmbeddingHashTable : public EmbeddingHashTableInterface {
   EntryHelper<EntryType> entry_helper_;
   std::unique_ptr<absl::flat_hash_map<int64_t, int>> slot_to_expire_time_;
   int64_t default_expire_time_;
+  bool skip_zero_embedding_;
   MapType m_;
 };
 
@@ -342,14 +364,11 @@ std::unique_ptr<EmbeddingHashTableInterface> NewCuckooEmbeddingHashTable(
     CuckooEmbeddingHashTableConfig config,
     std::unique_ptr<EntryAccessorInterface> accessor,
     EmbeddingHashTableConfig::EntryType type, uint64_t initial_capacity,
-    const SlotExpireTimeConfig& slot_expire_time_config) {
+    const SlotExpireTimeConfig& slot_expire_time_config,
+    bool skip_zero_embedding) {
   const int64_t size_bytes = accessor->SizeBytes();
-  Params p = {
-      std::move(config),
-      std::move(accessor),
-      initial_capacity,
-      slot_expire_time_config,
-  };
+  Params p = {std::move(config), std::move(accessor), initial_capacity,
+              slot_expire_time_config, skip_zero_embedding};
   if (type == EmbeddingHashTableConfig::PACKED) {
     EntryHelper<PackedEntry> helper(size_bytes);
     return std::make_unique<CuckooEmbeddingHashTable<PackedEntry>>(
@@ -369,7 +388,7 @@ std::unique_ptr<EmbeddingHashTableInterface> NewCuckooEmbeddingHashTable(
   }
   // Should not reach here.
   throw std::invalid_argument(
-      absl::StrFormat("Unknonwn entry type table. %d", type));
+      absl::StrFormat("Unknown entry type table. %d", type));
   return nullptr;
 }
 
