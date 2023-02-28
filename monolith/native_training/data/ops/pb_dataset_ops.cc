@@ -107,7 +107,6 @@ REGISTER_OP("InstanceNegativeGenDataset")
       return shape_inference::ScalarShape(c);
     });
 
-
 REGISTER_OP("SplitFlowDataset")
     .Input("input: variant")
     .Attr("data_flow: list(string)")
@@ -121,7 +120,6 @@ REGISTER_OP("SplitFlowDataset")
       TF_RETURN_IF_ERROR(c->WithRankAtMost(c->input(0), 0, &unused));
       return shape_inference::ScalarShape(c);
     });
-
 
 REGISTER_OP("MergeFlowDataset")
     .Input("inputs:  N * variant")
@@ -137,12 +135,20 @@ REGISTER_OP("MergeFlowDataset")
       return shape_inference::ScalarShape(c);
     });
 
-
 REGISTER_OP("DynamicMatchingFilesDataset")
     .Input("patterns: string")
     .Output("handle: variant")
     .SetDoNotOptimize()
     .SetShapeFn([](shape_inference::InferenceContext* c) {
+      return shape_inference::ScalarShape(c);
+    });
+
+REGISTER_OP("MonolithCacheOneDataset")
+    .Input("input: variant")
+    .Output("handle: variant")
+    .SetShapeFn([](shape_inference::InferenceContext* c) {
+      shape_inference::ShapeHandle unused;
+      TF_RETURN_IF_ERROR(c->WithRankAtMost(c->input(0), 0, &unused));
       return shape_inference::ScalarShape(c);
     });
 

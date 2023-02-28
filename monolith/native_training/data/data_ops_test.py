@@ -21,7 +21,7 @@ import numpy as np
 from struct import unpack
 
 from monolith.native_training.data.datasets import PBDataset, InstanceReweightDataset, PbType, \
-  FilePBDataset, KafkaDataset
+  FilePBDataset, KafkaDataset, CacheOneDataset
 from monolith.native_training.data.parsers import parse_instances, parse_examples, parse_example_batch
 from monolith.native_training.data.feature_utils import filter_by_fids, filter_by_value, negative_sample, \
   switch_slot, feature_combine, special_strategy
@@ -402,6 +402,17 @@ class DataOpsTest(tf.test.TestCase):
                                       end_date='20220920',
                                       is_hourly=False)
     self.assertEqual(len(patterns), 19)
+
+
+class CahceOneDatasetTest(tf.test.TestCase):
+
+  def test_basic(self):
+    ds = tf.data.Dataset.from_tensor_slices([1, 2])
+    ds = CacheOneDataset(ds)
+    it = tf.compat.v1.data.make_one_shot_iterator(ds)
+
+    self.assertEqual(self.evaluate(it.get_next()), (1, False))
+    self.assertEqual(self.evaluate(it.get_next()), (2, True))
 
 
 if __name__ == '__main__':

@@ -555,6 +555,7 @@ py_library(
         ":feature",
         ":hash_table_ops",
         ":hash_table_utils",
+        ":hvd_lib",
         ":logging_ops",
         ":multi_type_hash_table",
         ":native_task",
@@ -742,6 +743,11 @@ py_test(
 )
 
 py_library(
+    name = "hvd_lib",
+    srcs = ["hvd_lib.py"],
+)
+
+py_library(
     name = "static_reshape_op",
     srcs = ["static_reshape_op.py"],
     deps = [
@@ -766,8 +772,20 @@ py_library(
     srcs = ["sync_training_hooks.py"],
     deps = [
         ":distributed_serving_ops",
+        ":hash_table_ops",
+        ":hvd_lib",
+        ":native_task",
         ":sync_training_hooks_addtional_deps",
         "//monolith/agent_service:backends",
+        "//monolith/native_training/data:datasets_py",
+    ],
+)
+
+py_test(
+    name = "sync_training_hooks_test",
+    srcs = ["sync_training_hooks_test.py"],
+    deps = [
+        ":sync_training_hooks",
     ],
 )
 

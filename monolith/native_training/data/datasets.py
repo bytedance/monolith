@@ -739,6 +739,22 @@ def instance_reweight(self,
 
 
 @monolith_export
+class CacheOneDataset(dataset_ops.UnaryDataset):
+
+  def __init__(self, input_dataset):
+    self._input_dataset = input_dataset
+    variant_tensor = pb_datasource_ops.monolith_cache_one_dataset(
+        input_dataset._variant_tensor)
+
+    super().__init__(input_dataset, variant_tensor)
+
+  @property
+  def element_spec(self):
+    return (self._input_dataset.element_spec,
+            tensor_spec.TensorSpec([], dtypes.bool))
+
+
+@monolith_export
 class SplitFlowDataset(dataset_ops.UnaryUnchangedStructureDataset):
 
   def __init__(self,

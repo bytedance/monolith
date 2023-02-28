@@ -36,36 +36,34 @@ try:
   from monolith.coordinator.utils import token_utils
 except ImportError:
   pass
+
+from monolith.native_training.data import datasets
 from monolith.native_training import distributed_serving_ops
+from monolith.native_training import hvd_lib
+from monolith.native_training import native_task
 from monolith.native_training import hash_table_ops
 from monolith.native_training.distributed_serving_ops import ParameterSyncClient, refresh_sync_config
 from monolith.utils import find_main
-
-enable_hvd = os.getenv("MONOLITH_WITH_HOROVOD")
-if enable_hvd != None:
-  import horovod.tensorflow as hvd
-  from horovod.tensorflow import mpi_ops
 
 
 class SyncTrainingBarrierSaverListener(tf.estimator.CheckpointSaverListener):
 
   def begin(self):
     self._barrier_op = None
-    if enable_hvd != None:
-      self._barrier_var = tf.compat.v1.placeholder(dtype=tf.int64,
-                                                   shape=[],
-                                                   name="hvd_export_barrier_ph")
-      self._barrier_op = mpi_ops.broadcast(tf.identity(self._barrier_var), 0)
+    self._barrier_var = tf.compat.v1.placeholder(dtype=tf.int64,
+                                                 shape=[],
+                                                 name="hvd_export_barrier_ph")
+    self._barrier_op = hvd_lib.broadcast(tf.identity(self._barrier_var), 0)
 
   def after_save(self, session, global_step_value):
-    if enable_hvd:
-      logging.info(f"exporter barrier begin {hvd.rank()}")
-      try:
-        barrier_val = session.run(
-            self._barrier_op, feed_dict={self._barrier_var: global_step_value})
-        logging.info(f"exporter barrier end {hvd.rank()} value: {barrier_val}")
-      except Exception as ex:
-        logging.error(f"barrier error: {ex}")
+    logging.info(f"exporter barrier begin {hvd_lib.rank()}")
+    try:
+      barrier_val = session.run(
+          self._barrier_op, feed_dict={self._barrier_var: global_step_value})
+      logging.info(
+          f"exporter barrier end {hvd_lib.rank()} value: {barrier_val}")
+    except Exception as ex:
+      logging.error(f"barrier error: {ex}")
 
 
 class ParameterSyncHook(session_run_hook.SessionRunHook):
@@ -117,14 +115,14 @@ class SyncTrainingForceDumpHook(tf.estimator.SessionRunHook):
     self._ctrl_ph = tf.compat.v1.placeholder(tf.int16,
                                              shape=(3,),
                                              name='hvd_dump_ctrl')
-    self._broadcast_op = mpi_ops.broadcast(self._ctrl_ph, 0)
+    self._broadcast_op = hvd_lib.broadcast(self._ctrl_ph, 0)
 
   def after_run(self, run_context, run_values):
     global_step = run_context.session.run(self._global_step_tensor)
     if global_step % self._step_interval == 0:
       utc_hour = datetime.utcnow().hour
       should_dump, should_stop, timer_enabled = 0, 0, 0
-      if hvd.rank() == 0:
+      if hvd_lib.rank() == 0:
         timer_enabled = int(utc_hour >= 18 and utc_hour <= 20)
         logging.info(f"utc_hour: {utc_hour} time_enabled: {timer_enabled}")
         dump_path = os.path.join(self._model_dir, f"dump_{global_step}")
@@ -215,7 +213,7 @@ class ReqTimeControlDumpHook(tf.estimator.SessionRunHook):
     self._step_interval = step_interval
 
   def begin(self):
-    if hvd.rank() == 0:
+    if hvd_lib.rank() == 0:
       req_time_col = tf.compat.v1.get_collection("req_time")
       assert len(req_time_col) == 1
       self._req_time = tf.math.reduce_max(req_time_col[0])
@@ -227,10 +225,10 @@ class ReqTimeControlDumpHook(tf.estimator.SessionRunHook):
     self._req_time_ph = tf.compat.v1.placeholder(tf.int64,
                                                  shape=[2],
                                                  name="hvd_req_time")
-    self._req_time_bcast_op = mpi_ops.broadcast(self._req_time_ph, 0)
+    self._req_time_bcast_op = hvd_lib.broadcast(self._req_time_ph, 0)
 
   def before_run(self, run_context):
-    if hvd.rank() == 0:
+    if hvd_lib.rank() == 0:
       return session_run_hook.SessionRunArgs(
           fetches={'req_time': self._req_time})
     else:
@@ -239,7 +237,7 @@ class ReqTimeControlDumpHook(tf.estimator.SessionRunHook):
   def after_run(self, run_context, run_values):
     global_step = run_context.session.run(self._global_step_tensor)
     if global_step % self._step_interval == 0:
-      if hvd.rank() == 0:
+      if hvd_lib.rank() == 0:
         req_time = run_values.results['req_time']
         file_name = os.path.join(self._model_dir, "limit_req_time")
         if tf.io.gfile.exists(file_name):
@@ -260,3 +258,83 @@ class ReqTimeControlDumpHook(tf.estimator.SessionRunHook):
         run_context.request_stop()
 
     return super().after_run(run_context, run_values)
+
+
+INPUT_FN_WRAPPER_KEY = "wrapped"
+
+
+class EofAwareTask:
+  """A NativeTask like object that helps stop training before the eof was raised."""
+
+  EOF_KEY = "__EofAwareTask_eof"
+
+  def __init__(self, task: native_task.NativeTask):
+    self._ori_task = task
+
+  def create_input_fn(self, mode):
+
+    input_fn = self._ori_task.create_input_fn(mode)
+
+    def new_input_fn_factory(input_fn):
+
+      def new_input_fn():
+        ds = input_fn()
+        ds = datasets.CacheOneDataset(ds)
+
+        # There are 2 reasons why we need a map here:
+        # 1. tuple will be treated as features, label in the estimator which are wrong
+        # 2. In sync training, reorder_fids_in_data_pipeline should be able to get
+        # the original data after we wrap the input_fn output.
+        def map_fn(features, eof):
+          if isinstance(features, dict):
+            return {**features, EofAwareTask.EOF_KEY: eof}
+          return {"1": features, "2": eof}
+
+        return ds.map(map_fn)
+
+      return new_input_fn
+
+    return new_input_fn_factory(input_fn)
+
+  def create_model_fn(self):
+
+    model_fn = self._ori_task.create_model_fn()
+
+    def new_model_fn_factory(model_fn):
+
+      def new_model_fn(features, mode, config):
+        if EofAwareTask.EOF_KEY in features:
+          eof = features[EofAwareTask.EOF_KEY]
+          features.pop(EofAwareTask.EOF_KEY)
+          real_features = features
+        else:
+          real_features, eof = features["1"], features["2"]
+        spec: tf.estimator.EstimatorSpec = model_fn(real_features, mode, config)
+        training_hooks = spec.training_hooks or ()
+        training_hooks = list(training_hooks)
+        training_hooks.append(self.EofHook(eof))
+        spec = spec._replace(training_hooks=training_hooks)
+        return spec
+
+      return new_model_fn
+
+    return new_model_fn_factory(model_fn)
+
+  def __getattr__(self, name):
+    return getattr(self._ori_task, name)
+
+  class EofHook(tf.estimator.SessionRunHook):
+
+    def __init__(self, eof_tensor):
+      eof_tensor_for_gather = tf.reshape(tf.cast(eof_tensor, dtype=tf.int32),
+                                         [1],
+                                         name="eof_tensor_for_all_gather")
+      eof_tensors = hvd_lib.allgather(eof_tensor_for_gather)
+      self._agg_eof = tf.math.reduce_sum(eof_tensors)
+
+    def before_run(self, run_context):
+      return tf.estimator.SessionRunArgs(fetches=self._agg_eof)
+
+    def after_run(self, run_context, run_values):
+      if run_values.results:
+        run_context.request_stop()

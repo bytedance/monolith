@@ -59,6 +59,7 @@ from monolith.native_training import entry
 from monolith.native_training import feature
 from monolith.native_training import hash_filter_ops
 from monolith.native_training import hash_table_ops
+from monolith.native_training import hvd_lib
 from monolith.native_training import multi_hash_table_ops
 from monolith.native_training import logging_ops
 from monolith.native_training import monolith_checkpoint_state_pb2
@@ -578,16 +579,19 @@ class CpuTraining:
 
   def create_input_fn(self, mode):
 
-    def _create_parse_fn():
-      """Create a parse fn for reorder_fids_in_data_pipeline."""
-      # Get merging info
-      # TODO: Create real hash table earlier before inputfn, instead of dummy table here
-      logging.info(
-          'Wrapping parser to dedup and reorder fids in data pipeline...')
-      feature_name_config = self.feature_configs[0]
-      embedding_feature_names = feature_name_config.keys()
+    input_fn = self._task.create_input_fn(mode)
+    enable_reorder = (mode != tf.estimator.ModeKeys.PREDICT and
+                      self.config.reorder_fids_in_data_pipeline and
+                      not self.config.enable_fused_layout)
+    feature_name_config = self.feature_configs[0]
+    embedding_feature_names = feature_name_config.keys()
 
-      def wrapped_parse_fn(*args):
+    def input_fn_factory(input_fn, enable_reorder, feature_name_config,
+                         embedding_feature_names):
+
+      def reorder_parse_fn(*args):
+        logging.info(
+            'Wrapping parser to dedup and reorder fids in data pipeline...')
         # features = parse_fn(*args, **kwargs)
         features = args[0]
         # CpuTraining.create_model_fn: def model_fn
@@ -639,24 +643,25 @@ class CpuTraining:
                     # we choose not to precompute it here.
                 ),
                 lookup_args))
-        # None here to prevent tf.Estimator from automatically treating the second in the return tuple as labels
-        return res, None
+        # Use dict here to prevent tf.Estimator from automatically treating the second in the return tuple as labels
+        return {"1": res}
 
-      return wrapped_parse_fn
+      def wrapped_input_fn():
 
-    if (mode != tf.estimator.ModeKeys.PREDICT and
-        self.config.reorder_fids_in_data_pipeline and
-        not self.config.enable_fused_layout):
-      # Assumption: use_reduced_alltoall
-      parser_utils.add_extra_parse_step(_create_parse_fn())
+        with native_task_context.with_ctx(
+            make_native_task_context(self.config, self._sync_backend)):
+          ds = input_fn()
+          if enable_reorder:
+            ds = ds.map(reorder_parse_fn)
+          # Always enable prefetch 1 since input_fn might be wrapped by
+          # many other decorators.
+          ds = ds.prefetch(1)
+          return ds
 
-    def wrapped_input_fn():
-      input_fn = self._task.create_input_fn(mode)
-      with native_task_context.with_ctx(
-          make_native_task_context(self.config, self._sync_backend)):
-        return input_fn()
+      return wrapped_input_fn
 
-    return wrapped_input_fn
+    return input_fn_factory(input_fn, enable_reorder, feature_name_config,
+                            embedding_feature_names)
 
   def create_model_fn(self):
 
@@ -1216,7 +1221,7 @@ class CpuTraining:
         args = (auxiliary_bundle, features)
       else:
         if self.config.reorder_fids_in_data_pipeline:
-          features, res_pack = features
+          features, res_pack = features["1"]
           features = {
               k: v
               for k, v in features.items()
@@ -1950,6 +1955,10 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
     params.train.use_gpu_emb_table = True
 
   task = params.instantiate()
+  if not isinstance(task, NativeTask):
+    raise ValueError(
+        "distributed train only support NativeTask. Got {}".format(task))
+  task = sync_training_hooks.EofAwareTask(task)
   training = CpuTraining(config, task)
   session_config = tf.compat.v1.ConfigProto(allow_soft_placement=False,
                                             log_device_placement=False)
@@ -1988,9 +1997,6 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
           os.environ.get('MONOLITH_SAVE_SUMMARY_INTERVAL', '1000000')),
       log_step_count_steps=params.train.max_steps if config.index != 0 else int(
           os.environ.get('MONOLITH_ROOT_LOG_INTERVAL', '100')))
-  if not isinstance(task, NativeTask):
-    raise ValueError(
-        "distributed train only support NativeTask. Got {}".format(task))
 
   estimator = tf.estimator.Estimator(training.create_model_fn(),
                                      config=run_config)

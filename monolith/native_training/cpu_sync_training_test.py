@@ -46,7 +46,7 @@ class FeatureTask(NativeTask):
 
   def create_model_fn(self):
 
-    def model_fn(mode, **kwargs):
+    def model_fn(features, mode, config, **kwargs):
       slot = self.ctx.feature_factory.create_feature_slot(
           feature.FeatureSlotConfig(name="slot"))
       s = slot.add_feature_slice(5)
@@ -86,7 +86,7 @@ class EmbeddingUpdateTask(NativeTask):
 
   def create_model_fn(self):
 
-    def model_fn(mode, features, **kwargs):
+    def model_fn(features, mode, config):
       slot = self.ctx.feature_factory.create_feature_slot(
           feature.FeatureSlotConfig(
               name="slot",

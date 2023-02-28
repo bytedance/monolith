@@ -27,6 +27,8 @@ cc_library(
     srcs = [
         "kernels/add_action_kernel.cc",
         "kernels/add_label_kernel.cc",
+        "kernels/cache_one_dataset_kernel.cc",
+        "kernels/cache_one_dataset_kernel.h",
         "kernels/df_resource_kernel.cc",
         "kernels/df_resource_kernel.h",
         "kernels/dynamic_match_file_dataset_kernel.cc",
@@ -48,6 +50,7 @@ cc_library(
         "kernels/multi_label_gen_kernel.cc",
         "kernels/negative_gen_dataset_kernel.cc",
         "kernels/negative_gen_dataset_kernel.h",
+        "kernels/parquet_dataset_kernel.cc",
         "kernels/parse_example_lib.cc",
         "kernels/parse_example_lib.h",
         "kernels/parse_input_data_kernel.cc",
@@ -59,7 +62,6 @@ cc_library(
         "kernels/split_flow_dataset_kernel.cc",
         "kernels/string_to_variant.cc",
         "kernels/variant_filter_kernel.cc",
-        "kernels/parquet_dataset_kernel.cc",
     ],
     deps = [
         ":data_op_config_cc_proto",
@@ -68,8 +70,8 @@ cc_library(
         "//monolith/native_training/data/kernels/internal:datasource_utils",
         "//monolith/native_training/data/kernels/internal:file_match_split_provider",
         "//monolith/native_training/data/kernels/internal:label_utils",
-        "//monolith/native_training/data/kernels/internal:relational_utils",
         "//monolith/native_training/data/kernels/internal:parquet_example_reader",
+        "//monolith/native_training/data/kernels/internal:relational_utils",
         "//monolith/native_training/data/training_instance:data_reader",
         "//monolith/native_training/data/training_instance:instance_utils",
         "//monolith/native_training/data/training_instance:parse_instance_lib",
@@ -113,11 +115,11 @@ py_library(
         ":feature_utils_py",
         ":parsers_py",
         "//monolith:utils",
+        "//monolith/native_training:mlp_utils",
         "//monolith/native_training:monolith_export",
         "//monolith/native_training/distribute:distributed_dataset",
         "//monolith/native_training/hooks:ckpt_hooks",
         "//monolith/native_training/runtime/ops:gen_monolith_ops",
-        "//monolith/native_training:mlp_utils",
         "@org_tensorflow//tensorflow:tensorflow_py",
         requirement("kafka_python"),
     ],
@@ -131,12 +133,12 @@ py_library(
     deps = [
         ":data_op_config_py_proto",
         ":feature_list",
+        "//idl:example_py_proto",
+        "//idl:proto_parser_py_proto",
         "//monolith:utils",
         "//monolith/native_training:monolith_export",
         "//monolith/native_training:utils",
         "//monolith/native_training/runtime/ops:gen_monolith_ops",
-        "//idl:example_py_proto",
-        "//idl:proto_parser_py_proto",
         "@org_tensorflow//tensorflow:tensorflow_py",
     ],
 )
@@ -293,7 +295,7 @@ py_binary(
     deps = [
         ":datasets_py",
         ":feature_utils_py",
-    ]
+    ],
 )
 
 exports_files([
