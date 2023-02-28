@@ -652,10 +652,10 @@ class CpuTraining:
             make_native_task_context(self.config, self._sync_backend)):
           ds = input_fn()
           if enable_reorder:
-            ds = ds.map(reorder_parse_fn)
-          # Always enable prefetch 1 since input_fn might be wrapped by
+            ds = ds.map(reorder_parse_fn, num_parallel_calls=tf.data.AUTOTUNE)
+          # Always enable prefetch since input_fn might be wrapped by
           # many other decorators.
-          ds = ds.prefetch(1)
+          ds = ds.prefetch(tf.data.AUTOTUNE)
           return ds
 
       return wrapped_input_fn
