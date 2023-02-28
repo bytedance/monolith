@@ -653,7 +653,7 @@ class NegativeGenDataset(dataset_ops.UnaryUnchangedStructureDataset):
     item_features: (:obj:`List[str]`): item侧的特征名列表
     positive_label: 正例的label, 仅为正例生成负例
     negative_label: 生成的负例的被打上的label
-    hard_easy_ratio: (:obj:`float`): 当使用 per_channel 的时候, hard和easy负例之间的比例。取值在 0 ~ 1 之间。举例：0.8就是大致80% easy负例
+    easy_hard_ratio: (:obj:`float`): 当使用 per_channel 的时候, hard和easy负例之间的比例。取值在 0 ~ 1 之间。举例：0.8就是大致80% easy负例
 
   Raises:
     TypeError: 如果有任何参数与类型不匹配, 则抛TypeError
@@ -684,7 +684,7 @@ class NegativeGenDataset(dataset_ops.UnaryUnchangedStructureDataset):
                unbias_sampled_neg: bool = True,
                origin_neg_in_pool_proba: float = 1.0,
                neg_sample_declay_factor: float = 1.0,
-               hard_easy_ratio: float = 0.0,
+               easy_hard_ratio: float = 0.0,
                variant_type: str = 'example'):
     pool = create_item_pool(start_num=start_num,
                             max_item_num_per_channel=max_item_num)
@@ -719,7 +719,7 @@ class NegativeGenDataset(dataset_ops.UnaryUnchangedStructureDataset):
         unbias_sampled_neg=unbias_sampled_neg,
         origin_neg_in_pool_proba=origin_neg_in_pool_proba,
         neg_sample_declay_factor=neg_sample_declay_factor,
-        hard_easy_ratio=hard_easy_ratio,
+        easy_hard_ratio=easy_hard_ratio,
         variant_type=variant_type)
     super(NegativeGenDataset, self).__init__(input_dataset, variant_tensor)
 
@@ -866,7 +866,7 @@ def negative_gen(self,
                  unbias_sampled_neg: bool = True,
                  origin_neg_in_pool_proba: float = 1.0,
                  neg_sample_declay_factor: float = 1.0,
-                 hard_easy_ratio: float = 0.0,
+                 easy_hard_ratio: float = 0.0,
                  variant_type: str = 'example'):
   return NegativeGenDataset(
       self,
@@ -891,7 +891,7 @@ def negative_gen(self,
       unbias_sampled_neg=unbias_sampled_neg,
       origin_neg_in_pool_proba=origin_neg_in_pool_proba,
       neg_sample_declay_factor=neg_sample_declay_factor,
-      hard_easy_ratio=hard_easy_ratio,
+      easy_hard_ratio=easy_hard_ratio,
       variant_type=variant_type)
 
 

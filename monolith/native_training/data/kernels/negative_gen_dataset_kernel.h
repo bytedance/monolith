@@ -55,7 +55,7 @@ class InstanceNegativeGenDatasetOp : public UnaryDatasetOpKernel {
   bool unbias_sampled_neg_;
   float origin_neg_in_pool_proba_;
   float neg_sample_declay_factor_;
-  float hard_easy_ratio_;
+  float easy_hard_ratio_;
   std::string variant_type_;
   tensorflow::monolith_tf::FeatureNameMapperTfBridge* mapper_ = nullptr;
 };

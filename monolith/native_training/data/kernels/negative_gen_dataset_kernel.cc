@@ -12,9 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "monolith/native_training/data/kernels/negative_gen_dataset_kernel.h"
+
 #include <deque>
+
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_format.h"
+#include "monolith/native_training/data/kernels/item_pool_kernels.h"
+#include "monolith/native_training/data/training_instance/cc/pb_variant.h"
+#include "monolith/native_training/data/training_instance/cc/reader_util.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_def_builder.h"
@@ -29,11 +35,6 @@
 #include "tensorflow/core/lib/io/zlib_compression_options.h"
 #include "tensorflow/core/lib/random/random.h"
 #include "tensorflow/core/lib/strings/str_util.h"
-
-#include "monolith/native_training/data/kernels/item_pool_kernels.h"
-#include "monolith/native_training/data/kernels/negative_gen_dataset_kernel.h"
-#include "monolith/native_training/data/training_instance/cc/pb_variant.h"
-#include "monolith/native_training/data/training_instance/cc/reader_util.h"
 
 namespace tensorflow {
 namespace data {
@@ -77,7 +78,7 @@ static constexpr const char *const kOriginNegInPoolProba =
     "origin_neg_in_pool_proba";
 static constexpr const char *const kNegSampleDeclayFactor =
     "neg_sample_declay_factor";
-static constexpr const char *const kHardEasyRatio = "hard_easy_ratio";
+static constexpr const char *const kHardEasyRatio = "easy_hard_ratio";
 static constexpr const char *const kVariantType = "variant_type";
 
 class InnerIterator {
@@ -94,7 +95,7 @@ class InnerIterator {
                 float real_neg_instance_weight,
                 float sampled_neg_instance_weight, bool unbias_sampled_neg,
                 float origin_neg_in_pool_proba, float neg_sample_declay_factor,
-                float hard_easy_ratio, const std::string &variant_type)
+                float easy_hard_ratio, const std::string &variant_type)
       : resource_(resource),
         index_(0),
         need_new_ins_(true),
@@ -122,7 +123,7 @@ class InnerIterator {
         unbias_sampled_neg_(unbias_sampled_neg),
         origin_neg_in_pool_proba_(origin_neg_in_pool_proba),
         neg_sample_declay_factor_(neg_sample_declay_factor),
-        hard_easy_ratio_(hard_easy_ratio) {
+        easy_hard_ratio_(easy_hard_ratio) {
     input_impl_ = input_impl;
     tensors_ = new std::vector<Tensor>();
     tensors_->reserve(1);
@@ -227,10 +228,10 @@ class InnerIterator {
     LOG_EVERY_N_SEC(INFO, 180) << "input_instance_num: " << input_instance_num_;
     LOG_EVERY_N_SEC(INFO, 180) << "input_real_negative_instance_num: "
                                << input_real_negative_instance_num_;
-    LOG_EVERY_N_SEC(INFO, 180) << "output_instance_num: "
-                               << output_instance_num_;
-    LOG_EVERY_N_SEC(INFO, 180) << "generate_instance_num: "
-                               << generate_instance_num_;
+    LOG_EVERY_N_SEC(INFO, 180)
+        << "output_instance_num: " << output_instance_num_;
+    LOG_EVERY_N_SEC(INFO, 180)
+        << "generate_instance_num: " << generate_instance_num_;
     LOG_EVERY_N_SEC(INFO, 180) << "hard_sample_num: " << hard_sample_num_;
     LOG_EVERY_N_SEC(INFO, 180) << "easy_sample_num: " << easy_sample_num_;
     return Status::OK();
@@ -453,7 +454,7 @@ class InnerIterator {
   bool BuildNegativeTensor(IteratorContext *ctx, Tensor *res) {
     // hard_easy neg when per_channel enabled
     uint64_t channel_id = gcids_.second;
-    if (per_channel_ && NeedEasyNeg(hard_easy_ratio_)) {
+    if (per_channel_ && NeedEasyNeg(easy_hard_ratio_)) {
       resource_->SampleChannelID(&channel_id);
       easy_sample_num_++;
     } else {
@@ -476,10 +477,9 @@ class InnerIterator {
     if (sampled_neg_instance_weight_ > 0.00001) {
       instance_weight = sampled_neg_instance_weight_;
     } else if (unbias_sampled_neg_) {
-      instance_weight = 1.0 +
-                        neg_num_ *
-                            std::pow(time_factor, neg_sample_declay_factor_) *
-                            freq_factor;
+      instance_weight =
+          1.0 + neg_num_ * std::pow(time_factor, neg_sample_declay_factor_) *
+                    freq_factor;
     } else {
       instance_weight = 1.0;
     }
@@ -547,8 +547,8 @@ class InnerIterator {
     return false;
   }
 
-  bool NeedEasyNeg(float hard_easy_ratio) {
-    return static_cast<float>(std::rand()) / RAND_MAX < hard_easy_ratio;
+  bool NeedEasyNeg(float easy_hard_ratio) {
+    return static_cast<float>(std::rand()) / RAND_MAX < easy_hard_ratio;
   }
 
   ItemPoolResource *resource_ = nullptr;
@@ -589,7 +589,7 @@ class InnerIterator {
   bool unbias_sampled_neg_;
   float origin_neg_in_pool_proba_;
   float neg_sample_declay_factor_;
-  float hard_easy_ratio_;
+  float easy_hard_ratio_;
   VariantType variant_type_;
 
   std::pair<uint64_t, uint64_t> gcids_;
@@ -610,7 +610,7 @@ class InstanceNegativeGenDatasetOp::Dataset : public DatasetBase {
           bool throw_origin_neg, bool cache_only_pos,
           float real_neg_instance_weight, float sampled_neg_instance_weight,
           bool unbias_sampled_neg, float origin_neg_in_pool_proba,
-          float neg_sample_declay_factor, float hard_easy_ratio,
+          float neg_sample_declay_factor, float easy_hard_ratio,
           const std::string &variant_type, FeatureNameMapper *mapper)
       : DatasetBase(DatasetContext(ctx)),
         input_(input),
@@ -633,7 +633,7 @@ class InstanceNegativeGenDatasetOp::Dataset : public DatasetBase {
         unbias_sampled_neg_(unbias_sampled_neg),
         origin_neg_in_pool_proba_(origin_neg_in_pool_proba),
         neg_sample_declay_factor_(neg_sample_declay_factor),
-        hard_easy_ratio_(hard_easy_ratio),
+        easy_hard_ratio_(easy_hard_ratio),
         variant_type_(variant_type),
         mapper_(mapper) {
     input_->Ref();
@@ -761,8 +761,8 @@ class InstanceNegativeGenDatasetOp::Dataset : public DatasetBase {
     b->BuildAttrValue(neg_sample_declay_factor_,
                       &neg_sample_declay_factor_node);
 
-    AttrValue hard_easy_ratio_node;
-    b->BuildAttrValue(hard_easy_ratio_, &hard_easy_ratio_node);
+    AttrValue easy_hard_ratio_node;
+    b->BuildAttrValue(easy_hard_ratio_, &easy_hard_ratio_node);
 
     AttrValue variant_type_node;
     b->BuildAttrValue(variant_type_, &variant_type_node);
@@ -789,7 +789,7 @@ class InstanceNegativeGenDatasetOp::Dataset : public DatasetBase {
          {kUnbiasSampledNeg, unbias_sampled_neg_node},
          {kOriginNegInPoolProba, origin_neg_in_pool_proba_node},
          {kNegSampleDeclayFactor, neg_sample_declay_factor_node},
-         {kHardEasyRatio, hard_easy_ratio_node},
+         {kHardEasyRatio, easy_hard_ratio_node},
          {kVariantType, variant_type_node}},
         output));  // Node**
 
@@ -823,7 +823,7 @@ class InstanceNegativeGenDatasetOp::Dataset : public DatasetBase {
           dataset()->cache_only_pos_, dataset()->real_neg_instance_weight_,
           dataset()->sampled_neg_instance_weight_,
           dataset()->unbias_sampled_neg_, dataset()->origin_neg_in_pool_proba_,
-          dataset()->neg_sample_declay_factor_, dataset()->hard_easy_ratio_,
+          dataset()->neg_sample_declay_factor_, dataset()->easy_hard_ratio_,
           dataset()->variant_type_);
       return s;
     }
@@ -894,7 +894,7 @@ class InstanceNegativeGenDatasetOp::Dataset : public DatasetBase {
   bool unbias_sampled_neg_;
   float origin_neg_in_pool_proba_;
   float neg_sample_declay_factor_;
-  float hard_easy_ratio_;
+  float easy_hard_ratio_;
   std::string variant_type_;
 
   ResourceHandle handle_;
@@ -928,7 +928,7 @@ InstanceNegativeGenDatasetOp::InstanceNegativeGenDatasetOp(
       ctx, ctx->GetAttr(kOriginNegInPoolProba, &origin_neg_in_pool_proba_));
   OP_REQUIRES_OK(
       ctx, ctx->GetAttr(kNegSampleDeclayFactor, &neg_sample_declay_factor_));
-  OP_REQUIRES_OK(ctx, ctx->GetAttr(kHardEasyRatio, &hard_easy_ratio_));
+  OP_REQUIRES_OK(ctx, ctx->GetAttr(kHardEasyRatio, &easy_hard_ratio_));
   OP_REQUIRES_OK(ctx, ctx->GetAttr(kVariantType, &variant_type_));
 
   auto creator = [this](FeatureNameMapperTfBridge **out_mapper) {
@@ -950,7 +950,7 @@ void InstanceNegativeGenDatasetOp::MakeDataset(OpKernelContext *ctx,
       action_priority_, positive_actions_, index_feature_, throw_origin_,
       throw_origin_neg_, cache_only_pos_, real_neg_instance_weight_,
       sampled_neg_instance_weight_, unbias_sampled_neg_,
-      origin_neg_in_pool_proba_, neg_sample_declay_factor_, hard_easy_ratio_,
+      origin_neg_in_pool_proba_, neg_sample_declay_factor_, easy_hard_ratio_,
       variant_type_, mapper_->GetFeatureNameMapper());
 }
 

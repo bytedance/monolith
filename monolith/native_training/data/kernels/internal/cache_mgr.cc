@@ -118,8 +118,8 @@ std::shared_ptr<const ItemFeatures> CacheWithGid::RandomSelectOne(
     *time_factor = (index + 1.0) / data_queue_.size();
     return it->second;
   } else {
-    LOG_EVERY_N_SEC(ERROR, 1) << "item_id " << item_id
-                              << "in queue but not in map";
+    LOG_EVERY_N_SEC(ERROR, 1)
+        << "item_id " << item_id << "in queue but not in map";
   }
   return nullptr;
 }
@@ -253,10 +253,8 @@ void CacheManager::SampleChannelID(uint64_t* channel_id) {
   if (channel_cache_.size() >= 2) {
     for (auto iter = channel_cache_.begin(); iter != channel_cache_.end();
          ++iter) {
-      if (iter->first != *channel_id) {
-        channel_ids.emplace_back(iter->first);
-        cache_size.emplace_back(iter->second.Size());
-      }
+      channel_ids.emplace_back(iter->first);
+      cache_size.emplace_back(iter->second.Size());
     }
 
     std::discrete_distribution<int> discrete_dist(cache_size.begin(),
