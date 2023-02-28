@@ -213,7 +213,9 @@ class _CpuFeatureFactory(feature.FeatureFactoryFromEmbeddings):
 
   def apply_gradients(self,
                       grads_and_vars: Iterable[Tuple[tf.Tensor, tf.Tensor]],
-                      req_time: tf.Tensor = None):
+                      req_time: tf.Tensor = None,
+                      # scale is ignored in async training
+                      scale=1):
     if req_time is None:
       req_time = self._req_time
     emb_grads = utils.propagate_back_gradients(grads_and_vars,
@@ -251,7 +253,8 @@ class _FusedCpuFeatureFactory(feature.FeatureFactoryFromEmbeddings):
 
   def apply_gradients(self,
                       grads_and_vars: Iterable[Tuple[tf.Tensor, tf.Tensor]],
-                      req_time: tf.Tensor = None):
+                      req_time: tf.Tensor = None,
+                      scale: tf.Tensor = 1):
     if req_time is None:
       req_time = self._req_time
     with tf.device("/device:GPU:0"):
@@ -264,13 +267,15 @@ class _FusedCpuFeatureFactory(feature.FeatureFactoryFromEmbeddings):
       apply_op = self._hash_table.apply_gradients(slot_to_emb_grads,
                                                   self._auxiliary_bundle,
                                                   global_step,
-                                                  req_time=req_time)
+                                                  req_time=req_time,
+                                                  scale=scale)
     else:
       apply_op = self._hash_table.apply_gradients(slot_to_emb_grads,
                                                   self._auxiliary_bundle,
                                                   global_step,
                                                   req_time=req_time,
-                                                  skip_merge_id=True)
+                                                  skip_merge_id=True,
+                                                  scale=scale)
     return apply_op.as_op()
 
 

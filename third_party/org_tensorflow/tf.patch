@@ -371,19 +371,6 @@ index a2ab4924f29..77cb7ea0dff 100644
          "@org_tensorflow//tensorflow:windows": [],
          "//conditions:default": ["HAVE_SYS_UIO_H"],
 
-diff --git a/tensorflow/core/common_runtime/executor.cc b/tensorflow/core/common_runtime/executor.cc
-index 03c23f32..91738f85 100644
---- a/tensorflow/core/common_runtime/executor.cc
-+++ b/tensorflow/core/common_runtime/executor.cc
-@@ -742,7 +742,7 @@ void ExecutorState<PropagatorStateType>::Process(TaggedNode tagged_node,
-     inline_ready.pop_front();
-     const NodeItem& item = tagged_node.get_node_item();
-     const int id = item.node_id;
--
-+    profiler::TraceMe activity([&item]() { return item.kernel->def().name() + "_execstate"; });
-     propagator_.MaybeMarkStarted(tagged_node);
- 
-     params.track_allocations = false;
 diff --git a/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc b/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
 index 2bcc2b6e..9062b568 100644
 --- a/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc

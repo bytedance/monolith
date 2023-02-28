@@ -1158,7 +1158,8 @@ class PartitionedHashTable(object):
       req_time: Optional[tf.Tensor] = None,
       auxiliary_bundle: Dict[str, tf.Tensor] = None,
       async_function_mgr: prefetch_queue.AsyncFunctionMgr = None,
-      async_push: bool = False) -> PartitionedHashTable:
+      async_push: bool = False,
+      grad_scale: tf.Tensor = None) -> PartitionedHashTable:
     logging.info(
         f"PartitionedHashTable apply_gradients {async_push} {async_function_mgr}"
     )
@@ -1172,7 +1173,7 @@ class PartitionedHashTable(object):
     if self._enable_gpu_emb:
       assert not async_push
       return self._apply_gradients_gpu(layout_grads_and_vars, global_step,
-                                       req_time, auxiliary_bundle)
+                                       req_time, auxiliary_bundle, grad_scale=grad_scale)
     with tf.name_scope("pht_apply_gradients"):
       layout_grad, layout = zip(*layout_grads_and_vars)
       flattened_fids, flattened_fids_row_split, flattened_embs = [], [], []
@@ -1201,6 +1202,7 @@ class PartitionedHashTable(object):
             embeddings_list=flattened_embs,
             fid_list_row_split=None,  #flattened_fids_row_split, v3 no need
             layout_tensors_grad=layout_grad,
+            layout_tensors_grad_scale=grad_scale,
             variant_type=self._inner_data_type,
             feature_cfgs=self._feature_configs,
             ps_num=self._num_ps)
@@ -1478,11 +1480,18 @@ class PartitionedHashTable(object):
       auxiliary_bundle["__sharding_sparse_fids__id_flat_t"] = id_flat_t
       auxiliary_bundle[
           "__sharding_sparse_fids__id_size_flat_t"] = id_size_flat_t
+      
+      req_time = features.get("req_time", None)
+      if req_time is None:
+        logging.warning(f"PartitionedHashTable lookup_gpu features not have req_time !!!")
+        req_time = tf.constant(0, dtype=tf.int64)
+      else:
+        req_time = tf.reduce_max(req_time)
       # fused_embeddings: [E], fused_splits: [N]
       # id_offsets: [K*N], emb_offsets: [K*N]
       with tf.device("/GPU:0"):
         fused_embeddings, embedding_splits, id_offsets, emb_offsets, indices = \
-            self._table.fused_lookup(id_flat_t, id_size_flat_t, self._shard_num)
+            self._table.fused_lookup(id_flat_t, id_size_flat_t, self._shard_num, req_time)
       if FLAGS.enable_alltoall_metrics:
         with tf.device("/CPU:0"):
           tf.compat.v1.summary.histogram("fused_embedding_splits",
@@ -1628,7 +1637,8 @@ class PartitionedHashTable(object):
       layout_grads_and_vars: List[Tuple[tf.Tensor, tf.Tensor]],
       global_step: tf.Tensor,
       req_time: Optional[tf.Tensor] = None,
-      auxiliary_bundle: Dict[str, tf.Tensor] = None) -> PartitionedHashTable:
+      auxiliary_bundle: Dict[str, tf.Tensor] = None,
+      grad_scale: tf.Tensor = None) -> PartitionedHashTable:
     with tf.name_scope("pht_apply_gradients_gpu"):
 
       auxiliary_bundle['__sharding_sparse_fids__global_step'] = global_step
@@ -1661,6 +1671,7 @@ class PartitionedHashTable(object):
             fid_list_row_split=None,  #flattened_fids_row_split, v3 no need
             fid_list_emb_row_lenth=fid_list_emb_row_lenth,
             layout_tensors_grad=layout_grad,
+            layout_tensors_grad_scale=grad_scale,
             variant_type=self._inner_data_type,
             feature_cfgs=self._feature_configs,
             ps_num=self._num_ps,

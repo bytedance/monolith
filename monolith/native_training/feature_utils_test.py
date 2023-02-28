@@ -32,8 +32,8 @@ def _setup_test_embedding(is_async=False):
       {"feature1": [3, 1]})
   feature_factory = feature.FeatureFactoryFromEmbeddings(emb, slices)
 
-  def apply_emb_gradients(grads_and_vars):
-    return tf.group([var.assign_sub(grad) for grad, var in grads_and_vars])
+  def apply_emb_gradients(grads_and_vars, scale=1):
+    return tf.group([var.assign_sub(grad * scale) for grad, var in grads_and_vars])
 
   feature_factory.apply_gradients = mock.MagicMock(
       side_effect=apply_emb_gradients)

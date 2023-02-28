@@ -53,15 +53,15 @@ class NativeContext:
 
   def apply_embedding_gradients(self,
                                 grads_and_vars: Iterable[Tuple[tf.Tensor,
-                                                               tf.Tensor]]):
+                                                               tf.Tensor]], scale=1):
     """
     Apply gradients for embeddings. Notice vars must be coming from FeatureColumn's
     get_all_embeddings_concatenated.
     """
     if self.layout_factory:
-      return self.layout_factory.apply_gradients(grads_and_vars)
+      return self.layout_factory.apply_gradients(grads_and_vars, grad_scale=scale)
     else:
-      return self.feature_factory.apply_gradients(grads_and_vars)
+      return self.feature_factory.apply_gradients(grads_and_vars, scale=scale)
 
   def add_async_function(
       self,

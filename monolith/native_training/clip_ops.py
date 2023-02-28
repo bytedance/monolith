@@ -25,9 +25,7 @@ gen_clip_ops = gen_monolith_ops
 def _global_norm(t_list: List[tf.Tensor]) -> tf.Tensor:
   """Computes the global norm of multiple tensors."""
   l2_sum = gen_clip_ops.global_l2_reduce(t_list)
-  with tf.device("/device:CPU:0"):
-    # We use CPU here because it's only a scalar, and the downstream clip needs it on HostMemory at first.
-    return tf.sqrt(l2_sum)
+  return tf.sqrt(l2_sum)
 
 
 def clip_by_global_norm(t_list: List[tf.Tensor],

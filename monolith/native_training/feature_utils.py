@@ -42,11 +42,15 @@ if enable_hvd != None:
   import horovod.tensorflow as hvd
   from horovod.tensorflow.compression import FP16Compressor, NoneCompressor
 
+control_ops = []
 
-def allreduce_cond(grads):
+def allreduce_cond(grads, scale = 1):
   if enable_bps and enable_bps_allreduce:
     import byteps.tensorflow as bps
-    from byteps.tensorflow.compression import FP16Compressor as BPSFP16Compressor
+    from byteps.tensorflow.compression import FP16Compressor as BPSFP16Compressor, NoneCompressor as BPSNoneCompressor
+    compression = BPSFP16Compressor if enable_allreduce_fp16 else BPSNoneCompressor
+  else:
+    compression = FP16Compressor if enable_allreduce_fp16 else NoneCompressor
 
   grads_wo_none = [grad for grad in grads if grad is not None]
   num_grads = len(grads)
@@ -63,122 +67,35 @@ def allreduce_cond(grads):
     assert r_idx == len(reduced), "Something is wrong"
     return results
 
+  global control_ops
   if enable_allreduce_fusion == 'one':
+    # note: one allreduce fusion does not yet support CPU
     # note: concat -> allreduce -> split is noticeably faster than hvd.grouped_allreduce
-    grads_fused = gen_distribution_ops.monolith_aligned_flat_concat(grads_wo_none)
-    # AR
+    grads_fused = gen_distribution_ops.monolith_aligned_flat_concat(grads_wo_none, scale)
+    control_ops = [grads_fused]
     if enable_bps and enable_bps_allreduce:
-      grads_fused_avg = bps.push_pull(grads_fused, average=True, compression=BPSFP16Compressor, name="bps_ar_fuse_one") \
-                          if enable_allreduce_fp16 else bps.push_pull(grads_fused, average=True, name="bps_ar_fuse_one")
+      grads_fused_avg = bps.push_pull(grads_fused, average=True, compression=compression, name="bps_ar_fuse_one")
     else:
-      grads_fused_avg = hvd.allreduce(grads_fused, op=hvd.Average, compression=FP16Compressor, name="hvd_ar_fuse_one") \
-                          if enable_allreduce_fp16 else hvd.allreduce(grads_fused, op=hvd.Average, name="hvd_ar_fuse_one")
+      grads_fused_avg = hvd.allreduce(grads_fused, op=hvd.Average, compression=compression, name="hvd_ar_fuse_one")
     return map_to_output(gen_distribution_ops.monolith_aligned_flat_split(grads_wo_none, grads_fused_avg))
   elif enable_allreduce_fusion == "grouped":
     assert not enable_bps or not enable_bps_allreduce
-    compression = FP16Compressor if enable_allreduce_fp16 else NoneCompressor
-    return map_to_output(hvd.grouped_allreduce(grads_wo_none, op=hvd.Average, compression=compression))
+    return map_to_output(
+      hvd.grouped_allreduce([grad * scale for grad in grads_wo_none], op=hvd.Average, compression=compression))
   elif enable_allreduce_fusion == 'multi':
-    logging.info('Enabled allreduce fusion (based on shape)')
-    grads_1d = []
-    grads_1d_dim0 = []
-    # cur model has the following 2-D grads:
-    #   [x,1],[x,16],[x,64],[x,128],[x,256],[x,512],[x,1024],[x,2048]
-    grads_2d_dict = {
-        1: [],
-        16: [],
-        64: [],
-        128: [],
-        256: [],
-        512: [],
-        1024: [],
-        2048: []
-    }
-    grads_2d_dim0 = {
-        1: [],
-        16: [],
-        64: [],
-        128: [],
-        256: [],
-        512: [],
-        1024: [],
-        2048: []
-    }
-    for g in grads_wo_none:
-      if len(g.shape) == 1:
-        grads_1d.append(g)
-        grads_1d_dim0.append(int(g.shape[0]))
-      else:
-        grads_2d_dict[int(g.shape[1])].append(g)
-        grads_2d_dim0[int(g.shape[1])].append(int(g.shape[0]))
-
-    grads_1d_fused = tf.concat(grads_1d, 0, name="concat_1d")
-    if enable_bps and enable_bps_allreduce:
-      grads_1d_fused_avg = bps.push_pull(grads_1d_fused, average=True, compression=BPSFP16Compressor, name="bps_ar_fuse_1d") \
-                          if enable_allreduce_fp16 else bps.push_pull(grads_1d_fused, average=True, name="bps_ar_fuse_1d")
-    else:
-      grads_1d_fused_avg = hvd.allreduce(grads_1d_fused, op=hvd.Average, compression=FP16Compressor, name="hvd_ar_fuse_1d") \
-                            if enable_allreduce_fp16 else hvd.allreduce(grads_1d_fused, op=hvd.Average, name="hvd_ar_fuse_1d")
-    grads_1d_split = tf.split(grads_1d_fused_avg,
-                              grads_1d_dim0,
-                              axis=0,
-                              name='split_1d_grads')
-
-    grads_2d_fused = {}
-    grads_2d_fused_avg = {}
-    grads_2d_split = {}
-    for k in grads_2d_dict.keys():
-      if len(grads_2d_dict[k]) == 0:
-        continue
-      grads_2d_fused[k] = tf.concat(grads_2d_dict[k],
-                                    0,
-                                    name="concat_2d_" + str(k))
-      if enable_bps and enable_bps_allreduce:
-        grads_2d_fused_avg[k] = bps.push_pull(grads_2d_fused[k], average=True, compression=BPSFP16Compressor, name="bps_ar_fuse_2d_"+str(k)) \
-                            if enable_allreduce_fp16 else bps.push_pull(grads_2d_fused[k], average=True, name="bps_ar_fuse_2d_"+str(k))
-      else:
-        grads_2d_fused_avg[k] = hvd.allreduce(grads_2d_fused[k], op=hvd.Average, compression=FP16Compressor, name="hvd_ar_fuse_2d_"+str(k)) \
-                            if enable_allreduce_fp16 else hvd.allreduce(grads_2d_fused[k], op=hvd.Average, name="hvd_ar_fuse_2d_"+str(k))
-      grads_2d_split[k] = tf.split(grads_2d_fused_avg[k],
-                                   grads_2d_dim0[k],
-                                   axis=0,
-                                   name='split_2d_grads_' + str(k))
-    for idx in range(num_grads - 1, -1, -1):
-      if grads[idx] is None:
-        continue
-      if len(grads[idx].shape) == 1:
-        results[idx] = grads_1d_split.pop(-1)
-      else:
-        dim1 = int(grads[idx].shape[1])
-        results[idx] = grads_2d_split[dim1].pop(-1)
-
-    return results
+    raise RuntimeError("Support for multi is dropped. Please use 'one' as the fusion strategy")
   else:
-    # without fusion
-    logging.info('Enabled allreduce without fusion')
+    logging.info('Enabled allreduce without fusion using Average Op!')
     if enable_bps and enable_bps_allreduce:
-      if enable_allreduce_fp16:
-        return [
-            bps.push_pull(grad, average=True, compression=BPSFP16Compressor)
-            if grad is not None else grad for grad in grads
-        ]
-      else:
-        return [
-            bps.push_pull(grad, average=True) if grad is not None else grad
-            for grad in grads
-        ]
+      return [
+        bps.push_pull(grad * scale, average=True, compression=compression)
+        if grad is not None else grad for grad in grads
+      ]
     else:
-      if enable_allreduce_fp16:
-        return [
-            hvd.allreduce(grad, op=hvd.Average, compression=FP16Compressor)
-            if grad is not None else grad for grad in grads
-        ]
-      else:
-        logging.info('Allreduce without fusion using Average Op!')
-        return [
-            hvd.allreduce(grad, op=hvd.Average) if grad is not None else grad
-            for grad in grads
-        ]
+      return [
+        hvd.allreduce(grad * scale, op=hvd.Average, compression=compression) 
+        if grad is not None else grad for grad in grads
+      ]
 
 
 class GradClipType(Enum):
@@ -266,12 +183,7 @@ def apply_gradients_with_var_optimizer(
     grads_and_vars = [
         gv for gv, used in zip(grads_and_vars, unused_filter) if used
     ]
-
     grads = [grad_and_var[0] for grad_and_var in grads_and_vars]
-    # TODO(zouxuan): this is a quick workaround to fix the empty grads issue.
-    if len(grads) == 0:
-      return tf.no_op()
-
     # UE conditional gradient check
     if ue_gradient_check:
       grads = []
@@ -289,68 +201,77 @@ def apply_gradients_with_var_optimizer(
         if not found:
           grads.append(grad_and_var[0])
 
+    # TODO(zouxuan): this is a quick workaround to fix the empty grads issue.
+    if len(grads) == 0:
+      return tf.no_op()
+
     dense_grads = grads[:len(variables)]
-    emb_grads = grads[len(variables):]
+    sparse_grads = grads[len(variables):]
 
     if dense_reduce_mean:
       dense_grads = [g / batch_size for g in dense_grads]
 
-    if grads is not None and len(grads) > 0:
-      if clip_type == GradClipType.ClipByGlobalNorm and clip_norm is not None:
-        if sparse_norm_warmup_steps is None:
-          clipped_grads, global_g_norm = clip_ops.clip_by_global_norm(
-              grads, clip_norm)
-        else:
-          sparse_clip_norm = sparse_clip_norm or clip_norm
-          sparse_clip_norm = _gen_norm_warmup(sparse_clip_norm, global_step,
-                                              sparse_norm_warmup_steps)
-          logging.info('sparse_norm_warmup_steps: %s', sparse_norm_warmup_steps)
-          logging.info('dense_grads: %s', len(dense_grads))
-          logging.info('embedding_grads: %s', len(emb_grads))
-          norm_fn = clip_ops._global_norm if device_utils.within_placement_context_of(
-            "GPU") else tf.linalg.global_norm
-          global_norm = norm_fn(grads)
-          dense_clipped_grads, global_g_norm = clip_ops.clip_by_global_norm(
-              dense_grads, clip_norm, use_norm=global_norm)
-          embedding_clipped_grads, global_g_norm = clip_ops.clip_by_global_norm(
-              emb_grads, sparse_clip_norm, use_norm=global_norm)
-          logging.info('dense_clipped_grads: %s', len(dense_clipped_grads))
-          logging.info('embedding_clipped_grads: %s',
-                       len(embedding_clipped_grads))
-          clipped_grads = dense_clipped_grads + embedding_clipped_grads
-        logging.info('clip_by_global_norm: %s', clip_norm)
-        with tf.device('/device:CPU:0'):
-          tf.compat.v1.summary.scalar("global_gradient_norm", global_g_norm)
-      elif clip_type == GradClipType.ClipByValue and clip_norm is not None:
-        clipped_grads = [
-            tf.clip_by_value(g,
-                             clip_value_min=-clip_norm,
-                             clip_value_max=clip_norm) for g in grads
-        ]
-      elif clip_type == GradClipType.ClipByNorm and clip_norm is not None:
-        clipped_grads = [tf.clip_by_norm(g, clip_norm) for g in grads]
-      elif clip_type == GradClipType.ClipByDenseAndSparse:
-        logging.info("Grads are: {}".format(grads))
-        dense_clipped_grads, global_dense_norm = clip_ops.clip_by_global_norm(
-            dense_grads, clip_norm)
-        if sparse_clip_norm != None:
-          embedding_clipped_grads, global_emb_norm = clip_ops.clip_by_global_norm(
-              emb_grads, sparse_clip_norm)
-        else:
-          embedding_clipped_grads, global_emb_norm = emb_grads, 0
-        clipped_grads = dense_clipped_grads + embedding_clipped_grads
-        with tf.device('/device:CPU:0'):
-          tf.compat.v1.summary.scalar("global_gradient_norm/dense",
-                                      global_dense_norm)
+    global_dense_norm = None
+    global_sparse_norm = None
+    norm_fn = clip_ops._global_norm if device_utils.within_placement_context_of(
+      "GPU") else tf.linalg.global_norm
+    if clip_type == GradClipType.ClipByGlobalNorm and clip_norm is not None:
+      global_dense_norm = norm_fn(grads)
+      global_sparse_norm = global_dense_norm # use the same norm for sparse and dense
+      sparse_clip_norm = sparse_clip_norm or clip_norm
+      if sparse_norm_warmup_steps is not None:
+        sparse_clip_norm = _gen_norm_warmup(sparse_clip_norm, global_step,
+                                            sparse_norm_warmup_steps)
+        logging.info('sparse_norm_warmup_steps: %s', sparse_norm_warmup_steps)
+      with tf.device('/device:CPU:0'):
+        tf.compat.v1.summary.scalar("global_gradient_norm", global_dense_norm)
+    elif clip_type == GradClipType.ClipByValue and clip_norm is not None:
+      clipped_grads = [
+          tf.clip_by_value(g,
+                            clip_value_min=-clip_norm,
+                            clip_value_max=clip_norm) for g in grads
+      ]
+    elif clip_type == GradClipType.ClipByNorm and clip_norm is not None:
+      clipped_grads = [tf.clip_by_norm(g, clip_norm) for g in grads]
+    elif clip_type == GradClipType.ClipByDenseAndSparse:
+      global_dense_norm = norm_fn(dense_grads)
+      if sparse_clip_norm is not None:
+        global_sparse_norm = norm_fn(sparse_grads)
+      with tf.device('/device:CPU:0'):
+        tf.compat.v1.summary.scalar("global_gradient_norm/dense",
+                                    global_dense_norm)
+        if global_sparse_norm is not None:
           tf.compat.v1.summary.scalar("global_gradient_norm/sparse",
-                                      global_emb_norm)
-      else:
-        clipped_grads = grads
+                                      global_sparse_norm)
     else:
       clipped_grads = grads
+    
+    if skip_allreduce:
+      use_allreduce = False      
 
-    dense_clipped_grads = clipped_grads[:len(variables)]
-    embedding_clipped_grads = clipped_grads[len(variables):]
+    # Conditionally perform clip by global norm.
+    # If we're using synchronous (allreduce=True) distributed GPU training,
+    # we defer clip and only calculate a scale factor. The scaling is fused 
+    # with later concat/gather kernels for better performance
+    def cond_defer_clip(norm, clip_norm, grads):
+      defer_clip = device_utils.within_placement_context_of("GPU") and \
+        use_allreduce and not grads_and_vars_summary
+      scale = 1
+      if norm is not None:
+        if not defer_clip:
+          grads, _ = clip_ops.clip_by_global_norm(grads, clip_norm, use_norm=norm)
+        else:
+          scale = tf.minimum(clip_norm / norm, 1)
+      return grads, scale
+
+    if clip_type in (GradClipType.ClipByGlobalNorm, GradClipType.ClipByDenseAndSparse):
+      dense_clipped_grads, dense_scale = cond_defer_clip(global_dense_norm, clip_norm, dense_grads)
+      sparse_clipped_grads, sparse_scale = cond_defer_clip(global_sparse_norm, sparse_clip_norm, sparse_grads)
+    else:
+      dense_scale = 1
+      sparse_scale = 1
+      dense_clipped_grads = clipped_grads[:len(variables)]
+      sparse_clipped_grads = clipped_grads[len(variables):]
 
     if grads_and_vars_summary:
       with tf.device("/device:CPU:0"):
@@ -380,13 +301,11 @@ def apply_gradients_with_var_optimizer(
 
         for i, fc in enumerate(feature_columns):
           tf.compat.v1.summary.histogram("{}_gradient".format(fc.feature_name),
-                                         embedding_clipped_grads[i])
-    if skip_allreduce:
-      use_allreduce = False
+                                         sparse_clipped_grads[i])
 
     logging.info('use_allreduce: %s', use_allreduce)
     dense_clipped_grads = allreduce_cond(
-        dense_clipped_grads
+        dense_clipped_grads, dense_scale
     ) if use_allreduce and enable_hvd else dense_clipped_grads
 
     if dense_weight_decay and variables:
@@ -424,7 +343,7 @@ def apply_gradients_with_var_optimizer(
     with tf.device('/device:CPU:0'):
       train_ops.append(
           ctx.apply_embedding_gradients(
-              (list(zip(embedding_clipped_grads, all_embeddings)))))
+              list(zip(sparse_clipped_grads, all_embeddings)), sparse_scale))
       return tf.group(*train_ops)
 
 

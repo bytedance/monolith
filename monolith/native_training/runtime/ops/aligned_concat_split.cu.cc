@@ -31,7 +31,8 @@ namespace monolith_tf {
 
 __global__ void flat_concat(
     GpuDeviceArrayStruct<const float*> input_ptrs_da,  // length = 2N+1
-    int total, float* out) {
+    int total, const float* _scale, float* out) {
+  float scale = *_scale;
   auto _input_ptrs = GetGpuDeviceArrayOnDevice(&input_ptrs_da);
   extern __shared__ const float* input_ptrs[];
   for (int i = threadIdx.x; i < input_ptrs_da.size; i += blockDim.x)
@@ -48,7 +49,7 @@ __global__ void flat_concat(
 
     int i = id - offsets[work_id];
     if (i < sizes[work_id]) {
-      out[id] = input_ptrs[work_id][i];
+      out[id] = input_ptrs[work_id][i] * scale;
     } else {
       out[id] = 0.0f;
     }
@@ -99,7 +100,8 @@ class AlignedFlatConcat : public OpKernel {
     TF_CHECK_OK(GpuLaunchKernel(
         flat_concat, config.block_count, config.thread_per_block,
         sizeof(const float*) * (2 * N_ + 1), gpu_device.stream(),
-        input_ptrs.data(), total, out->flat<float>().data()));
+        input_ptrs.data(), total, context->input(N_).flat<float>().data(),
+        out->flat<float>().data()));
   }
 
  private:
@@ -126,6 +128,7 @@ class AlignedFlatSplit : public OpKernel {
 };
 REGISTER_OP("MonolithAlignedFlatConcat")
     .Input("inputs: N * float")
+    .Input("scale: float")
     .Output("concat: float")
     .Attr("N: int")
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
@@ -133,8 +136,9 @@ REGISTER_OP("MonolithAlignedFlatConcat")
       return tensorflow::Status::OK();
     });
 
-REGISTER_KERNEL_BUILDER(Name("MonolithAlignedFlatConcat").Device(DEVICE_GPU),
-                        AlignedFlatConcat);
+REGISTER_KERNEL_BUILDER(
+    Name("MonolithAlignedFlatConcat").Device(DEVICE_GPU),
+    AlignedFlatConcat);
 
 REGISTER_OP("MonolithAlignedFlatSplit")
     .Input("inputs: N * float")  // for shape inference only, data not used

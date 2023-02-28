@@ -289,7 +289,8 @@ class FeatureFactory(abc.ABC):
 
   def apply_gradients(self,
                       grads_and_vars: Iterable[Tuple[tf.Tensor, tf.Tensor]],
-                      req_time: tf.Tensor = None) -> tf.Operation:
+                      req_time: tf.Tensor = None,
+                      scale: tf.Tensor = 1) -> tf.Operation:
     """
     Applies the gradients to Features owned by this factory.
     The reason why we do not make per table based apply_gradients is because of
@@ -642,7 +643,8 @@ class EmbeddingLayoutFactory(object):
 
   def apply_gradients(self,
                       grads_and_vars: Iterable[Tuple[tf.Tensor, tf.Tensor]],
-                      req_time: tf.Tensor = None):
+                      req_time: tf.Tensor = None,
+                      grad_scale: tf.Tensor = None):
     return self.hash_table.apply_gradients(
         layout_grads_and_vars=grads_and_vars,
         global_step=tf.compat.v1.train.get_or_create_global_step(),
@@ -650,6 +652,7 @@ class EmbeddingLayoutFactory(object):
         auxiliary_bundle=self.auxiliary_bundle,
         async_function_mgr=self._async_function_mgr,
         async_push=self._async_push,
+        grad_scale=grad_scale,
     )
 
   def get_layout(self, layout: str) -> Union[tf.Tensor, List[tf.Tensor]]:

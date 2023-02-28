@@ -27,6 +27,7 @@ from monolith.native_training import multi_hash_table_ops
 from monolith.native_training import distribution_ops
 from monolith.native_training.prefetch_queue import \
     enqueue_dicts_with_queue_return, AsyncPushHook, EnqueueHook
+from monolith.native_training import feature_utils
 
 enable_hvd = os.getenv("MONOLITH_WITH_HOROVOD")
 enable_custom_optimized_hvd = os.getenv("MONOLITH_WITH_OPTIMIZED_HOROVOD")
@@ -121,7 +122,6 @@ class DistributedMultiTypeHashTableMpi(
         tf.compat.v1.summary.histogram("shard_sizes", shard_sizes)
         tf.compat.v1.summary.histogram("sharded_slot_sizes",
                                         sharded_slot_sizes)
-
     # We exchange the flattened IDs and their splits.
     # M: num_of_ids,
     # N: num_of_shards,
@@ -154,12 +154,10 @@ class DistributedMultiTypeHashTableMpi(
         logging.info('Enabled hvd for fid alltoall g2g')
         with tf.device("/device:GPU:0"):
           id_flat_t = hvd.alltoall(all_fids, splits=shard_sizes)
-          id_flat_split_t = hvd.alltoall(shard_sizes)
           id_size_flat_t = hvd.alltoall(sharded_slot_sizes,
                                         splits=[slot_num] * self._shard_num)
       else:
         id_flat_t = hvd.alltoall(all_fids, splits=shard_sizes)
-        id_flat_split_t = hvd.alltoall(shard_sizes)
         id_size_flat_t = hvd.alltoall(sharded_slot_sizes,
                                       splits=[slot_num] * self._shard_num)
 
@@ -195,6 +193,7 @@ class DistributedMultiTypeHashTableMpi(
         ),
         [-1]  # flatten
     )
+    auxiliary_bundle["recv_embeddings_size"] = tf.reduce_sum(auxiliary_bundle["recv_emb_splits"])
 
     auxiliary_bundle, queue = enqueue_dicts_with_queue_return(
         auxiliary_bundle,
@@ -266,10 +265,6 @@ class DistributedMultiTypeHashTableMpi(
       # GPUQueue: Pass to GPU at Enqueue
       auxiliary_bundle["recv_embeddings"] = tf.identity(
           auxiliary_bundle["recv_embeddings"])
-      _size = tf.size(auxiliary_bundle["recv_embeddings"])
-      with tf.device("/device:CPU:0"):
-        # Size output on HostMemory in kernel. Ensure it's CPU device.
-        auxiliary_bundle["recv_embeddings_size"] = tf.identity(_size)
 
     auxiliary_bundle, queue = enqueue_dicts_with_queue_return(
         auxiliary_bundle,
@@ -308,7 +303,8 @@ class DistributedMultiTypeHashTableMpi(
       slot_to_grad: Dict[str, tf.Tensor],
       auxiliary_bundle: Dict[str, tf.Tensor],
       global_step: tf.Tensor,
-      req_time: tf.Tensor = None) -> DistributedMultiTypeHashTableMpi:
+      req_time: tf.Tensor = None,
+      scale: tf.Tensor = 1) -> DistributedMultiTypeHashTableMpi:
 
     auxiliary_bundle['global_step'] = global_step
     if req_time is None:
@@ -320,10 +316,13 @@ class DistributedMultiTypeHashTableMpi(
 
     recv_embeddings_size = auxiliary_bundle.pop("recv_embeddings_size")
     fused_embedding_offsets = auxiliary_bundle.pop("fused_embedding_offsets")
-    with tf.device("/device:GPU:0"):
-      grad_flat = distribution_ops.fused_gather_embeddings_by_input_gradient(
-          recv_embeddings_size, sorted_grads, fused_embedding_offsets,
-          self._output_dims)
+    # make this depend on fusion op before allreduce, 
+    # so allreduce can be dispatched before alltoall
+    with tf.control_dependencies(feature_utils.control_ops):
+      with tf.device("/device:GPU:0"):
+        grad_flat = distribution_ops.fused_gather_embeddings_by_input_gradient(
+            recv_embeddings_size, sorted_grads, fused_embedding_offsets,
+            self._output_dims, scale)
 
     with tf.device("/device:GPU:0"):
       if enable_bps_bwd_cast == 16:
@@ -469,8 +468,6 @@ class DistributedMultiTypeHashTableMpi(
           grad_flat_t = hvd.alltoall(grad_flat,
                                      recv_emb_splits,
                                      name='hvd_bwd_a2a_g2g')
-          #with tf.device("/device:CPU:0"):
-          #  grad_flat_t = tf.identity(grad_flat_t)
       else:
         logging.info('Enabled hvd for bwd embed alltoall')
         grad_flat_t = hvd.alltoall(grad_flat, recv_emb_splits)

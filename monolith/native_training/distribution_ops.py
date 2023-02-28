@@ -487,6 +487,7 @@ def fused_embedding_to_layout_grad(
     feature_cfgs: FeatureConfigs,
     ps_num: int,
     fid_list_emb_row_lenth: tf.Tensor = None,
+    layout_tensors_grad_scale=None,
     parallel_flag=0,
     version: int = 3,
 ) -> List[tf.Tensor]:
@@ -495,6 +496,9 @@ def fused_embedding_to_layout_grad(
       'example', 'example_batch', 'examplebatch', 'instance'
   }
   variant_type = 'example_batch' if variant_type == 'examplebatch' else variant_type
+  if layout_tensors_grad_scale is not None:
+    logging.info(f"fused_embedding_to_layout_grad use layout_tensors_grad_scale")
+    layout_tensors_grad *= layout_tensors_grad_scale
   if version != 4:
     assert fid_list_emb_row_lenth is None
   if version == 4:
@@ -627,9 +631,10 @@ def fused_gather_embeddings_by_input_gradient(
     grads: List[tf.Tensor],
     embedding_offsets: List[tf.Tensor],
     embedding_dims: List[int],
+    scale = 1
 ) -> tf.Tensor:
   return gen_distribution_ops.monolith_fused_gather_embeddings_by_input_gradient(
-      fused_embeddings, grads, embedding_offsets, embedding_dims=embedding_dims)
+      fused_embeddings, grads, embedding_offsets, embedding_dims=embedding_dims, scale=scale)
 
 
 def reduce_mean(id_indices: tf.Tensor, id_values: tf.Tensor,

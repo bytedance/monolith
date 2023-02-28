@@ -68,8 +68,7 @@ __global__ void FusedGatherKernel(
     int k = local_idx % dim;
 
     int32 emb_offset = input_ptrs[i][j];
-    T* output_ptr = output_ptrs[i];
-    *(output_ptr + j * dim + k) = ldg(fused_embeddings + emb_offset + k);
+    output_ptrs[i][local_idx] = ldg(fused_embeddings + emb_offset + k);
   }
 }
 
@@ -78,7 +77,8 @@ __global__ void FusedGatherGradKernel(
     T* output_ptr, GpuDeviceArrayStruct<const T*> input_ptr_data,
     GpuDeviceArrayStruct<const int32*> offset_ptr_data,
     GpuDeviceArrayStruct<int32> embedding_dims_data,
-    GpuDeviceArrayStruct<int32> offsets_data, int32 size) {
+    GpuDeviceArrayStruct<int32> offsets_data, int32 size, const float* _scale) {
+  float scale = *_scale;
   const T** input_ptrs = GetGpuDeviceArrayOnDevice(&input_ptr_data);
   const int32** offset_ptrs = GetGpuDeviceArrayOnDevice(&offset_ptr_data);
 
@@ -113,8 +113,7 @@ __global__ void FusedGatherGradKernel(
     int k = local_idx % dim;
 
     const int32 emb_offset = offset_ptrs[i][j];
-    const T* input_ptr = input_ptrs[i];
-    GpuAtomicAdd(output_ptr + emb_offset + k, *(input_ptr + j * dim + k));
+    GpuAtomicAdd(output_ptr + emb_offset + k, input_ptrs[i][local_idx] * scale);
   }
 }
 
@@ -148,7 +147,7 @@ class FusedGatherEmbeddingsByInputOpGPU : public OpKernel {
     int smem_usage = sizeof(int32) * (num_of_inputs_ + 1 + num_of_inputs_);
     // smem: offsets + embedding_dims
     FusedAlignedOutputAllocator<EIGEN_MAX_ALIGN_BYTES / sizeof(T)> fao_alloc(
-    ctx);
+        ctx);
     for (int i = 0; i < num_of_inputs_; ++i) {
       auto dim = embedding_dims_[i];
       auto s = inputs[i].NumElements();  // == input[i].shape().dim_size(0)
@@ -157,7 +156,8 @@ class FusedGatherEmbeddingsByInputOpGPU : public OpKernel {
       input_ptrs.Set(i, inputs[i].flat<int32>().data());
       fao_alloc.add_slice(s * dim);
     }
-    offsets.Set(num_of_inputs_, fao_alloc.get_unaligned_total());  // offset val here is total workload
+    // offset val here is total workload
+    offsets.Set(num_of_inputs_, fao_alloc.get_unaligned_total());
     OP_REQUIRES_OK(ctx, offsets.Finalize());
     OP_REQUIRES_OK(ctx, input_ptrs.Finalize());
     OP_REQUIRES_OK(ctx, embedding_dims.Finalize());
@@ -192,7 +192,8 @@ class FusedGatherEmbeddingsByInputOpGPU : public OpKernel {
     // The chosen implementation is to distribute the output workload balanced
     // on threads,
     // while searching the idx input bucket to which the output val belongs to.
-    auto config = GetGpuLaunchConfig(fao_alloc.get_unaligned_total(), gpu_device);
+    auto config =
+        GetGpuLaunchConfig(fao_alloc.get_unaligned_total(), gpu_device);
     GpuLaunchKernel(
         FusedGatherKernel<T>, config.block_count, config.thread_per_block,
         /*shared_memory_size_bytes=*/smem_usage, gpu_device.stream(),
@@ -267,7 +268,8 @@ class FusedGatherEmbeddingsByInputGradientOpGPU : public OpKernel {
         FusedGatherGradKernel<T>, config.block_count, config.thread_per_block,
         /*shared_memory_size_bytes=*/smem_usage, gpu_device.stream(),
         output.data(), input_ptrs.data(), emb_offset_ptrs.data(),
-        embedding_dims.data(), offsets.data(), offset);
+        embedding_dims.data(), offsets.data(), offset,
+        ctx->input(2 * num_of_inputs_ + 1).flat<float>().data());
   }
 
  private:

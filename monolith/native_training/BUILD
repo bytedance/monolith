@@ -318,6 +318,7 @@ py_library(
         ":distribution_ops",
         ":multi_type_hash_table",
         ":prefetch_queue",
+        ":feature_utils",
     ],
 )
 

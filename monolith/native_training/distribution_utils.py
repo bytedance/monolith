@@ -384,10 +384,10 @@ def try_init_cuda():
 
 
 def get_device_str(force_on_cpu: bool = False):
-  global _GPU_PLACEMENT_ALLOWED
   is_mpi_mode = True if 'OMPI_COMM_WORLD_LOCAL_RANK' in os.environ else False
   is_ps_mode = True if FLAGS.num_ps > 0 else False
-  device = 'GPU' if FLAGS.enable_gpu_training or _GPU_PLACEMENT_ALLOWED else 'CPU'
+  from monolith.native_training import device_utils
+  device = 'GPU' if FLAGS.enable_gpu_training or device_utils._GPU_PLACEMENT_ALLOWED else 'CPU'
   device = 'CPU' if force_on_cpu else device
   if is_mpi_mode and FLAGS.enable_sync_training:
     if is_ps_mode:
