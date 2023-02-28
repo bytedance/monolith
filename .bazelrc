@@ -24,6 +24,16 @@ build -c opt
 build --cxxopt=-std=c++14
 build --host_cxxopt=-std=c++14
 
+# preventing relocation overflow error
+build:dbg --copt=-gsplit-dwarf
+
+# dbg config, copied from tensorflow v2.4.0
+build:dbg -c dbg
+# for now, disable arm_neon. see: https://github.com/tensorflow/tensorflow/issues/33360
+build:dbg --cxxopt -DTF_LITE_DISABLE_X86_NEON
+# AWS SDK must be compiled in release mode. see: https://github.com/tensorflow/tensorflow/issues/37498
+build:dbg --copt -DDEBUG_BUILD
+
 # Adding "--cxxopt=-D_GLIBCXX_USE_CXX11_ABI=0" creates parity with TF
 # compilation options. It also addresses memory use due to
 # copy-on-write semantics of std::strings of the older ABI.
