@@ -721,7 +721,7 @@ class MonolithBaseModel(NativeTask, ABC):
       if name not in exported_outputs:
         exported_outputs[name] = tf.estimator.export.PredictOutput(outputs)
       else:
-        raise KeyError("key {name} exists!".format(name))
+        raise KeyError("key {name} exists!".format(name=name))
 
   def add_training_hook(self, hook):
     if isinstance(hook, KafkaMetricHook):

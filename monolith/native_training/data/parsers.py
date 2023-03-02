@@ -199,7 +199,7 @@ def _add_extra_features(names: List[str], shapes: List[int],
       extra_dtypes.append(
           ProtoType.get_tf_type(_line_id_descriptor.fields_by_name[name].type))
     except:
-      raise Exception("{name} is not in line id, pls check!")
+      raise Exception(f"{name} is not in line id, pls check!")
 
   names.extend(extra_features)
   shapes.extend(extra_feature_shapes)

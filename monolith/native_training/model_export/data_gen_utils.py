@@ -387,6 +387,7 @@ def gen_instance(fidv1_features: List[int] = None,
   if fidv2_features:
     assert len(fidv2_features) > 0 and len(fidv2_features) == len(
         set(fidv2_features))
+    notfound_names = list()
     for name in fidv2_features:
       try:
         feat = feature_list.get(name)
@@ -396,7 +397,10 @@ def gen_instance(fidv1_features: List[int] = None,
                                            dtype=tf.int64,
                                            extra=feat)
       except:
-        logging.warning(f'cannot find name {name} in feature_list')
+        notfound_names.append(name)
+    logging.warning(
+        f'Total {len(notfound_names)} features not found in feature_list: {notfound_names}'
+    )
 
   if dense_features:
     name_to_info.update({meta.name: meta for meta in dense_features})
