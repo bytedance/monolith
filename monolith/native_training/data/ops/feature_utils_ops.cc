@@ -64,7 +64,11 @@ REGISTER_OP("AddAction")
     .Attr("string_operand: list(string)")
     .Attr("variant_type: string")
     .Attr("actions: list(int)")
-    .Output("output: variant");
+    .Output("output: variant")
+    .SetShapeFn([](shape_inference::InferenceContext *ctx) {
+      ctx->set_output(0, ctx->input(0));
+      return Status::OK();
+    });
 
 REGISTER_OP("AddLabel")
     .Input("input: variant")
@@ -72,13 +76,21 @@ REGISTER_OP("AddLabel")
     .Attr("negative_value: float")
     .Attr("sample_rate: float")
     .Attr("variant_type: string")
-    .Output("output: variant");
+    .Output("output: variant")
+    .SetShapeFn([](shape_inference::InferenceContext *ctx) {
+      ctx->set_output(0, ctx->input(0));
+      return Status::OK();
+    });
 
 REGISTER_OP("ScatterLabel")
     .Input("input: variant")
     .Attr("config: string")
     .Attr("variant_type: string")
-    .Output("output: variant");
+    .Output("output: variant")
+    .SetShapeFn([](shape_inference::InferenceContext *ctx) {
+      ctx->set_output(0, ctx->input(0));
+      return Status::OK();
+    });
 
 REGISTER_OP("FilterByLabel")
     .Input("input: variant")
@@ -287,7 +299,7 @@ REGISTER_OP("HasVariant")
     .Input("input: variant")
     .Output("output: bool")
     .Attr("variant_type: string")
-    .SetShapeFn([](shape_inference::InferenceContext* c) {
+    .SetShapeFn([](shape_inference::InferenceContext *c) {
       c->set_output(0, c->Scalar());
       return Status::OK();
     });
@@ -298,7 +310,7 @@ REGISTER_OP("KafkaGroupReadableInit")
     .Output("resource: resource")
     .Attr("container: string = ''")
     .Attr("shared_name: string = ''")
-    .SetShapeFn([](shape_inference::InferenceContext* c) {
+    .SetShapeFn([](shape_inference::InferenceContext *c) {
       c->set_output(0, c->Scalar());
       return Status::OK();
     });
@@ -311,7 +323,7 @@ REGISTER_OP("KafkaGroupReadableNext")
     .Output("message: string")
     .Output("key: string")
     .Output("continue_fetch: int64")
-    .SetShapeFn([](shape_inference::InferenceContext* c) {
+    .SetShapeFn([](shape_inference::InferenceContext *c) {
       c->set_output(0, c->MakeShape({c->UnknownDim()}));
       c->set_output(1, c->MakeShape({c->UnknownDim()}));
       c->set_output(2, c->Scalar());
