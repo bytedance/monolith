@@ -699,7 +699,7 @@ class GraphDefHelper(object):
 
     # collection sparse_feature
     for node in tf.compat.v1.get_default_graph().as_graph_def().node:
-      if node.op == "ShardingSparseFidsV2":
+      if node.op.startswith("ShardingSparseFids"):
         feature_cfgs = FeatureConfigs()
         feature_cfgs.ParseFromString(node.attr["feature_cfgs"].s)
         sparse_features = get_collection("sparse_features")
