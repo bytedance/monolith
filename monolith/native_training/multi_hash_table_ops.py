@@ -26,6 +26,7 @@ from absl import logging
 from google.protobuf import text_format
 import tensorflow as tf
 from tensorflow.python.framework import ops
+from tensorflow.python.ops import resources
 
 from monolith.native_training import basic_restore_hook
 from monolith.native_training import entry
@@ -208,23 +209,20 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
     self._saver_parallel = saver_parallel
     self._shared_name = "_".join([MultiHashTable.NAME_PREFIX, name_suffix])
     self._check_and_insert_name(self._shared_name)
+    self._device = device
 
     with tf.device(device):
       # We separate the table creation and use by using a dummy var.
-      # TODO(leqi.zou): we can use register_resource mechanism to solve this problem.
-      self._initializer = hash_table_ops.create_monolith_multi_hash_table(
-          filter_handle=hash_filter,
-          sync_client_handle=sync_client,
-          config=cc.mconfig_tensor,
-          shared_name=self._shared_name).op
-      with tf.control_dependencies([self._initializer]):
-        # var initializer op cannot be placed on the GPU
-        with tf.device("/device:CPU:0"):
-          tf.Variable(initial_value=tf.constant(0), trainable=False)
-
+      init_handle = hash_table_ops.create_monolith_multi_hash_table(
+            filter_handle=hash_filter,
+            sync_client_handle=sync_client,
+            config=cc.mconfig_tensor,
+            shared_name=self._shared_name)
+      self._initializer = init_handle.op
       self._handle = hash_table_ops.read_monolith_multi_hash_table(
           shared_name=self._shared_name)
-
+      self._is_initialized = hash_table_ops.is_hash_table_initialized(init_handle)
+      resources.register_resource(init_handle, self._initializer, self._is_initialized)
     tf.compat.v1.get_collection_ref(_MULTI_HASH_TABLE_GRAPH_KEY).append(self)
 
   def _init_from_proto(
@@ -244,6 +242,9 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
         ops.prepend_name_scope(proto.initializer_op, import_scope))
     self._handle = g.as_graph_element(
         ops.prepend_name_scope(proto.handle_tensor, import_scope))
+    init_handle = self._initializer.outputs[0]
+    self._is_initialized = hash_table_ops.is_hash_table_initialized(init_handle)
+    resources.register_resource(init_handle, self._initializer, self._is_initialized)
 
   @classmethod
   def from_cached_config(cls,
@@ -681,3 +682,6 @@ ops.register_proto_function(
     proto_type=multi_hash_table_ops_pb2.MultiHashTableProto,
     to_proto=MultiHashTable.to_proto,
     from_proto=MultiHashTable.from_proto)
+
+
+ops.NotDifferentiable("IsHashTableInitialized")

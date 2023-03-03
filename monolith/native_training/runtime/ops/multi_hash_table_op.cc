@@ -45,9 +45,8 @@ class CreateMultiHashTableOp : public ResourceOpKernel<T> {
     absl::MutexLock l(&mu_);
     if (ResourceOpKernel<T>::resource_ == nullptr) {
       const tstring& serialized_config = ctx->input(0).scalar<tstring>()();
-      OP_REQUIRES(ctx,
-                  config_.ParseFromArray(serialized_config.data(),
-                                         serialized_config.size()),
+      OP_REQUIRES(ctx, config_.ParseFromArray(serialized_config.data(),
+                                              serialized_config.size()),
                   errors::InvalidArgument("Unable to parse config."));
       n_ = config_.names_size();
       OP_REQUIRES(
@@ -144,6 +143,30 @@ REGISTER_OP("ReadMonolithMultiHashTable")
 
 REGISTER_KERNEL_BUILDER(Name("ReadMonolithMultiHashTable").Device(DEVICE_CPU),
                         ReadMultiHashTableOp<MultiHashTable>);
+
+template <typename T>
+class IsHashTableInitializedOp : public OpKernel {
+ public:
+  explicit IsHashTableInitializedOp(OpKernelConstruction* c) : OpKernel(c) {}
+
+  void Compute(OpKernelContext* ctx) override {
+    core::RefCountPtr<T> mtable;
+    Status s = LookupResource(ctx, HandleFromInput(ctx, 0), &mtable);
+
+    Tensor* output_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, {}, &output_tensor));
+    output_tensor->scalar<bool>()() = s.ok();
+  }
+};
+
+REGISTER_OP("IsHashTableInitialized")
+    .Input("handle: resource")
+    .Output("is_initialized: bool")
+    .SetIsStateful()
+    .SetShapeFn(shape_inference::ScalarShape);
+
+REGISTER_KERNEL_BUILDER(Name("IsHashTableInitialized").Device(DEVICE_CPU),
+                        IsHashTableInitializedOp<MultiHashTable>);
 
 
 }  // namespace monolith_tf

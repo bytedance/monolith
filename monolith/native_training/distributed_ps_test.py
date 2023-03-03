@@ -12,13 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import defaultdict
 import math
+import os
+import copy
+
+os.environ["MONOLITH_WITH_HOROVOD"] = "1"
 import itertools
 from typing import Dict, List
 import numpy as np
 from absl.testing import parameterized
 import logging
 import tensorflow as tf
+import tensorflow.python.ops.resources as resources
+from tensorflow.python.framework import test_util
 
 from monolith.native_training import distributed_ps
 from monolith.native_training import hash_table_ops
@@ -34,7 +41,7 @@ import monolith.native_training.embedding_combiners as embedding_combiners
 from monolith.native_training.runtime.hash_table import embedding_hash_table_pb2
 from monolith.native_training.data.feature_utils import string_to_variant
 from idl.matrix.proto.example_pb2 import Example
-from monolith.native_training.data.parsers import sharding_sparse_fids, ParserCtx
+from monolith.native_training.data.parsers import ParserCtx, sharding_sparse_fids_with_context
 
 
 def factory(idx: int, config):
@@ -131,6 +138,7 @@ class DistributedHashTableTest(tf.test.TestCase):
 
     with tf.compat.v1.Session(servers[0].target, config=config,
                               graph=g) as sess:
+      resources.initialize_resources(resources.shared_resources()).run()
       self.evaluate(tf.compat.v1.global_variables_initializer())
       values_eval = sess.run(new_values)
       self.assertAllEqual(values_eval, [[-2], [-2]])
@@ -183,20 +191,28 @@ class DistributedHashTableTest(tf.test.TestCase):
     self.assertAllEqual(new_values, [[4], [0]])
 
 
-def multi_type_table_factory(ps_num: int, slot_to_config_on_ps):
+def gen_multi_type_table_factory(global_name_prefix=""):
 
-  def table_factory(name_suffix: str, config):
-    return hash_table_ops.hash_table_from_config(config,
-                                                 name_suffix=name_suffix +
-                                                 str(ps_num))
+  def multi_type_table_factory(ps_num: int, slot_to_config_on_ps):
 
-  return multi_type_hash_table.MultiTypeHashTable(slot_to_config_on_ps,
-                                                  table_factory)
+    def table_factory(name_suffix: str, config):
+      return hash_table_ops.hash_table_from_config(
+          config, name_suffix=global_name_prefix + name_suffix + str(ps_num))
+
+    return multi_type_hash_table.MultiTypeHashTable(slot_to_config_on_ps,
+                                                    table_factory)
+
+  return multi_type_table_factory
 
 
-def native_multi_hash_table_factory(ps_num: int, slot_to_config):
-  return MultiHashTable.from_configs(configs=slot_to_config,
-                                     name_suffix=str(ps_num))
+def gen_native_multi_hash_table_factory(global_name_prefix=""):
+
+  def native_multi_hash_table_factory(ps_num: int, slot_to_config):
+    return MultiHashTable.from_configs(configs=slot_to_config,
+                                       name_suffix=global_name_prefix +
+                                       str(ps_num))
+
+  return native_multi_hash_table_factory
 
 
 class DistributedMultiTypeHashTableTest(tf.test.TestCase,
@@ -213,9 +229,9 @@ class DistributedMultiTypeHashTableTest(tf.test.TestCase,
               test_utils.generate_test_hash_table_config(
                   2, learning_rate=lambda: 1.0)
       }
-      table_factory = (native_multi_hash_table_factory
+      table_factory = (gen_native_multi_hash_table_factory()
                        if use_native_multi_hash_table else
-                       multi_type_table_factory)
+                       gen_multi_type_table_factory())
       hash_table = distributed_ps.DistributedMultiTypeHashTable(
           2, slot_to_config, table_factory)
       ids1 = tf.constant([1, 2], dtype=tf.int64)
@@ -229,6 +245,7 @@ class DistributedMultiTypeHashTableTest(tf.test.TestCase,
       values = updated_hash_table.lookup({"1": ids1, "2": ids2})
       sess.run(tf.compat.v1.global_variables_initializer())
       sess.run(tf.compat.v1.local_variables_initializer())
+      resources.initialize_resources(resources.shared_resources()).run()
       values = sess.run(values)
       self.assertAllEqual(values["1"], [[-1], [-2]])
       self.assertAllEqual(values["2"], [[-3, -3]])
@@ -253,9 +270,9 @@ class DistributedMultiTypeHashTableTest(tf.test.TestCase,
           "1": test_utils.generate_test_hash_table_config(1),
           "2": test_utils.generate_test_hash_table_config(2)
       }
-      table_factory = (native_multi_hash_table_factory
+      table_factory = (gen_native_multi_hash_table_factory()
                        if use_native_multi_hash_table else
-                       multi_type_table_factory)
+                       gen_multi_type_table_factory())
       hash_table = distributed_ps.DistributedMultiTypeHashTable(
           2, slot_to_config, table_factory)
       ids1 = tf.constant([1, 2], dtype=tf.int64)
@@ -269,6 +286,7 @@ class DistributedMultiTypeHashTableTest(tf.test.TestCase,
       values = updated_hash_table.lookup({"1": ids1, "2": ids2})
       sess.run(tf.compat.v1.global_variables_initializer())
       sess.run(tf.compat.v1.local_variables_initializer())
+      resources.initialize_resources(resources.shared_resources()).run()
       values = sess.run(values)
       self.assertAllEqual(values["1"], [[-1], [-2]])
       self.assertAllEqual(values["2"], [[-3, -3]])
@@ -300,9 +318,9 @@ class DistributedMultiTypeHashTableTest(tf.test.TestCase,
               test_utils.generate_test_hash_table_config(
                   2, learning_rate=lambda: 1.0)
       }
-      table_factory = (native_multi_hash_table_factory
+      table_factory = (gen_native_multi_hash_table_factory()
                        if use_native_multi_hash_table else
-                       multi_type_table_factory)
+                       gen_multi_type_table_factory())
       hash_table = distributed_ps.DistributedMultiTypeHashTable(
           2, slot_to_config, table_factory)
       ids1 = tf.constant([1, 2], dtype=tf.int64)
@@ -317,6 +335,7 @@ class DistributedMultiTypeHashTableTest(tf.test.TestCase,
       global_step = tf.compat.v1.train.get_or_create_global_step()
       sess.run(tf.compat.v1.global_variables_initializer())
       sess.run(tf.compat.v1.local_variables_initializer())
+      resources.initialize_resources(resources.shared_resources()).run()
       values = sess.run(values)
       self.assertAllEqual(values["1"], [[-1], [-2]])
       self.assertAllEqual(values["2"], [[-3, -3]])
@@ -353,9 +372,9 @@ class DistributedMultiTypeHashTableTest(tf.test.TestCase,
               test_utils.generate_test_hash_table_config(dim=2,
                                                          use_float16=True),
       }
-      table_factory = (native_multi_hash_table_factory
+      table_factory = (gen_native_multi_hash_table_factory()
                        if use_native_multi_hash_table else
-                       multi_type_table_factory)
+                       gen_multi_type_table_factory())
       hash_table = distributed_ps.DistributedMultiTypeHashTable(
           num_ps=2,
           slot_to_config=slot_to_config,
@@ -378,6 +397,7 @@ class DistributedMultiTypeHashTableTest(tf.test.TestCase,
       values = hash_table.lookup({"1": ids1, "2": ids2})
       sess.run(tf.compat.v1.global_variables_initializer())
       sess.run(tf.compat.v1.local_variables_initializer())
+      resources.initialize_resources(resources.shared_resources()).run()
       res = sess.run(values)
       self.assertAllEqual(res["1"], [[-2.], [-2.]])
       self.assertAllEqual(res["2"], [[-3., -3.]])
@@ -388,8 +408,9 @@ class DistributedMultiTypeHashTableServingTest(tf.test.TestCase,
 
   @parameterized.parameters([(True,), (False,)])
   def test_export_model(self, use_native_multi_hash_table):
-    table_factory = (native_multi_hash_table_factory if
-                     use_native_multi_hash_table else multi_type_table_factory)
+    table_factory = (gen_native_multi_hash_table_factory()
+                     if use_native_multi_hash_table else
+                     gen_multi_type_table_factory())
     servers, config = test_utils.create_test_ps_cluster(2)
     with tf.compat.v1.Session(servers[0].target, config=config) as sess:
       slot_to_config = {
@@ -424,29 +445,36 @@ class DistributedMultiTypeHashTableServingTest(tf.test.TestCase,
         hash_table.lookup({"1": tf.constant([1], dtype=tf.int64)})
 
 
-def multi_table_factory(idx: int, configs: Dict[str,
-                                                entry.HashTableConfigInstance]):
+def gen_multi_table_factory(global_name_prefix=""):
 
-  def factory(name_suffix, config):
-    return hash_table_ops.hash_table_from_config(config,
-                                                 name_suffix="_".join(
-                                                     [name_suffix,
-                                                      str(idx)]))
+  def multi_table_factory(idx: int,
+                          configs: Dict[str, entry.HashTableConfigInstance]):
 
-  return multi_type_hash_table.MultiTypeHashTable(configs, factory)
+    def factory(name_suffix, config):
+      return hash_table_ops.hash_table_from_config(
+          config,
+          name_suffix=global_name_prefix +
+          "_".join([name_suffix, str(idx)]))
+
+    return multi_type_hash_table.MultiTypeHashTable(configs, factory)
+
+  return multi_table_factory
 
 
-class PartitionedHashTableTest(tf.test.TestCase):
-  use_native_multi_hash_table = False
+class PartitionedHashTableTest(tf.test.TestCase, parameterized.TestCase):
 
   @classmethod
   def gen_table_config(cls,
                        dims: List[int],
                        use_float16: bool = False,
-                       learning_rate: float = 1.0):
+                       learning_rate: float = 1.0,
+                       enable_gpu_emb: bool = False):
     assert len(dims) >= 1
     table_config = embedding_hash_table_pb2.EmbeddingHashTableConfig()
-    table_config.cuckoo.SetInParent()
+    if enable_gpu_emb:
+      table_config.gpucuco.SetInParent()
+    else:
+      table_config.cuckoo.SetInParent()
     for i, dim in enumerate(dims):
       segment = table_config.entry_config.segments.add()
       segment.dim_size = dim
@@ -495,57 +523,64 @@ class PartitionedHashTableTest(tf.test.TestCase):
 
   @classmethod
   def setUpClass(cls):
-    cls.num_ps = 2
+    if test_util.is_gpu_available(cuda_only=True):
+      import horovod.tensorflow as hvd
+      hvd.init()
 
-    cls.feature_to_unmerged_slice_dims = {
+  @classmethod
+  def get_parser_ctx(cls, num_ps, enable_gpu_emb, use_gpu,
+                     use_native_multi_hash_table):
+
+    feature_to_unmerged_slice_dims = {
         "uid": [1, 4],
         'gid': [1, 4, 8],
         "cid": [1, 4, 8],
     }
 
-    cls.feature_to_combiner = {
+    feature_to_combiner = {
         'uid': embedding_combiners.ReduceSum(),
         'gid': embedding_combiners.ReduceSum(),
         'cid': embedding_combiners.ReduceSum(),
     }
 
-    cls.feature_name_to_config = {
-        name: cls.gen_table_config(dims=dims)
-        for name, dims in cls.feature_to_unmerged_slice_dims.items()
+    feature_name_to_config = {
+        name: cls.gen_table_config(dims=dims, enable_gpu_emb=enable_gpu_emb)
+        for name, dims in feature_to_unmerged_slice_dims.items()
     }
 
-    cls.layout_configs = cls.gen_out_config(
-        cls.feature_to_unmerged_slice_dims,
-        layout_names=['bias', 'vec', 'deep'])
+    layout_configs = cls.gen_out_config(feature_to_unmerged_slice_dims,
+                                        layout_names=['bias', 'vec', 'deep'])
 
-    cls.parser_ctx = ParserCtx(True)
-    cls.parser_ctx.sharding_sparse_fids_op_params = distributed_ps.PartitionedHashTable.gen_feature_configs(
-        num_ps=cls.num_ps,
-        feature_name_to_config=cls.feature_name_to_config,
-        layout_configs=cls.layout_configs,
-        feature_to_combiner=cls.feature_to_combiner,
-        feature_to_unmerged_slice_dims=cls.feature_to_unmerged_slice_dims,
-        use_native_multi_hash_table=cls.use_native_multi_hash_table,
+    parser_ctx = ParserCtx(True)
+    parser_ctx.parser_type = 'example'
+    parser_ctx.sharding_sparse_fids_op_params = distributed_ps.PartitionedHashTable.gen_feature_configs(
+        num_ps=num_ps,
+        feature_name_to_config=feature_name_to_config,
+        layout_configs=layout_configs,
+        feature_to_combiner=feature_to_combiner,
+        feature_to_unmerged_slice_dims=feature_to_unmerged_slice_dims,
+        use_native_multi_hash_table=use_native_multi_hash_table,
         unique=lambda: True,
         transfer_float16=False,
-        enable_gpu_emb=False,
-        use_gpu=False)
-    cls.sub_table_name_to_config = cls.parser_ctx.sharding_sparse_fids_op_params.sub_table_name_to_config
-    cls.feature_configs = cls.parser_ctx.sharding_sparse_fids_op_params.feature_configs
+        enable_gpu_emb=enable_gpu_emb,
+        use_gpu=use_gpu)
+    return parser_ctx
 
   @classmethod
   def gen_data(cls,
+               num_ps,
+               sub_table_name_to_config,
                with_emb: bool = False,
                method: str = 'random',
                value: float = 1.0):
     assert method in {'random', 'const'}
     data_tf, data_np = {}, {}
-    for i in range(cls.num_ps):
+    for i in range(num_ps):
       data_tf[i], data_np[i] = {}, {}
-      for tbname, conf in cls.sub_table_name_to_config.items():
+      for tbname, conf in sub_table_name_to_config.items():
         size = sum(
             seg.dim_size for seg in conf._table_config.entry_config.segments)
-        fids_np = np.array([i + cls.num_ps * j for j in range(size)],
+        fids_np = np.array([i + num_ps * j for j in range(size)],
                            dtype=np.int64)
         fids_tf = tf.constant(value=fids_np,
                               dtype=tf.int64,
@@ -589,34 +624,47 @@ class PartitionedHashTableTest(tf.test.TestCase):
       named_feature.name = 'cid'
       named_feature.feature.fid_v2_list.value.append(start + 2)
 
-      #logging.info(f" {i}/{batch_size}:{example}")
+      logging.info(f" {i}/{batch_size}:{example}")
       examples.append(example.SerializeToString())
 
     example_strs = tf.constant(value=examples, dtype=tf.string, name='examples')
     return string_to_variant(example_strs, variant_type='example')
 
-  def test_basic(self):
-    servers, config = test_utils.create_test_ps_cluster(self.num_ps)
+  #with tf.compat.v1.Session(servers[0].target, config=config) as sess, test_util.use_gpu() if use_gpu else sess.graph.device(lambda op: '/CPU:0')
+  def _test_basic(self, use_native_multi_hash_table, use_gpu):
+    enable_gpu_emb = False  #not support hash_table.assign
+    num_ps = 2
+    parser_ctx = self.get_parser_ctx(num_ps, enable_gpu_emb, use_gpu,
+                                     use_native_multi_hash_table)
+    sub_table_name_to_config = parser_ctx.sharding_sparse_fids_op_params.sub_table_name_to_config
+
+    servers, config = test_utils.create_test_ps_cluster(num_ps)
     config.share_cluster_devices_in_session = True
     config.experimental.share_session_state_in_clusterspec_propagation = True
     # grappler doesn't really understand RaggedTensor.
     config.graph_options.rewrite_options.disable_meta_optimizer = True
     with tf.compat.v1.Session(servers[0].target, config=config) as sess:
       hash_table = distributed_ps.PartitionedHashTable(
-          self.num_ps,
-          native_multi_hash_table_factory
-          if self.use_native_multi_hash_table else multi_table_factory,
-          use_native_multi_hash_table=self.use_native_multi_hash_table,
-          parser_ctx=self.parser_ctx)
+          num_ps,
+          gen_native_multi_hash_table_factory()
+          if use_native_multi_hash_table else gen_multi_table_factory(),
+          use_native_multi_hash_table=use_native_multi_hash_table,
+          parser_ctx=parser_ctx)
 
-      if self.use_native_multi_hash_table:
+      if use_native_multi_hash_table:
         sess.run(tf.compat.v1.global_variables_initializer())
         sess.run(tf.compat.v1.local_variables_initializer())
-      assign_data, assign_data_np = self.gen_data(with_emb=True)
+        resources.initialize_resources(resources.shared_resources()).run()
+      assign_data, assign_data_np = self.gen_data(num_ps,
+                                                  sub_table_name_to_config,
+                                                  with_emb=True)
       hash_table = hash_table.assign(assign_data)
-      assign_add_data, assign_add_data_np = self.gen_data(with_emb=True)
+      assign_add_data, assign_add_data_np = self.gen_data(
+          num_ps, sub_table_name_to_config, with_emb=True)
       hash_table = hash_table.assign_add(assign_add_data)
-      lookup_data, _ = self.gen_data(with_emb=False)
+      lookup_data, _ = self.gen_data(num_ps,
+                                     sub_table_name_to_config,
+                                     with_emb=False)
       values = hash_table._lookup_raw(lookup_data)
 
       real_result = sess.run(values)
@@ -629,36 +677,54 @@ class PartitionedHashTableTest(tf.test.TestCase):
           fid2, emb2 = assign_add_data_np[part][tbname]
           self.assertAllClose(real_result[part][tbname], emb1 + emb2)
 
-  def test_lookup(self):
-    servers, config = test_utils.create_test_ps_cluster(self.num_ps)
+  @parameterized.parameters([(True,), (False,)])
+  def test_basic(self, use_native_multi_hash_table):
+    self._test_basic(use_native_multi_hash_table, use_gpu=False)
+
+  @parameterized.parameters([(True,), (False,)])
+  @test_util.run_gpu_only
+  def test_basic_gpu(self, use_native_multi_hash_table):
+    self._test_basic(use_native_multi_hash_table, use_gpu=True)
+
+  def _test_lookup(self, use_native_multi_hash_table, use_gpu):
+    enable_gpu_emb = False  #not support hash_table.assign
+    num_ps = 2
+    parser_ctx = self.get_parser_ctx(num_ps, enable_gpu_emb, use_gpu,
+                                     use_native_multi_hash_table)
+    sub_table_name_to_config = parser_ctx.sharding_sparse_fids_op_params.sub_table_name_to_config
+    servers, config = test_utils.create_test_ps_cluster(num_ps)
     config.share_cluster_devices_in_session = True
     config.experimental.share_session_state_in_clusterspec_propagation = True
     # grappler doesn't really understand RaggedTensor.
     config.graph_options.rewrite_options.disable_meta_optimizer = True
     with tf.compat.v1.Session(servers[0].target, config=config) as sess:
       hash_table = distributed_ps.PartitionedHashTable(
-          self.num_ps,
-          native_multi_hash_table_factory
-          if self.use_native_multi_hash_table else multi_table_factory,
-          use_native_multi_hash_table=self.use_native_multi_hash_table,
-          parser_ctx=self.parser_ctx)
+          num_ps,
+          gen_native_multi_hash_table_factory()
+          if use_native_multi_hash_table else gen_multi_table_factory(),
+          use_native_multi_hash_table=use_native_multi_hash_table,
+          parser_ctx=parser_ctx)
       hash_table._inner_data_type = 'example'
 
-      if self.use_native_multi_hash_table:
+      if use_native_multi_hash_table:
         sess.run(tf.compat.v1.global_variables_initializer())
         sess.run(tf.compat.v1.local_variables_initializer())
+        resources.initialize_resources(resources.shared_resources()).run()
       x = 2.0
-      assign_data, assign_data_np = self.gen_data(with_emb=True,
+      assign_data, assign_data_np = self.gen_data(num_ps,
+                                                  sub_table_name_to_config,
+                                                  with_emb=True,
                                                   method='const',
                                                   value=x)
+      logging.info(f"show assign_data_np {assign_data_np}")
       hash_table = hash_table.assign(assign_data)
 
-      sparse_features = self.gen_variant_tensor(batch_size=self.num_ps * 3)
+      sparse_features = self.gen_variant_tensor(batch_size=num_ps * 3)
       auxiliary_bundle = {}
 
-      layouts = hash_table.lookup(
-          {ParserCtx.sharding_sparse_fids_sparse_features_key: sparse_features},
-          auxiliary_bundle=auxiliary_bundle)
+      features = {}
+      sharding_sparse_fids_with_context(sparse_features, features, parser_ctx)
+      layouts = hash_table.lookup(features, auxiliary_bundle=auxiliary_bundle)
       layouts = sess.run(layouts)
       auxiliary_bundle_ret = sess.run(auxiliary_bundle)
 
@@ -693,38 +759,56 @@ class PartitionedHashTableTest(tf.test.TestCase):
       }
 
       for key, value in layouts.items():
-        #logging.info(f" {key} {value}  ---  {expect[key] * x}")
+        logging.info(f" {key} {value}  ---  {expect[key] * x}")
         self.assertAllClose(value, expect[key] * x)
 
-  def test_apply_gradients(self):
-    servers, config = test_utils.create_test_ps_cluster(self.num_ps)
+  @parameterized.parameters([(True,), (False,)])
+  def test_lookup(self, use_native_multi_hash_table):
+    self._test_lookup(use_native_multi_hash_table, use_gpu=False)
+
+  @parameterized.parameters([(True,), (False,)])
+  @test_util.run_gpu_only
+  def test_lookup_gpu(self, use_native_multi_hash_table):
+    self._test_lookup(use_native_multi_hash_table, use_gpu=True)
+
+  def _test_apply_gradients(self, use_native_multi_hash_table, use_gpu):
+    enable_gpu_emb = False  #not support hash_table.assign
+    num_ps = 2
+    parser_ctx = self.get_parser_ctx(num_ps, enable_gpu_emb, use_gpu,
+                                     use_native_multi_hash_table)
+    sub_table_name_to_config = parser_ctx.sharding_sparse_fids_op_params.sub_table_name_to_config
+
+    servers, config = test_utils.create_test_ps_cluster(num_ps)
     config.share_cluster_devices_in_session = True
     config.experimental.share_session_state_in_clusterspec_propagation = True
     # grappler doesn't really understand RaggedTensor.
     config.graph_options.rewrite_options.disable_meta_optimizer = True
     with tf.compat.v1.Session(servers[0].target, config=config) as sess:
       hash_table = distributed_ps.PartitionedHashTable(
-          self.num_ps,
-          native_multi_hash_table_factory
-          if self.use_native_multi_hash_table else multi_table_factory,
-          use_native_multi_hash_table=self.use_native_multi_hash_table,
-          parser_ctx=self.parser_ctx)
+          num_ps,
+          gen_native_multi_hash_table_factory()
+          if use_native_multi_hash_table else gen_multi_table_factory(),
+          use_native_multi_hash_table=use_native_multi_hash_table,
+          parser_ctx=parser_ctx)
       hash_table._inner_data_type = 'example'
 
-      if self.use_native_multi_hash_table:
+      if use_native_multi_hash_table:
         sess.run(tf.compat.v1.global_variables_initializer())
         sess.run(tf.compat.v1.local_variables_initializer())
+        resources.initialize_resources(resources.shared_resources()).run()
+
       init_val = 3.0
-      assign_data, assign_data_np = self.gen_data(with_emb=True,
+      assign_data, assign_data_np = self.gen_data(num_ps,
+                                                  sub_table_name_to_config,
+                                                  with_emb=True,
                                                   method='const',
                                                   value=init_val)
       hash_table = hash_table.assign(assign_data)
-      sparse_features = self.gen_variant_tensor(batch_size=self.num_ps * 3)
+      sparse_features = self.gen_variant_tensor(batch_size=num_ps * 3)
       auxiliary_bundle = {}
-
-      layouts = hash_table.lookup(
-          {ParserCtx.sharding_sparse_fids_sparse_features_key: sparse_features},
-          auxiliary_bundle=auxiliary_bundle)
+      features = {}
+      sharding_sparse_fids_with_context(sparse_features, features, parser_ctx)
+      layouts = hash_table.lookup(features, auxiliary_bundle=auxiliary_bundle)
       layout_grads_and_vars, init_grad = [], 2.0
       for name in sorted(hash_table._feature_configs.out_configs):
         layout = layouts[name]
@@ -734,13 +818,15 @@ class PartitionedHashTableTest(tf.test.TestCase):
       global_step = tf.constant(0, dtype=tf.int64)
       apply_gradients_op = hash_table.apply_gradients(
           layout_grads_and_vars, global_step, auxiliary_bundle=auxiliary_bundle)
-      lookup_data, lookup_data_np = self.gen_data(with_emb=False)
+      lookup_data, lookup_data_np = self.gen_data(num_ps,
+                                                  sub_table_name_to_config,
+                                                  with_emb=False)
       with tf.control_dependencies([apply_gradients_op]):
         values = hash_table._lookup_raw(lookup_data)
       values = sess.run(values)
       #logging.info(f"xx values: {lookup_data_np} {values}")
 
-      if self.use_native_multi_hash_table:
+      if use_native_multi_hash_table:
         shards = {
             'uid:0': [0, 6, 12],
             'uid:1': [3, 9, 15],
@@ -773,7 +859,7 @@ class PartitionedHashTableTest(tf.test.TestCase):
         tb_name, idx = name.split(':')
         lu_value = values[int(idx)][tb_name]
         for i in value:
-          k = int(i / self.num_ps)
+          k = int(i / num_ps)
           if k < lu_value.shape[0]:
             for j, x in enumerate(lu_value[k]):
               if j == 0:
@@ -781,17 +867,98 @@ class PartitionedHashTableTest(tf.test.TestCase):
               else:
                 self.assertAlmostEqual(init_val - ada_grad, x, delta=1e-6)
 
+  @parameterized.parameters([(True,), (False,)])
+  def test_apply_gradients(self, use_native_multi_hash_table):
+    self._test_apply_gradients(use_native_multi_hash_table, use_gpu=False)
 
-class PartitionedHashTableWithNativeHashTableTest(PartitionedHashTableTest):
+  @parameterized.parameters([(True,), (False,)])
+  @test_util.run_gpu_only
+  def test_apply_gradients_gpu(self, use_native_multi_hash_table):
+    self._test_apply_gradients(use_native_multi_hash_table, use_gpu=True)
 
-  def __init__(self, *args, **kwargs) -> None:
-    super(PartitionedHashTableWithNativeHashTableTest,
-          self).__init__(*args, **kwargs)
+  @parameterized.parameters([(True,), (False,)])
+  @test_util.run_gpu_only
+  def test_apply_gradients_for_gpu_emb(self, use_native_multi_hash_table):
+    use_gpu = True
+    enable_gpu_emb = True
+    num_ps = 1
+    parser_ctx = self.get_parser_ctx(num_ps, enable_gpu_emb, use_gpu,
+                                     use_native_multi_hash_table)
+    sub_table_name_to_config = parser_ctx.sharding_sparse_fids_op_params.sub_table_name_to_config
 
-  @classmethod
-  def setUpClass(cls):
-    cls.use_native_multi_hash_table = True
-    super(PartitionedHashTableWithNativeHashTableTest, cls).setUpClass()
+    def run_once(task_name, loop, parser_ctx_, grad_list=None):
+      servers, config = test_utils.create_test_ps_cluster(num_ps)
+      config.share_cluster_devices_in_session = True
+      config.experimental.share_session_state_in_clusterspec_propagation = True
+      # grappler doesn't really understand RaggedTensor.
+      config.graph_options.rewrite_options.disable_meta_optimizer = True
+      with tf.Graph().as_default(), tf.compat.v1.Session(servers[0].target,
+                                                         config=config) as sess:
+        hash_table = distributed_ps.PartitionedHashTable(
+            num_ps,
+            gen_native_multi_hash_table_factory(task_name) if
+            use_native_multi_hash_table else gen_multi_table_factory(task_name),
+            use_native_multi_hash_table=use_native_multi_hash_table,
+            parser_ctx=parser_ctx_)
+        hash_table._inner_data_type = 'example'
+
+        if use_native_multi_hash_table:
+          sess.run(tf.compat.v1.global_variables_initializer())
+          sess.run(tf.compat.v1.local_variables_initializer())
+          resources.initialize_resources(resources.shared_resources()).run()
+
+        sparse_features = self.gen_variant_tensor(batch_size=num_ps * 3)
+        auxiliary_bundle = {}
+        features = {}
+        sharding_sparse_fids_with_context(sparse_features, features,
+                                          parser_ctx_)
+        ret_grad_list = defaultdict(lambda: [])
+        apply_gradients_op = tf.no_op()
+        for loop_idx in range(loop):
+          with tf.control_dependencies([apply_gradients_op]):
+            layouts = hash_table.lookup(features.copy(),
+                                        auxiliary_bundle=auxiliary_bundle)
+          layouts = sess.run(layouts)
+          layout_grads_and_vars = []
+          for name in sorted(hash_table._feature_configs.out_configs):
+            layout = layouts[name]
+            if grad_list:
+              grad = grad_list[name][loop_idx]
+            else:
+              grad = tf.random.uniform(layout.shape)
+              grad = sess.run(grad)
+            ret_grad_list[name].append(grad)
+            layout_grads_and_vars.append((grad, layout))
+
+          global_step = tf.constant(0, dtype=tf.int64)
+          apply_gradients_op = hash_table.apply_gradients(
+              layout_grads_and_vars,
+              global_step,
+              auxiliary_bundle=auxiliary_bundle)
+        with tf.control_dependencies([apply_gradients_op]):
+          layouts = hash_table.lookup(features,
+                                      auxiliary_bundle=auxiliary_bundle)
+        layouts = sess.run(layouts)
+        return layouts, ret_grad_list
+
+    layouts, ret_grad_list = run_once('gpu_emb_', 2, parser_ctx)
+    #logging.info(f"xx values: {layouts} {ret_grad_list}")
+    layouts_cpu, ret_grad_list = run_once(
+        "cpu_", 2,
+        self.get_parser_ctx(num_ps, False, False, use_native_multi_hash_table),
+        ret_grad_list)
+    #logging.info(f"xx values: {layouts_cpu} {ret_grad_list}")
+
+    assert len(layouts) == len(layouts_cpu)
+    for name, value in layouts.items():
+      assert name in layouts_cpu
+      value_2 = layouts_cpu[name]
+      assert len(value) == len(value_2)
+      for a, b in zip(value, value_2):
+        assert len(a) == len(b)
+        #print(a, b)
+        for i in range(len(a)):
+          self.assertAlmostEqual(a[i], b[i], delta=1e-6)
 
 
 if __name__ == "__main__":

@@ -255,7 +255,7 @@ def apply_gradients_with_var_optimizer(
     # with later concat/gather kernels for better performance
     def cond_defer_clip(norm, clip_norm, grads):
       defer_clip = device_utils.within_placement_context_of("GPU") and \
-        use_allreduce and not grads_and_vars_summary
+        use_allreduce and not grads_and_vars_summary and not is_fused_layout
       scale = 1
       if norm is not None:
         if not defer_clip:

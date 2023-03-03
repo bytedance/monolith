@@ -1001,14 +1001,7 @@ class PartitionedHashTable(object):
         return ret
     with tf.name_scope("pht_lookup"):
       if ParserCtx.sharding_sparse_fids_sparse_features_key in features:
-        shards, fid_offset, feature_offset, nfl_offset, batch_size, shards_row_split, fid_list_emb_row_lenth, \
-    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
-            features[ParserCtx.sharding_sparse_fids_sparse_features_key],
-            ps_num=self._num_ps,
-            feature_cfgs=self._feature_configs,
-            unique=self._unique(),
-            input_type=self._inner_data_type,
-            parallel_flag=1 if self._use_native_multi_hash_table else 0)
+        assert False, "not support, please use sharding_sparse_fids_with_context before call lookup"
       else:
         sharding_features = ParserCtx.sharding_sparse_fids_features_parse_from_features(
             features)
@@ -1480,15 +1473,18 @@ class PartitionedHashTable(object):
       auxiliary_bundle["__sharding_sparse_fids__id_flat_t"] = id_flat_t
       auxiliary_bundle[
           "__sharding_sparse_fids__id_size_flat_t"] = id_size_flat_t
-      
-      req_time = features.get("req_time", None)
-      if req_time is None:
-        logging.warning(f"PartitionedHashTable lookup_gpu features not have req_time !!!")
-        req_time = tf.constant(0, dtype=tf.int64)
-      else:
-        req_time = tf.reduce_max(req_time)
+
       # fused_embeddings: [E], fused_splits: [N]
       # id_offsets: [K*N], emb_offsets: [K*N]
+      req_time = features.get("req_time", None)
+      with tf.device(
+          "/device:GPU:0" if self._enable_gpu_emb else "/device:CPU:0"):
+        if req_time is None:
+          logging.warning(f"fused_embedding_to_layout use default req_time")
+          req_time = tf.constant(0, dtype=tf.int64)
+        else:
+          req_time = tf.reduce_max(req_time)
+
       with tf.device("/GPU:0"):
         fused_embeddings, embedding_splits, id_offsets, emb_offsets, indices = \
             self._table.fused_lookup(id_flat_t, id_size_flat_t, self._shard_num, req_time)
@@ -1910,6 +1906,8 @@ class PartitionedHashTable(object):
 
   def _update(self, method_name: str, name_scope: str,
               update_data: AssignData) -> PartitionedHashTable:
+    if self._enable_gpu_emb:
+      raise NotImplementedError
     with tf.name_scope(name_scope):
       new_tables = []
       for i in range(self._num_ps):
@@ -1917,14 +1915,16 @@ class PartitionedHashTable(object):
       return self._copy_with_new_table(new_tables)
 
   def assign(self, data: AssignData) -> PartitionedHashTable:
-    # TODO
+    if self._enable_gpu_emb:
+      raise NotImplementedError
     if self._use_native_multi_hash_table:
       return self._update("assign", "dmtht_a", data)
     else:
       return self._update("assign", "pht_assign", data)
 
   def assign_add(self, data: AssignData) -> PartitionedHashTable:
-    # TODO
+    if self._enable_gpu_emb:
+      raise NotImplementedError
     if self._use_native_multi_hash_table:
       return self._update("assign_add", "dmtht_aa", data)
     else:

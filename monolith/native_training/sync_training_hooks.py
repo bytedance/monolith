@@ -44,6 +44,7 @@ from monolith.native_training import native_task
 from monolith.native_training import hash_table_ops
 from monolith.native_training.distributed_serving_ops import ParameterSyncClient, refresh_sync_config
 from monolith.utils import find_main
+from monolith.native_training.model_export import export_context
 
 
 class SyncTrainingBarrierSaverListener(tf.estimator.CheckpointSaverListener):
@@ -301,6 +302,8 @@ class EofAwareTask:
     model_fn = self._ori_task.create_model_fn()
 
     def new_model_fn_factory(model_fn):
+      if export_context.is_exporting():
+        return model_fn
 
       def new_model_fn(features, mode, config):
         if EofAwareTask.EOF_KEY in features:

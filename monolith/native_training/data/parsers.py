@@ -585,8 +585,11 @@ def sharding_sparse_fids(tensor: tf.Tensor,
   return ret, fid_offset, feature_offset, nfl_offset, batch_size, ret_row_split, fid_list_emb_row_lenth, fid_list_table_row_length, fid_list_shard_row_lenth
 
 
-def sharding_sparse_fids_with_context(sparse_features: tf.Tensor, features):
-  parser_ctx = get_default_parser_ctx()
+def sharding_sparse_fids_with_context(sparse_features: tf.Tensor,
+                                      features,
+                                      parser_ctx: ParserCtx = None):
+  if parser_ctx is None:
+    parser_ctx = get_default_parser_ctx()
   shards, fid_offset, feature_offset, nfl_offset, batch_size, shards_row_split, fid_list_emb_row_lenth, \
     fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
       sparse_features,

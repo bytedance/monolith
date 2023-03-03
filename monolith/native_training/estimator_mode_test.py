@@ -47,12 +47,9 @@ class DistributedTrainTest(tf.test.TestCase):
         os.symlink(FLAGS.dataset_input_patterns,
                    FLAGS.dataset_input_patterns + suffix)
 
-    link_some_file("2")
-    link_some_file("3")
-    link_some_file("4")
-    link_some_file("5")
-    link_some_file("6")
-    FLAGS.dataset_input_patterns += "*"
+    for i in range(10):
+      link_some_file(str(i))
+    FLAGS.dataset_input_patterns += "{INT(0,99)}"
 
   def find_free_port(self, count):
     port_list = []
@@ -71,6 +68,7 @@ class DistributedTrainTest(tf.test.TestCase):
                 num_workers: int,
                 num_dsworkers: int,
                 other_env: Dict = {},
+                worker_args: List = [],
                 use_mpi_run=False):
     cur_modir = "{}/{}/ckpt".format(get_test_tmp_dir(), task_name)
     os.makedirs(cur_modir)
@@ -144,6 +142,8 @@ class DistributedTrainTest(tf.test.TestCase):
 
         args = copy.copy(args_tmpl)
         args.append(f"--server_type={role_name}")
+        if role_name == "worker":
+          args += worker_args
         cur_env = copy.deepcopy(my_env)
         cur_env["MLP_ROLE"] = role_name
         cur_env["MLP_PORT"] = f"{cur_port_list[0]}"
@@ -293,8 +293,9 @@ class DistributedTrainTest(tf.test.TestCase):
         "--enable_partial_sync_training=True",
         "--embedding_prefetch_capacity=1",
         "--enable_embedding_postpush=True",
-        '--params_override={"train.max_steps": 1}',
+        '--params_override={"train.max_steps": 10}',
     ] + other_args
+    worker_args = []
     num_ps = 2
     num_workers = min(2, len(gpus))
     num_dsworkers = 1
@@ -305,6 +306,7 @@ class DistributedTrainTest(tf.test.TestCase):
                    num_workers,
                    num_dsworkers,
                    other_env=other_env,
+                   worker_args=worker_args,
                    use_mpi_run=True)
 
   def test_sparse_dense0(self):
@@ -346,8 +348,9 @@ class DistributedTrainTest(tf.test.TestCase):
         "--filter_type=probabilistic_filter",
         "--embedding_prefetch_capacity=1",
         "--enable_async_optimize=False",
-        '--params_override={"train.max_steps": 2}',
+        '--params_override={"train.max_steps": 10}',
     ] + other_args
+    worker_args = []
     num_ps = 0
     num_workers = min(2, len(gpus))
     num_dsworkers = 1
@@ -358,6 +361,7 @@ class DistributedTrainTest(tf.test.TestCase):
                    num_workers,
                    num_dsworkers,
                    other_env=other_env,
+                   worker_args=worker_args,
                    use_mpi_run=True)
 
   def test_full_gpu_0(self):

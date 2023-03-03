@@ -290,36 +290,6 @@ tf_kernel_library(
     ],
 )
 
-
-tf_kernel_library(
-    name = 'distribution_ops_lib',
-    srcs = [
-    ],
-    gpu_srcs = [
-        "map_id_to_embedding.cu.cc",
-        "reduce_op.cu.cc",
-        "fused_embedding_to_layout.cu.cc",
-    ],
-    copts = [
-        "-std=c++14",
-        "-DGOOGLE_CUDA=1",
-        "-D_ENABLE_AVX",
-        "-mavx",
-        "-mfma",
-    ],
-    deps = [
-        ":distribution_ops",
-        "@org_tensorflow//tensorflow/core/kernels:gpu_device_array_for_custom_op",
-        "//monolith/native_training/data/training_instance:parse_instance_lib",
-        "//monolith/native_training/runtime/hash_table:embedding_hash_table_factory",
-        "@com_google_absl//absl/algorithm:container",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "//idl:example_cc_proto",
-        "//monolith/native_training/data/training_instance:data_reader",
-        "//monolith/native_training/runtime/ops:traceme",
-    ],
-)
-
 tf_gpu_kernel_library_allow_except(
     name = "hash_filter_ops",
     srcs = [
@@ -596,17 +566,6 @@ cc_library(
     ] + select({
         "@org_tensorflow//tensorflow:framework_shared_object": [":serving_deps_with_framework_shared_object"],
         "//conditions:default": [],
-    }) + select({
-        ":serving_gpu": [
-            ":distribution_ops_lib",
-        ],
-        "//conditions:default": [],
     }),
     alwayslink = 1,
-)
-
-
-config_setting(
-    name = "serving_gpu",
-    define_values = {"using_cuda": "true"},
 )

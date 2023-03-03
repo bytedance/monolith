@@ -43,6 +43,11 @@ def disable_gpu_training():
   _GPU_PLACEMENT_ALLOWED = False
 
 
+def is_gpu_training():
+  global _GPU_PLACEMENT_ALLOWED
+  return _GPU_PLACEMENT_ALLOWED
+
+
 def get_visible_gpus(local_rank, processes_per_gpu=1):
   """
   Visible GPU devices string for session config.

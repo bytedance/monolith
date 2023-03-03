@@ -497,8 +497,12 @@ def fused_embedding_to_layout_grad(
   }
   variant_type = 'example_batch' if variant_type == 'examplebatch' else variant_type
   if layout_tensors_grad_scale is not None:
-    logging.info(f"fused_embedding_to_layout_grad use layout_tensors_grad_scale")
-    layout_tensors_grad *= layout_tensors_grad_scale
+    logging.info(
+        f"fused_embedding_to_layout_grad use layout_tensors_grad_scale")
+    #TODO fuse layout_tensors_grad_scale to op
+    layout_tensors_grad = [
+        layout_tensors_grad_scale * grad for grad in layout_tensors_grad
+    ]
   if version != 4:
     assert fid_list_emb_row_lenth is None
   if version == 4:

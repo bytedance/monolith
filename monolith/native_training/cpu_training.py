@@ -153,14 +153,16 @@ def create_exporter(task,
                     warmup_file,
                     export_dir_base,
                     dense_only,
-                    include_graphs=None):
+                    include_graphs=None,
+                    export_context_list=None):
   if task._params.serving.export_mode == ExportMode.STANDALONE:
     exporter = saved_model_exporters.StandaloneExporter(
         task.create_model_fn(),
         model_dir=model_dir,
         export_dir_base=export_dir_base,
         shared_embedding=task._params.serving.shared_embedding,
-        warmup_file=warmup_file)
+        warmup_file=warmup_file,
+        export_context_list=export_context_list)
   elif task._params.serving.export_mode == ExportMode.DISTRIBUTED:
     exporter = saved_model_exporters.DistributedExporter(
         task.create_model_fn(),
@@ -168,6 +170,7 @@ def create_exporter(task,
         export_dir_base=export_dir_base,
         shared_embedding=task._params.serving.shared_embedding,
         warmup_file=warmup_file,
+        export_context_list=export_context_list,
         dense_only=dense_only,
         allow_gpu=task._params.serving.export_with_gpu_allowed,
         clear_entry_devices=task._params.serving.
@@ -212,11 +215,12 @@ class _CpuFeatureFactory(feature.FeatureFactoryFromEmbeddings):
                                             global_step,
                                             req_time=req_time).as_op()
 
-  def apply_gradients(self,
-                      grads_and_vars: Iterable[Tuple[tf.Tensor, tf.Tensor]],
-                      req_time: tf.Tensor = None,
-                      # scale is ignored in async training
-                      scale=1):
+  def apply_gradients(
+      self,
+      grads_and_vars: Iterable[Tuple[tf.Tensor, tf.Tensor]],
+      req_time: tf.Tensor = None,
+      # scale is ignored in async training
+      scale=1):
     if req_time is None:
       req_time = self._req_time
     emb_grads = utils.propagate_back_gradients(grads_and_vars,
@@ -431,7 +435,8 @@ def _make_serving_config_from_training_config(
   serving_config.enable_model_ckpt_info = False
   if serving_config.enable_sync_training:
     serving_config.enable_sync_training = False
-    serving_config.num_ps = training_config.num_workers
+    if not serving_config.enable_partial_sync_training:
+      serving_config.num_ps = training_config.num_workers
   if serving_config.enable_partial_sync_training:
     serving_config.enable_partial_sync_training = False
   return serving_config
@@ -488,8 +493,6 @@ class CpuTraining:
     if config.use_native_multi_hash_table is None:
       config.use_native_multi_hash_table = True
 
-    get_default_parser_ctx().enable_fused_layout = config.enable_fused_layout
-
     FLAGS.dataset_worker_idx = config.index
     FLAGS.dataset_num_workers = config.num_workers
 
@@ -502,12 +505,6 @@ class CpuTraining:
     self._slot_to_occurrence_threshold = {}
     self._slot_to_expire_time = {}
     self._sync_backend = sync_backend
-    if export_context.is_exporting():
-      self._enable_gpu_emb = False
-      self._use_gpu = export_context.get_current_export_ctx().with_remote_gpu
-    else:
-      self._enable_gpu_emb = self._params.train.use_gpu_emb_table
-      self._use_gpu = config.enable_gpu_training
 
     # Gather extra configs for initialization earlier here.
     with native_task_context.with_ctx(
@@ -544,23 +541,37 @@ class CpuTraining:
         self._dummy_merged_table = multi_type_hash_table.MergedMultiTypeHashTable(
             self.feature_configs[0], lambda *args, **kwargs: None)
 
-    if get_default_parser_ctx().enable_fused_layout:
-      # same param to fused_layout
-      (feature_name_config, feature_to_unmerged_slice_dims,
-       feature_to_combiner) = self.feature_configs
-      get_default_parser_ctx(
-      ).sharding_sparse_fids_op_params = distributed_ps.PartitionedHashTable.gen_feature_configs(
-          num_ps=self.config.num_workers
-          if self._enable_gpu_emb else self.config.num_ps,
-          feature_name_to_config=feature_name_config,
-          layout_configs=self._task.layout_dict,
-          feature_to_combiner=feature_to_combiner,
-          feature_to_unmerged_slice_dims=feature_to_unmerged_slice_dims,
-          use_native_multi_hash_table=self.config.use_native_multi_hash_table,
-          unique=lambda: False if is_exporting() else True,
-          transfer_float16=False,
-          enable_gpu_emb=self._enable_gpu_emb,
-          use_gpu=self._use_gpu)
+      #for training
+      self._init_fused_layout_params()
+
+      class ExportAuxiliaryCtx(ParserCtx):
+
+        def __enter__(ctx_self):
+          ctx_self.use_gpu_emb_table = self._params.train.use_gpu_emb_table
+          self._params.train.use_gpu_emb_table = False
+
+          ctx_self.enable_gpu = device_utils.is_gpu_training()
+          if export_context.get_current_export_ctx().with_remote_gpu:
+            device_utils.enable_gpu_training()
+          else:
+            device_utils.disable_gpu_training()
+
+          super().__enter__()
+          self._init_fused_layout_params()
+
+          return ctx_self
+
+        def __exit__(ctx_self, exc_type, exc_val, exc_tb):
+          super().__exit__(exc_type, exc_val, exc_tb)
+
+          if ctx_self.enable_gpu:
+            device_utils.enable_gpu_training()
+          else:
+            device_utils.disable_gpu_training()
+
+          self._params.train.use_gpu_emb_table = ctx_self.use_gpu_emb_table
+
+      self._export_context_list = [ExportAuxiliaryCtx]
 
   @property
   def config(self) -> CpuTrainingConfig:
@@ -576,6 +587,33 @@ class CpuTraining:
     if export_context.is_exporting():
       return self._serving_feature_configs_do_not_refer_directly
     return self._feature_configs_do_not_refer_directly
+
+  def _init_fused_layout_params(self) -> None:
+
+    parse_ctx = get_default_parser_ctx()
+
+    parse_ctx.enable_fused_layout = self.config.enable_fused_layout
+    if parse_ctx.enable_fused_layout:
+      parse_ctx.sharding_sparse_fids_op_params = None
+      # same param to fused_layout
+      (feature_name_config, feature_to_unmerged_slice_dims,
+       feature_to_combiner) = self.feature_configs
+      parse_ctx.sharding_sparse_fids_op_params = distributed_ps.PartitionedHashTable.gen_feature_configs(
+          num_ps=self.config.num_workers
+          if self._params.train.use_gpu_emb_table else self.config.num_ps,
+          feature_name_to_config=feature_name_config,
+          layout_configs=self._task.layout_dict,
+          feature_to_combiner=feature_to_combiner,
+          feature_to_unmerged_slice_dims=feature_to_unmerged_slice_dims,
+          use_native_multi_hash_table=self.config.use_native_multi_hash_table,
+          unique=lambda: False if is_exporting() else True,
+          transfer_float16=False,
+          enable_gpu_emb=self._params.train.use_gpu_emb_table,
+          use_gpu=export_context.get_current_export_ctx().with_remote_gpu
+          if export_context.is_exporting() else self.config.enable_gpu_training)
+      logging.info(
+          f"_init_fused_layout_params {export_context.is_exporting()} {self._params.train.use_gpu_emb_table} {parse_ctx.sharding_sparse_fids_op_params.enable_gpu_emb}  {parse_ctx.sharding_sparse_fids_op_params.use_gpu}"
+      )
 
   def create_input_fn(self, mode):
 
@@ -691,7 +729,7 @@ class CpuTraining:
       else:
         with device_utils.maybe_device_if_allowed(
             '/device:GPU:0'
-        ) if self._enable_gpu_emb else contextlib.nullcontext():
+        ) if self._params.train.use_gpu_emb_table else contextlib.nullcontext():
           hash_filters = hash_filter_ops.create_hash_filters(
               self.config.num_ps,
               self._enable_hash_filter,
@@ -752,15 +790,15 @@ class CpuTraining:
         if self.config.enable_fused_layout:
           return distributed_ps_factory.create_partitioned_hash_table(
               num_ps=self.config.num_workers
-              if self._enable_gpu_emb else self.config.num_ps,
+              if self._params.train.use_gpu_emb_table else self.config.num_ps,
               use_native_multi_hash_table=self.config.
               use_native_multi_hash_table,
               max_rpc_deadline_millis=self.config.max_rpc_deadline_millis,
-              hash_filters=hash_filters *
-              self.config.num_workers if self._enable_gpu_emb else hash_filters,
-              sync_clients=sync_clients *
-              self.config.num_workers if self._enable_gpu_emb else sync_clients,
-              enable_gpu_emb=self._enable_gpu_emb,
+              hash_filters=hash_filters * self.config.num_workers
+              if self._params.train.use_gpu_emb_table else hash_filters,
+              sync_clients=sync_clients * self.config.num_workers
+              if self._params.train.use_gpu_emb_table else sync_clients,
+              enable_gpu_emb=self._params.train.use_gpu_emb_table,
               queue_configs=queue_configs), hash_filters
         elif self.config.use_native_multi_hash_table:
           return distributed_ps_factory.create_in_worker_native_multi_hash_table(
@@ -864,7 +902,9 @@ class CpuTraining:
               basename,
               hash_filters,
               self._enable_hash_filter,
-              enable_save_restore=(not self.config.enable_full_sync_training)),
+              enable_save_restore=(
+                  not self.config.enable_full_sync_training and
+                  self.config.filter_type != FilterType.PROBABILISTIC_FILTER)),
           CustomRestoreListener(
               self.config.reload_alias_map,
               self.config.clear_nn,
@@ -903,12 +943,14 @@ class CpuTraining:
         export_dir_base = os.path.join(model_dir,
                                        self._params.serving.export_dir_base)
       # TODO(leqi.zou): Needs to do lifecycle management for exported model.
+
       exporter = create_exporter(self,
                                  model_dir=model_dir,
                                  warmup_file=self.config.warmup_file,
                                  export_dir_base=export_dir_base,
                                  dense_only=dense_only,
-                                 include_graphs=include_graphs)
+                                 include_graphs=include_graphs,
+                                 export_context_list=self._export_context_list)
       barrier_listeners = []
       if self.config.enable_sync_training and not dense_only:
         barrier_listeners.append(
@@ -980,6 +1022,7 @@ class CpuTraining:
         include_graphs = [f"ps_{self.config.index}"]
         if is_root_node:
           include_graphs.append("entry")
+          include_graphs.append("dense_0")
 
       save_listeners += get_saver_listeners_for_exporting(
           basename,
@@ -1609,6 +1652,7 @@ def _do_worker_train(config: DistributedCpuTrainingConfig,
   if not isinstance(native_task, NativeTask):
     raise ValueError(
         "distributed train only support NativeTask. Got {}".format(native_task))
+
   if params.serving.with_remote_gpu and config.enable_model_dump:
     # 当with_remote_gpu=True时，export时会在dense subgraph中运行model_fn
     # 导致dump下来的infer model不完整，缺少serving_input_receiver_fn信息
@@ -1633,6 +1677,8 @@ def _do_worker_train(config: DistributedCpuTrainingConfig,
         session_creation_timeout_secs=config.session_creation_timeout_secs,
         device_fn=config.device_fn)
 
+    if config.enable_partial_sync_training:
+      native_task = sync_training_hooks.EofAwareTask(native_task)
     training = CpuTraining(config, native_task)
     estimator = tf.estimator.Estimator(training.create_model_fn(),
                                        config=run_config)

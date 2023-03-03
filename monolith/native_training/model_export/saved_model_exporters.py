@@ -15,6 +15,7 @@
 import abc
 import os
 import time
+import contextlib
 from typing import Callable, Dict, List, Union
 
 from absl import logging
@@ -45,7 +46,8 @@ class BaseExporter(abc.ABC):
                model_dir: str,
                export_dir_base: str,
                shared_embedding=False,
-               warmup_file: str = None):
+               warmup_file: str = None,
+               export_context_list: List = None):
     """
     Args:    
       model_fn - the model fn which should have (features, mode, config) as args
@@ -59,6 +61,7 @@ class BaseExporter(abc.ABC):
     self._export_dir_base = export_dir_base
     self._shared_embedding = shared_embedding
     self._warmup_file = warmup_file
+    self._export_context_list = export_context_list if export_context_list is not None else []
 
   @staticmethod
   def create_asset_base():
@@ -371,10 +374,11 @@ class StandaloneExporter(BaseExporter):
                model_dir: str,
                export_dir_base: str,
                shared_embedding=False,
-               warmup_file: str = None):
+               warmup_file: str = None,
+               export_context_list: List = None):
     super(StandaloneExporter,
           self).__init__(model_fn, model_dir, export_dir_base, shared_embedding,
-                         warmup_file)
+                         warmup_file, export_context_list)
 
   def export_saved_model(self,
                          serving_input_receiver_fn,
@@ -392,7 +396,11 @@ class StandaloneExporter(BaseExporter):
       checkpoint_path = tf.train.latest_checkpoint(self._model_dir)
 
     with export_context.enter_export_mode(
-        export_context.ExportMode.STANDALONE) as export_ctx:
+        export_context.ExportMode.STANDALONE
+    ) as export_ctx, contextlib.ExitStack() as stack:
+      other_contexts = [
+          stack.enter_context(ctx()) for ctx in self._export_context_list
+      ]
       saved_tf_config = os.environ.pop("TF_CONFIG", None)
       try:
         with tf.Graph().as_default() as g:
@@ -432,6 +440,7 @@ class DistributedExporter(BaseExporter):
                export_dir_base: str,
                shared_embedding=False,
                warmup_file: str = None,
+               export_context_list: List = None,
                dense_only=False,
                allow_gpu=False,
                with_remote_gpu=False,
@@ -440,7 +449,7 @@ class DistributedExporter(BaseExporter):
                global_step_as_timestamp: bool = False):
     super(DistributedExporter,
           self).__init__(model_fn, model_dir, export_dir_base, shared_embedding,
-                         warmup_file)
+                         warmup_file, export_context_list)
     self._dense_only = dense_only
     self._allow_gpu = allow_gpu
     self._with_remote_gpu = with_remote_gpu
@@ -472,8 +481,12 @@ class DistributedExporter(BaseExporter):
     export_ctx = export_context.ExportContext(
         with_remote_gpu=self._with_remote_gpu)
 
-    with export_context.enter_export_mode(export_context.ExportMode.DISTRIBUTED,
-                                          export_ctx):
+    with export_context.enter_export_mode(
+        export_context.ExportMode.DISTRIBUTED,
+        export_ctx), contextlib.ExitStack() as stack:
+      other_contexts = [
+          stack.enter_context(ctx()) for ctx in self._export_context_list
+      ]
 
       saved_tf_config = os.environ.pop("TF_CONFIG", None)
       result = {}

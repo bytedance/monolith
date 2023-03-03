@@ -198,6 +198,12 @@ class DatasetMetaclass(type):
       logging.info(f"all_input_files {all_input_files}")
       kwargs['patterns'] = all_input_files
 
+      # dataset_input_patterns will use DistributedFilePBDataset, "file_name" param will cause conflict
+      # meanwhile "file_name" param is useless, but user code fill this param as default in model.py
+      # to fix this problem, pop this params
+      if "file_name" in kwargs:
+        kwargs.pop("file_name")
+
     if FLAGS.dataset_input_use_parquet is not None:
       kwargs['use_parquet'] = FLAGS.dataset_input_use_parquet
 
@@ -462,6 +468,8 @@ class FilePBDataset(dataset_ops.DatasetSource):
       use_snappy = FLAGS.dataset_input_use_snappy
       logging.info(
           f"FilePBDataset change use_snappy {FLAGS.dataset_input_use_snappy}")
+    if use_snappy is None:
+      use_snappy = False
     assert use_snappy is not None
     variant_tensor = pb_datasource_ops.pb_dataset(
         file_name=file_name,

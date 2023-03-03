@@ -19,6 +19,7 @@ from typing import Dict, List
 from unittest import mock
 
 import tensorflow as tf
+import tensorflow.python.ops.resources as resources
 
 from monolith.native_training import basic_restore_hook
 from monolith.native_training import entry
@@ -195,6 +196,7 @@ class MultiTypeHashTableTest(tf.test.TestCase, parameterized.TestCase):
     with self.session() as sess:
       saver_hook.begin()
       sess.run(tf.compat.v1.global_variables_initializer())
+      resources.initialize_resources(resources.shared_resources()).run()
       # In the estimator API, graph will be finalized before calling hook
       g = tf.compat.v1.get_default_graph()
       g.finalize()
