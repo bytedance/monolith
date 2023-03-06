@@ -469,7 +469,7 @@ void ForwardTaskRunImpl(int slice_conf_i, int dim_num, int64 nfl_idx,
                  &is_shared, &nfl_offset, &feature_num);
   if (!feature_num) return;  // nfl exits
 
-  std::unique_ptr<float> tmp;
+  std::unique_ptr<float[]> tmp;
   if (is_shared && (out_type == OutType::ADDN)) {
     tmp.reset(new float[dim_num]());
   }
