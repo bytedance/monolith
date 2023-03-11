@@ -27,7 +27,18 @@ TEST(ValidateShardedFilesTest, Basic) {
   TF_EXPECT_OK(ValidateShardedFiles("a/b", {"a/b-00000-of-00001"}));
   TF_EXPECT_OK(ValidateShardedFiles(
       "a/b", {"a/b-00000-of-00002", "a/b-00001-of-00002"}));
+  TF_EXPECT_OK(ValidateShardedFiles(
+      "a", {"a-00000-of-00001", "a-00000-of-00001-tmp-1234"}));
+  TF_EXPECT_OK(ValidateShardedFiles(
+      "a", {"a-00000-of-00001", "a-00000-of-00002-tmp-1234"}));
   EXPECT_FALSE(ValidateShardedFiles("a/b", {"a/b-00000-of-00002"}).ok());
+  EXPECT_FALSE(
+      ValidateShardedFiles("a/b", {"a/b-00000-of-00001", "a/b-00001-of-00001"})
+          .ok());
+  EXPECT_FALSE(
+      ValidateShardedFiles("a/b", {"a/b-00000-of-00001", "a/b-00000-of-00002",
+                                   "a/b-00001-of-00002"})
+          .ok());
   EXPECT_FALSE(ValidateShardedFiles("a/b", {"random-string"}).ok());
   EXPECT_FALSE(ValidateShardedFiles("a/b", {"a/b-random-string"}).ok());
 }

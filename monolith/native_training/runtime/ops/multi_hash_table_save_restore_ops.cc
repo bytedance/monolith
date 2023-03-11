@@ -123,9 +123,8 @@ class MultiHashTableSaveOp : public AsyncOpKernel {
                                      &slot_expire_time_config_serialized_));
     if (!slot_expire_time_config_serialized_.empty()) {
       OP_REQUIRES(
-          ctx,
-          slot_expire_time_config_.ParseFromString(
-              slot_expire_time_config_serialized_),
+          ctx, slot_expire_time_config_.ParseFromString(
+                   slot_expire_time_config_serialized_),
           errors::InvalidArgument("Unable to parse config. Make sure it "
                                   "is serialized version of "
                                   "SlotExpireTimeConfig."));
@@ -181,11 +180,9 @@ class MultiHashTableSaveOp : public AsyncOpKernel {
     const std::string meta_filename =
         GetShardedMetadataFileName(p->basename, shard.idx, shard.total);
     const std::string tmp_filename =
-        GetShardedFileName(absl::StrCat(p->basename, "-tmp-", random::New64()),
-                           shard.idx, shard.total);
-    const std::string tmp_meta_filename = GetShardedMetadataFileName(
-        absl::StrCat(p->basename, "-tmp-", random::New64()), shard.idx,
-        shard.total);
+        absl::StrCat(filename, "-tmp-", random::New64());
+    const std::string tmp_meta_filename =
+        absl::StrCat(meta_filename, "-tmp-", random::New64());
     std::unique_ptr<WritableFile> fp;
     TF_RETURN_IF_ERROR(p->ctx->env()->NewWritableFile(tmp_filename, &fp));
     std::unique_ptr<WritableFile> fp_meta;
@@ -472,24 +469,21 @@ class MultiHashTableFeatureStatOp : public OpKernel {
         feature_count[meta.table_name()] += meta.num_entries();
       }
 
-      OP_REQUIRES(
-          ctx, eof,
-          errors::DataLoss("Couldn't read all of checkpoint shard ", idx));
+      OP_REQUIRES(ctx, eof, errors::DataLoss(
+                                "Couldn't read all of checkpoint shard ", idx));
     }
 
     int num_tables = feature_count.size();
     Tensor* features;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0,
-                                             TensorShape({
-                                                 num_tables,
-                                             }),
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({
+                                                    num_tables,
+                                                }),
                                              &features));
     auto features_vec = features->vec<tstring>();
     Tensor* counts;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(1,
-                                             TensorShape({
-                                                 num_tables,
-                                             }),
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(1, TensorShape({
+                                                    num_tables,
+                                                }),
                                              &counts));
     auto counts_vec = counts->vec<uint64_t>();
     int feature_iter = 0;

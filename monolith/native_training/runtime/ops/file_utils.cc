@@ -15,6 +15,7 @@
 #include "monolith/native_training/runtime/ops/file_utils.h"
 
 #include "absl/strings/str_format.h"
+#include "re2/re2.h"
 #include "tensorflow/core/platform/errors.h"
 
 namespace tensorflow {
@@ -40,11 +41,10 @@ Status ValidateShardedFiles(absl::string_view basename,
     }
     absl::string_view suffix = filename.substr(basename.size());
     int shard, nshards;
-    // TODO(leqi.zou): should use RE2 here.
-    if (!absl::SimpleAtoi(suffix.substr(1, 5), &shard) ||
-        suffix.substr(6, 4) != "-of-" ||
-        !absl::SimpleAtoi(suffix.substr(10), &nshards)) {
-      return errors::InvalidArgument("Filename ", filename, " is invalid");
+    // Ignore invalid files.
+    if (!RE2::FullMatch(suffix, R"raw(-(\d{5})?-of-(\d{5})?)raw", &shard,
+                        &nshards)) {
+      continue;
     }
     if (show.empty()) {
       show.resize(nshards);
@@ -53,7 +53,15 @@ Status ValidateShardedFiles(absl::string_view basename,
       return errors::InvalidArgument("Filename ", filename,
                                      " doesn't match nshards. ", show.size());
     }
+    if (shard >= nshards) {
+      return errors::InvalidArgument("Shard ", shard, "exceeds ", nshards,
+                                     " for ", filename);
+    }
     show[shard] = true;
+  }
+  if (show.empty()) {
+    return errors::InvalidArgument("There is no valid sharded files for ",
+                                   basename);
   }
   for (int i = 0; i < (int)show.size(); ++i) {
     if (!show[i]) {

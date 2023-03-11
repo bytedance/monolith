@@ -2,6 +2,7 @@ load("@rules_cc//cc:defs.bzl", "cc_library", "cc_proto_library", "cc_test")
 load("@org_tensorflow//tensorflow:tensorflow.bzl", "cc_header_only_library", "tf_cc_test", "tf_custom_op_library", "tf_gen_op_wrapper_py", "tf_gpu_kernel_library_allow_except", "tf_kernel_library")
 load("@com_google_protobuf//:protobuf.bzl", "py_proto_library")
 load("@rules_proto//proto:defs.bzl", "proto_library")
+
 package(default_visibility = [
     "//monolith:__subpackages__",
     "@org_tensorflow//:__subpackages__",
@@ -92,6 +93,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_protobuf//:protobuf_lite",
+        "@com_googlesource_code_re2//:re2",
         "@org_tensorflow//tensorflow/core:framework_headers_lib",
         "@org_tensorflow//tensorflow/core/kernels:ops_util_hdrs",
     ],
@@ -255,12 +257,12 @@ py_library(
 tf_kernel_library(
     name = "distribution_ops",
     srcs = [
-        "fused_embedding_to_layout.h",
+        "alloc_utils.h",
         "fused_embedding_to_layout.cc",
+        "fused_embedding_to_layout.h",
         "fused_reorder_by_indices.cc",
         "map_id_to_embedding_op.cc",
         "reduce_op.cc",
-        "alloc_utils.h",
         "split_by_indices_op.cc",
         "static_reshape_op.cc",
         "unique_mapping_ops.cc",
@@ -274,7 +276,7 @@ tf_kernel_library(
         "alloc_utils.h",
         "fused_embedding_to_layout.h",
         "fused_embedding_to_layout.cu.cc",
-        "aligned_concat_split.cu.cc"
+        "aligned_concat_split.cu.cc",
     ],
     # TODO: Figure out how to link "@org_tensorflow//tensorflow/core/kernels:cwise_lib_hdrs" for fill_functor.h
     deps = [
