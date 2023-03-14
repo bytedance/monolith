@@ -50,13 +50,15 @@ class HashFilterRestoreOp : public AsyncOpKernel {
         ctx, ctx->env()->GetMatchingPaths(absl::StrCat(basename, "-*"), &files),
         done);
 
-    OP_REQUIRES_OK_ASYNC(ctx, ValidateShardedFiles(basename, files), done);
-    OP_REQUIRES_ASYNC(ctx, !files.empty(),
+    FileSpec file_spec;
+    OP_REQUIRES_OK_ASYNC(ctx, ValidateShardedFiles(basename, files, &file_spec),
+                         done);
+    OP_REQUIRES_ASYNC(ctx, file_spec.nshards() > 0,
                       errors::NotFound("Unable to find the dump files for: ",
                                        name(), " in ", basename),
                       done);
     ctx->set_output(0, ctx->input(0));
-    int nsplits = files.size();
+    int nsplits = file_spec.nshards();
     auto pack = new HashFilterAsyncPack(ctx, hash_filter, basename,
                                         std::move(done), nsplits);
     for (int i = 0; i < nsplits; ++i) {

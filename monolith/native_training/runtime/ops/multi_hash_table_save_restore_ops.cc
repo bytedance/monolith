@@ -271,13 +271,15 @@ class MultiHashTableRestoreOp : public AsyncOpKernel {
         ctx, ctx->env()->GetMatchingPaths(absl::StrCat(basename, "-*"), &files),
         done);
 
-    OP_REQUIRES_OK_ASYNC(ctx, ValidateShardedFiles(basename, files), done);
-    OP_REQUIRES_ASYNC(ctx, !files.empty(),
+    FileSpec file_spec;
+    OP_REQUIRES_OK_ASYNC(ctx, ValidateShardedFiles(basename, files, &file_spec),
+                         done);
+    OP_REQUIRES_ASYNC(ctx, file_spec.nshards() > 0,
                       errors::NotFound("Unable to find the dump files for: ",
                                        name(), " in ", basename),
                       done);
 
-    int nshards = files.size();
+    int nshards = file_spec.nshards();
     auto pack = std::make_shared<const AsyncPack<TableType>>(
         ctx, std::move(mtable), basename,
         std::vector<std::unique_ptr<EmbeddingHashTableTfBridge::LockCtx>>(),

@@ -26,9 +26,29 @@ namespace monolith_tf {
 std::string GetShardedFileName(absl::string_view basename, int shard,
                                int nshards);
 
+// A spec reprsents a set of files.
+class FileSpec final {
+ public:
+  FileSpec() {}
+
+  static FileSpec ShardedFileSpec(absl::string_view prefix, int nshards);
+
+  std::vector<std::string> GetFilenames() const;
+
+  int nshards() const { return nshards_; }
+
+ private:
+  enum Type { UNKNOWN, SHARDED_FILES };
+
+  Type type_ = UNKNOWN;
+  std::string prefix_;
+  int nshards_ = 0;
+};
+
 // Validates if filenames construct a valid file spec for base name.
 Status ValidateShardedFiles(absl::string_view basename,
-                            absl::Span<const std::string> filenames);
+                            absl::Span<const std::string> filenames,
+                            FileSpec* spec = nullptr);
 
 }  // namespace monolith_tf
 }  // namespace tensorflow

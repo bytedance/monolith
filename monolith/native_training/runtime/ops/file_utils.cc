@@ -32,7 +32,8 @@ std::string GetShardedFileName(absl::string_view basename, int shard,
 }
 
 Status ValidateShardedFiles(absl::string_view basename,
-                            absl::Span<const std::string> filenames) {
+                            absl::Span<const std::string> filenames,
+                            FileSpec* spec) {
   std::vector<bool> show;
   for (absl::string_view filename : filenames) {
     if (filename.substr(0, basename.size()) != basename) {
@@ -69,7 +70,33 @@ Status ValidateShardedFiles(absl::string_view basename,
                                      basename);
     }
   }
+
+  if (spec != nullptr) {
+    *spec = FileSpec::ShardedFileSpec(basename, show.size());
+  }
   return Status::OK();
+}
+
+FileSpec FileSpec::ShardedFileSpec(absl::string_view prefix, int nshards) {
+  FileSpec spec;
+  spec.type_ = FileSpec::SHARDED_FILES;
+  spec.prefix_ = std::string(prefix);
+  spec.nshards_ = nshards;
+  return spec;
+}
+
+std::vector<std::string> FileSpec::GetFilenames() const {
+  std::vector<std::string> filenames;
+  switch (type_) {
+    case FileSpec::SHARDED_FILES:
+      for (int i = 0; i < nshards_; ++i) {
+        filenames.push_back(GetShardedFileName(prefix_, i, nshards_));
+      }
+      break;
+    default:
+      break;
+  }
+  return filenames;
 }
 
 }  // namespace monolith_tf

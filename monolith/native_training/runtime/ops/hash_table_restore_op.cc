@@ -77,8 +77,10 @@ class HashTableRestoreOp : public AsyncOpKernel {
         ctx, ctx->env()->GetMatchingPaths(absl::StrCat(basename, "-*"), &files),
         done);
 
-    OP_REQUIRES_OK_ASYNC(ctx, ValidateShardedFiles(basename, files), done);
-    OP_REQUIRES_ASYNC(ctx, !files.empty(),
+    FileSpec file_spec;
+    OP_REQUIRES_OK_ASYNC(ctx, ValidateShardedFiles(basename, files, &file_spec),
+                         done);
+    OP_REQUIRES_ASYNC(ctx, file_spec.nshards() > 0,
                       errors::NotFound("Unable to find the dump files for: ",
                                        name(), " in ", basename),
                       done);
@@ -122,8 +124,7 @@ class HashTableRestoreOp : public AsyncOpKernel {
     io::SequentialRecordReader reader(f.get(), opts);
     Status restore_status;
     auto get_fn = [&reader, &restore_status, &p](
-                      EmbeddingHashTableTfBridge::EntryDump* dump,
-                      int64_t* max_update_ts) {
+        EmbeddingHashTableTfBridge::EntryDump* dump, int64_t* max_update_ts) {
       Status s = GetRecord(&reader, dump);
       if (TF_PREDICT_FALSE(!s.ok())) {
         if (!errors::IsOutOfRange(s)) {
