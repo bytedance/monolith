@@ -38,6 +38,7 @@ from tensorflow_serving.apis.model_management_pb2 import ReloadConfigRequest
 from tensorflow_serving.config.model_server_config_pb2 import ModelServerConfig
 from monolith.agent_service import utils
 from monolith.agent_service.client import FLAGS
+from monolith.native_training.data.utils import enable_to_env
 from monolith.native_training.data.feature_list import FeatureList, get_feature_name_and_slot
 from idl.matrix.proto.example_pb2 import Example, ExampleBatch, FeatureListType, Feature
 from idl.matrix.proto.line_id_pb2 import LineId
@@ -56,6 +57,9 @@ flags.DEFINE_bool("lagrangex_header", False, "wheather has lagrangex_header")
 flags.DEFINE_bool("has_sort_id", False, "wheather has sort_id")
 flags.DEFINE_bool("kafka_dump", False, "wheather has kafka_dump")
 flags.DEFINE_bool("kafka_dump_prefix", False, "wheather has kafka_dump_prefix")
+flags.DEFINE_integer("parallel_num", 1, "parallel_num for profile")
+flags.DEFINE_integer("profile_duration", 600, "second for profile")
+flags.DEFINE_string("profile_data_dir", None, "profile input dir")
 
 SKIP_LIST = {
     '-', '_lt_', '_st_', '_lt', '_st', '_cp_', '_recent_', '_cp', '_recent'
@@ -192,7 +196,7 @@ def get_example_batch_proto(input_file: str = None,
   return utils.make_tensor_proto([example_batch])
 
 
-def gen_random_file(input_file):
+def gen_random_file(input_file, variant_type="example_batch"):
   assert input_file is not None
   assert len(VALID_SLOTS) > 0
   parser_args = data_gen_utils.ParserArgs(
@@ -205,7 +209,7 @@ def gen_random_file(input_file):
       ],
       extra_feature_shapes=[1, 1, 1, 1, 1, 1, 1, 1],
       batch_size=FLAGS.batch_size,
-      variant_type="example_batch")
+      variant_type=variant_type)
   actions = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
   data_gen_utils.gen_random_data_file(input_file,
@@ -303,11 +307,12 @@ def get_example_batch_to_instance(input_file: str, file_type: str):
 
 class ProfileThread(threading.Thread):
 
-  def __init__(self, model_name, stub, repeat_times, data_cache):
+  def __init__(self, job_id, model_name, stub_list, repeat_time, data_cache):
     super(ProfileThread, self).__init__()
+    self._job_id = job_id
     self._model_name = model_name
-    self._stub = stub
-    self._repeat_times = repeat_times
+    self._stub_list = stub_list
+    self._repeat_time = repeat_time
     self._data_cache = data_cache
     self._data_size = len(data_cache)
 
@@ -315,11 +320,16 @@ class ProfileThread(threading.Thread):
     self._req_time_ms_list = []
 
   def run(self):
-    while self._req_count < self._repeat_times:
+    run_st = int(time.time())
+    run_ed = run_st
+    show_count = 0
+    while run_ed - run_st < self._repeat_time:
       try:
-        if self._req_count % 100 == 0:
-          logging.info("Processing {}/{}".format(self._req_count,
-                                                 self._repeat_times))
+        if self._job_id == 0 and (run_ed - run_st) >= 60 * show_count:
+          logging.info("Processing {}. Time: {}/{}(s)".format(self._req_count,
+                                                              run_ed - run_st,
+                                                              self._repeat_time))
+          show_count += 1
         request = PredictRequest()
         request.model_spec.CopyFrom(
             utils.gen_model_spec(self._model_name,
@@ -327,7 +337,8 @@ class ProfileThread(threading.Thread):
         select = random.randint(0, self._data_size - 1)
         request.inputs["example_batch"].CopyFrom(self._data_cache[select])
         st = time.time() * 1000  # ms
-        response = self._stub.Predict(request, 30)
+        select = random.randint(0, len(self._stub_list) - 1)
+        response = self._stub_list[select].Predict(request, 30)
         ed = time.time() * 1000  # ms
         req_time_ms = ed - st
 
@@ -335,8 +346,8 @@ class ProfileThread(threading.Thread):
         self._req_count += 1
       except Exception as e:
         logging.info("Warning! call request failed. {}".format(repr(e)))
-        self._repeat_times -= 1
-        continue
+        pass
+      run_ed = int(time.time())
 
   def get_result(self):
     self.join()
@@ -344,6 +355,8 @@ class ProfileThread(threading.Thread):
 
 
 def main(_):
+  enable_to_env()
+
   env_utils.setup_host_ip()
   agent_conf = utils.AgentConfig.from_file(FLAGS.conf)
   host = os.environ.get("MY_HOST_IP",
@@ -365,7 +378,9 @@ def main(_):
   else:
     target = FLAGS.target or f"{host}:{agent_conf.tfs_entry_port}"
 
-  channel = grpc.insecure_channel(target)
+  target_list = target.split(',')
+  channel_list = [grpc.insecure_channel(tg) for tg in target_list]
+  channel = grpc.insecure_channel(target_list[0])
 
   if FLAGS.cmd_type == 'status':
     stub = ModelServiceStub(channel)
@@ -397,32 +412,39 @@ def main(_):
 
     return response.status
   elif FLAGS.cmd_type == 'profile':
+    assert len(VALID_SLOTS) > 0
     # ./tfs_client --conf=/path/agent.conf --cmd_type="get" --input_type="example_batch" --batch_size=128 --has_sort_id
     data_path_list = []
-    base_data_dir = "/path/profile_data"
+    base_data_dir = FLAGS.profile_data_dir;
+    assert base_data_dir is not None
+    if not os.path.exists(base_data_dir):
+      os.makedirs(base_data_dir)
     for file_name in os.listdir(base_data_dir):
       data_path_list.append(os.path.join(base_data_dir, file_name))
     data_num = 500
+    from tqdm import tqdm
     if len(data_path_list) < data_num:
       add_num = data_num - len(data_path_list)
-      for i in range(add_num):
+      for i in tqdm(range(add_num), desc="gen_random_file"):
         data_path = os.path.join(base_data_dir, "{}.pb".format(uuid.uuid1()))
         gen_random_file(data_path)
         data_path_list.append(data_path)
+    data_path_list = data_path_list[:data_num]
 
     data_cache = []
-    for data_path in data_path_list:
+    for data_path in tqdm(data_path_list, desc="read_data"):
       data_cache.append(get_example_batch_proto_v2(data_path))
 
-    parallel_num = 12
-    repeat_times = 5000
+    parallel_num = FLAGS.parallel_num
+    repeat_time = FLAGS.profile_duration
 
-    stub = PredictionServiceStub(channel)
+    # stub = PredictionServiceStub(channel)
+    stub_list = [PredictionServiceStub(chnl) for chnl in channel_list]
 
     thread_list = []
     e2e_st = time.time() * 1000  # ms
     for i in range(parallel_num):
-      thread = ProfileThread(model_name, stub, repeat_times, data_cache)
+      thread = ProfileThread(i, model_name, stub_list, repeat_time, data_cache)
       thread.start()
       thread_list.append(thread)
 
@@ -443,9 +465,8 @@ def main(_):
       avg_req_time_ms = 0
       p99_req_time_ms = 0
       qps = 0
-    print(
-        "[Profile] Count: {}, Avg Latency: {}, P99 Latency: {}, QPS: {}".format(
-            len(total_req_time_ms_list), avg_req_time_ms, p99_req_time_ms, qps))
+    logging.info("[Profile] Count: {}, Avg Latency: {}, P99 Latency: {}, QPS: {}".format(
+        len(total_req_time_ms_list), avg_req_time_ms, p99_req_time_ms, qps))
   else:  # get
     # url = f"http://{target}/v1/models/{model_name}:{FLAGS.signature_name}"
     # cmd = ['curl', '-d', f"'{FLAGS.inputs}'", '-X', 'POST', url]
@@ -458,20 +479,16 @@ def main(_):
         utils.gen_model_spec(model_name, signature_name=FLAGS.signature_name))
 
     if FLAGS.input_type == 'instance':
+      if not os.path.exists(FLAGS.input_file):
+        gen_random_file(FLAGS.input_file, "instance")
       tensor_proto = get_instance_proto(FLAGS.input_file, FLAGS.batch_size)
       request.inputs["instances"].CopyFrom(tensor_proto)
     elif FLAGS.input_type == 'example_batch':
-      try:
-        feature_list = None
-        if FLAGS.input_file is None:
-          feature_list = FeatureList.parse(FLAGS.feature_list)
-        tensor_proto = get_example_batch_proto(FLAGS.input_file, feature_list,
-                                               FLAGS.batch_size,
-                                               FLAGS.file_type)
-      except:
+      if FLAGS.input_file is None:
         input_file = "{}.pb".format(uuid.uuid1())
-        tensor_proto = get_example_batch_proto_v2(input_file)
-        os.remove(input_file)
+      else:
+        input_file = FLAGS.input_file
+      tensor_proto = get_example_batch_proto_v2(input_file)
       request.inputs["example_batch"].CopyFrom(tensor_proto)
     else:
       tensor_proto = get_example_batch_to_instance(FLAGS.input_file,

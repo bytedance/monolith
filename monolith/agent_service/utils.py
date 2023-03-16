@@ -297,6 +297,7 @@ class AgentConfig(TfServingConfig):
     :param tfs_ps_port: TODO
     :param tfs_ps_http_port: TODO
     :param dense_alone: whether dense alone
+    :param dense_service_num: dense service num for mps
     :param tfs_dense_port: TODO
     :param tfs_dense_http_port: TODO
     :param agent_port: TODO
@@ -334,6 +335,7 @@ class AgentConfig(TfServingConfig):
   tfs_ps_http_port: int = None
   tfs_ps_archon_port: int = None
   dense_alone: bool = False
+  dense_service_num: int = 3
   tfs_dense_port: int = None
   tfs_dense_http_port: int = None
   tfs_dense_archon_port: int = None
@@ -387,11 +389,17 @@ class AgentConfig(TfServingConfig):
       self.tfs_ps_http_port = int(os.environ.get('PORT6', find_free_port()))
       self.tfs_ps_archon_port = int(os.environ.get('PORT7', find_free_port()))
       if self.dense_alone:
-        self.tfs_dense_port = int(os.environ.get('PORT8', find_free_port()))
-        self.tfs_dense_http_port = int(os.environ.get('PORT9',
-                                                      find_free_port()))
-        self.tfs_dense_archon_port = int(
-            os.environ.get('PORT10', find_free_port()))
+        dense_service_idx = int(os.environ.get('DENSE_SERVICE_IDX', '0'))
+        if dense_service_idx == 0:
+          self.tfs_dense_port = int(os.environ.get('PORT8', find_free_port()))
+          self.tfs_dense_http_port = int(os.environ.get('PORT9',
+                                                        find_free_port()))
+          self.tfs_dense_archon_port = int(os.environ.get('PORT10',
+                                                          find_free_port()))
+        else:
+          self.tfs_dense_archon_port = find_free_port()
+          self.tfs_dense_port = find_free_port()
+          self.tfs_dense_http_port = find_free_port()
     elif self.deploy_type == DeployType.ENTRY:
       self.proxy_port = find_free_port()
       self.tfs_ps_archon_port = find_free_port()
@@ -431,9 +439,15 @@ class AgentConfig(TfServingConfig):
       self.tfs_ps_port = find_free_port()
       self.tfs_ps_http_port = find_free_port()
 
-      self.tfs_dense_archon_port = int(os.environ.get('PORT', find_free_port()))
-      self.tfs_dense_port = int(os.environ.get('PORT3', find_free_port()))
-      self.tfs_dense_http_port = int(os.environ.get('PORT4', find_free_port()))
+      dense_service_idx = int(os.environ.get('DENSE_SERVICE_IDX', '0'))
+      if dense_service_idx == 0:
+        self.tfs_dense_archon_port = int(os.environ.get('PORT', find_free_port()))
+        self.tfs_dense_port = int(os.environ.get('PORT3', find_free_port()))
+        self.tfs_dense_http_port = int(os.environ.get('PORT4', find_free_port()))
+      else:
+        self.tfs_dense_archon_port = find_free_port()
+        self.tfs_dense_port = find_free_port()
+        self.tfs_dense_http_port = find_free_port()
     else:
       assert self.deploy_type == DeployType.UNIFIED
       self.tfs_port_archon = int(os.environ.get('PORT', find_free_port()))
@@ -470,9 +484,10 @@ class AgentConfig(TfServingConfig):
       if self.dense_alone and self.enable_batching:
         batching_parameters = session_bundle_config_pb2.BatchingParameters()
         batching_parameters.max_batch_size.value = 1024
-        batching_parameters.batch_timeout_micros.value = 0
+        batching_parameters.batch_timeout_micros.value = 800
         batching_parameters.max_enqueued_batches.value = 100000
-        batching_parameters.num_batch_threads.value = 2
+        batching_parameters.num_batch_threads.value = 8
+        batching_parameters.support_diff_dim_size_inputs = True
         legacy_config = session_bundle_config_pb2.SessionBundleConfig(
             session_config=session_config,
             batching_parameters=batching_parameters)
@@ -591,7 +606,15 @@ class AgentConfig(TfServingConfig):
       flags.append(f"--rest_api_port={self.tfs_dense_http_port}")
       flags.append(f'--archon_port={self.tfs_dense_archon_port}')
       if self.enable_batching:
-        flags.append(f'--enable_batching')
+        flags.append(f'--enable_batching=true')
+      flags.append(
+          f'--archon_entry_to_ps_rpc_timeout={self.fetch_ps_timeout_ms}')
+      flags.append(
+          f'--archon_entry_to_ps_long_conn_num={self.fetch_ps_long_conn_num}')
+      flags.append(f'--archon_entry_to_ps_rpc_retry={self.fetch_ps_retry}')
+      flags.append(f'--archon_async_dispatcher_threads={self.aio_thread_num}')
+      if not self.fetch_ps_long_conn_enable:
+        flags.append(f'--archon_entry_to_ps_long_conn_enable=false')
       port = self.tfs_dense_port
     else:
       flags.append(f"--port={self.tfs_entry_port}")

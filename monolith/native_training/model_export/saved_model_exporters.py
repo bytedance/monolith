@@ -24,6 +24,10 @@ import tensorflow as tf
 from tensorflow.core.protobuf import meta_graph_pb2
 from tensorflow.python.framework import ops
 from tensorflow.python.saved_model import constants
+from tensorflow.python.framework import graph_util
+from tensorflow.python.framework import importer
+from tensorflow.python.lib.io import file_io
+from tensorflow.python.saved_model.loader_impl import parse_saved_model
 from tensorflow_estimator.python.estimator.export import export_lib
 
 from monolith.native_training import device_utils
@@ -120,6 +124,48 @@ class BaseExporter(abc.ABC):
         method_name=tf.compat.v1.saved_model.signature_constants.
         PREDICT_METHOD_NAME)
 
+  def _get_tensor_name(self, name):
+    if name.startswith("^"):
+      return name[1:]
+    else:
+      return name.split(":")[0]
+
+  def _freeze_dense_graph(self, graph_def, signature_def_map, session):
+    dest_nodes = []
+    for signature in signature_def_map.values():
+      for input_item in signature.inputs.values():
+        dest_nodes.append(self._get_tensor_name(input_item.name))
+      for output_item in signature.outputs.values():
+        dest_nodes.append(self._get_tensor_name(output_item.name))
+    logging.info("freeze output_node_names: {}".format(dest_nodes))
+
+    # variable_names_whitelist = []
+    # for node in graph_def.node:
+    #   if node.op == 'VarHandleOp' and node.name.endswith('kernel'):
+    #     variable_names_whitelist.append(node.name)
+    # logging.info("freeze list: {}".format(variable_names_whitelist))
+    variable_names_whitelist = None
+
+    node_device = {}
+    for node in graph_def.node:
+      node_device[node.name] = node.device
+
+    forzen_graph_def = graph_util.convert_variables_to_constants(
+        session, graph_def, dest_nodes,
+        variable_names_whitelist=variable_names_whitelist)
+
+    exists_node_names = set()
+    for node in forzen_graph_def.node:
+      exists_node_names.add(node.name)
+      if node.name in node_device:
+        node.device = node_device[node.name]
+
+    # for node in graph_def.node:
+    #   if len(node.input) == 0 and node.name not in exists_node_names:
+    #     forzen_graph_def.node.append(node)
+
+    return forzen_graph_def
+
   def _export_saved_model_from_graph(
       self,
       graph: tf.Graph,
@@ -166,11 +212,11 @@ class BaseExporter(abc.ABC):
             assign_inputs, assign_outputs)
         self.add_multi_hashtable_assign_signatures(signature_def_map)
       '''
-      To export CPU-trained saved_model for GPU serving, it requires explicit 
-      GPU device placement at the exporting time. But it raised error here on 
-      CPU-only machines while exporting graph with ops explicitly placed on GPU 
-      (due to the necessity of loading the whole graph at runtime for calling save_op). 
-      So we use the soft placement here, to avoid raising runtime exceptions, 
+      To export CPU-trained saved_model for GPU serving, it requires explicit
+      GPU device placement at the exporting time. But it raised error here on
+      CPU-only machines while exporting graph with ops explicitly placed on GPU
+      (due to the necessity of loading the whole graph at runtime for calling save_op).
+      So we use the soft placement here, to avoid raising runtime exceptions,
       but still successfully record the correct GPU placements to the saved_model.
       '''
       with tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(
@@ -202,7 +248,108 @@ class BaseExporter(abc.ABC):
                                  main_op=restore_op,
                                  saver=graph_saver,
                                  strip_default_attrs=strip_default_attrs)
+        builder.add_meta_graph_and_variables(session, **meta_graph_kwargs)
+      builder.save()
 
+      # Add the extra assets
+      if assets_extra:
+        assets_extra_path = os.path.join(tf.compat.as_bytes(temp_export_dir),
+                                         tf.compat.as_bytes('assets.extra'))
+        for dest_relative, source in assets_extra.items():
+          dest_absolute = os.path.join(tf.compat.as_bytes(assets_extra_path),
+                                       tf.compat.as_bytes(dest_relative))
+          dest_path = os.path.dirname(dest_absolute)
+          tf.compat.v1.gfile.MakeDirs(dest_path)
+          tf.compat.v1.gfile.Copy(source, dest_absolute)
+
+      tf.io.gfile.rename(temp_export_dir, export_dir)
+      return export_dir if isinstance(export_dir,
+                                      bytes) else export_dir.encode()
+
+  def _export_frozen_saved_model_from_graph(
+      self,
+      graph: tf.Graph,
+      checkpoint_path: str,
+      export_dir_base: str = None,
+      export_dir: str = None,
+      restore_vars=True,
+      export_ctx: export_context.ExportContext = None,
+      export_tags=['serve'],
+      assets_extra=None,
+      clear_devices=False,
+      strip_default_attrs=True) -> bytes:
+    """
+    Export saved_model from a user constructed graph, a graph can have multiple signatures
+    Signautres are stored in export_ctx.signatures
+    """
+
+    assert export_dir or export_dir_base, "must provide export_dir or export_dir_base"
+
+    if export_ctx is None:
+      export_ctx = export_context.get_current_export_ctx()
+    assert export_ctx is not None
+
+    if not export_dir:
+      export_dir = export_lib.get_timestamped_export_dir(export_dir_base)
+    temp_export_dir = export_lib.get_temp_export_dir(export_dir)
+
+    frozen_graph_def = None
+    with graph.as_default():
+      tf.compat.v1.train.get_or_create_global_step(graph)
+      signature_def_map = {}
+      # Add signatures collected in the export_context
+      for signature in export_ctx.signatures(graph):
+        signature_def_map[signature.name] = BaseExporter.build_signature(
+            signature.inputs, signature.outputs)
+
+      with tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(
+          allow_soft_placement=True)) as session:
+        graph_saver = tf.compat.v1.train.Saver(sharded=True)
+        if restore_vars:
+          try:
+            graph_saver.restore(session, checkpoint_path)
+          except tf.errors.NotFoundError as e:
+            msg = ('Could not load all requested variables from checkpoint. '
+                   'Please make sure your model_fn does not expect variables '
+                   'that were not saved in the checkpoint.\n\n'
+                   'Encountered error with mode `{}` while restoring '
+                   'checkpoint from: `{}`. Full Traceback:\n\n{}').format(
+                       tf.estimator.ModeKeys.PREDICT, checkpoint_path, e)
+            raise ValueError(msg)
+        frozen_graph_def = self._freeze_dense_graph(graph.as_graph_def(),
+                                                    signature_def_map,
+                                                    session)
+
+    builder = tf.compat.v1.saved_model.Builder(temp_export_dir)
+    with tf.Graph().as_default() as final_graph:
+      tf.graph_util.import_graph_def(frozen_graph_def, name='')
+      tf.compat.v1.train.get_or_create_global_step(final_graph)
+
+      with tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(
+          allow_soft_placement=True)) as session:
+
+        graph_saver = tf.compat.v1.train.Saver(sharded=True)
+        if restore_vars:
+          try:
+            graph_saver.restore(session, checkpoint_path)
+          except tf.errors.NotFoundError as e:
+            msg = ('Could not load all requested variables from checkpoint. '
+                   'Please make sure your model_fn does not expect variables '
+                   'that were not saved in the checkpoint.\n\n'
+                   'Encountered error with mode `{}` while restoring '
+                   'checkpoint from: `{}`. Full Traceback:\n\n{}').format(
+                       tf.estimator.ModeKeys.PREDICT, checkpoint_path, e)
+            raise ValueError(msg)
+
+        restore_op = tf.no_op()
+        meta_graph_kwargs = dict(tags=export_tags,
+                                 signature_def_map=signature_def_map,
+                                 assets_collection=tf.compat.v1.get_collection(
+                                     tf.compat.v1.GraphKeys.ASSET_FILEPATHS),
+                                 clear_devices=clear_devices,
+                                 main_op=restore_op,
+                                 saver=graph_saver,
+                                 strip_default_attrs=strip_default_attrs)
         builder.add_meta_graph_and_variables(session, **meta_graph_kwargs)
       builder.save()
 
@@ -446,7 +593,8 @@ class DistributedExporter(BaseExporter):
                with_remote_gpu=False,
                clear_entry_devices=False,
                include_graphs: List[str] = None,
-               global_step_as_timestamp: bool = False):
+               global_step_as_timestamp: bool = False,
+               freeze_variable: bool = True):
     super(DistributedExporter,
           self).__init__(model_fn, model_dir, export_dir_base, shared_embedding,
                          warmup_file, export_context_list)
@@ -456,6 +604,7 @@ class DistributedExporter(BaseExporter):
     self._clear_entry_devices = clear_entry_devices
     self._include_graphs = include_graphs
     self._global_step_as_timestamp = global_step_as_timestamp
+    self._freeze_variable = freeze_variable
 
   def _should_export(self, graph_name, export_dir):
     if tf.io.gfile.exists(export_dir):
@@ -512,9 +661,9 @@ class DistributedExporter(BaseExporter):
                 g,
                 checkpoint_path=checkpoint_path,
                 export_dir=entry_export_dir,
+                export_ctx=export_ctx,
                 restore_hashtable=False,
                 assign_hashtable=False,
-                export_ctx=export_ctx,
                 assets_extra=self.gen_warmup_assets(),
                 clear_devices=self._clear_entry_devices,
             )
@@ -538,9 +687,11 @@ class DistributedExporter(BaseExporter):
         if self._dense_only:
           return result
 
-        # Export PS/GPU Dense from graph stored in export_ctx
+        # Export PS from graph stored in export_ctx
         DumpUtils().restore_sub_model('ps')
         for name, graph in export_ctx.sub_graphs.items():
+          if name.startswith("dense"):
+            continue
           DumpUtils().add_sub_model('ps', name, graph)
           ps_export_dir = os.path.join(
               self._export_dir_base, name,
@@ -553,6 +704,31 @@ class DistributedExporter(BaseExporter):
               export_dir=ps_export_dir,
               export_ctx=export_ctx,
           )
+
+          # Export GPU Dense from graph stored in export_ctx
+          for name, graph in export_ctx.sub_graphs.items():
+            if not name.startswith("dense"):
+              continue
+            DumpUtils().add_sub_model('ps', name, graph)
+            ps_export_dir = os.path.join(
+                self._export_dir_base, name,
+                str(timestamp) + getattr(graph, "export_suffix", ""))
+            if not self._should_export(name, ps_export_dir):
+              continue
+            if not self._freeze_variable:
+              result[name] = self._export_saved_model_from_graph(
+                  graph,
+                  checkpoint_path=checkpoint_path,
+                  export_dir=ps_export_dir,
+                  export_ctx=export_ctx,
+                  restore_hashtable=False,
+                  assign_hashtable=False)
+            else:
+              result[name] = self._export_frozen_saved_model_from_graph(
+                  graph,
+                  checkpoint_path=checkpoint_path,
+                  export_dir=ps_export_dir,
+                  export_ctx=export_ctx)
       finally:
         if saved_tf_config:
           os.environ["TF_CONFIG"] = saved_tf_config

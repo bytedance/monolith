@@ -1,0 +1,92 @@
+diff --git a/tensorflow_serving/batching/batching_options.h b/tensorflow_serving/batching/batching_options.h
+index 6b0a2838..989ecd46 100644
+--- a/tensorflow_serving/batching/batching_options.h
++++ b/tensorflow_serving/batching/batching_options.h
+@@ -75,6 +75,8 @@ struct BatchingOptions {
+   // (modulo zeroth dimension) and this option is set to false,
+   // then error Status will be returned.
+   bool pad_variable_length_inputs = false;
++
++  bool support_diff_dim_size_inputs = false;
+ };
+ 
+ }  // namespace serving
+diff --git a/tensorflow_serving/batching/batching_session.cc b/tensorflow_serving/batching/batching_session.cc
+index 8d68c130..eba81b7a 100644
+--- a/tensorflow_serving/batching/batching_session.cc
++++ b/tensorflow_serving/batching/batching_session.cc
+@@ -438,19 +438,42 @@ BatchingSession::BatchingSession(const BatchingSessionOptions& options,
+ 
+ Status BatchingSession::ComputeInputSize(
+     const std::vector<std::pair<string, Tensor>>& inputs, size_t* size) const {
+-  TF_RETURN_IF_ERROR(::tensorflow::serving::ComputeTensorBatchSize(
++  auto status = ::tensorflow::serving::ComputeTensorBatchSize(
+       inputs, size,
+       [](const std::pair<std::string, Tensor>& tensor) {
+         return tensor.second.shape().dims();
+       },
+       [](const std::pair<std::string, Tensor>& tensor, size_t dim) {
+         return tensor.second.shape().dim_size(dim);
+-      }));
+-  for (const auto& entry : inputs) {
+-    const Tensor& tensor = entry.second;
+-    RecordInputBatchSize(tensor.shape().dim_size(0));
++      });
++  if (status.ok()) {
++    for (const auto& entry : inputs) {
++      const Tensor& tensor = entry.second;
++      RecordInputBatchSize(tensor.shape().dim_size(0));
++    }
++    return status;
++  }
++
++  if (options_.support_diff_dim_size_inputs) {
++    bool has_bs_tensor = false;
++    for (const auto& entry : inputs) {
++      const Tensor& tensor = entry.second;
++      // adhoc, must identity tensor with batch_size
++      if (entry.first.find("batch_size") != std::string::npos &&
++          tensor.shape().dims() == 1 && tensor.shape().dim_size(0) == 1) {
++        *size = tensor.flat<int32>()(0);
++        has_bs_tensor = true;
++        RecordInputBatchSize(*size);
++        break;
++      }
++    }
++    if (!has_bs_tensor) {
++      return errors::InvalidArgument("Batching Run() not find batch_size tensor");
++    }
++    return Status::OK();
++  } else {
++    return status;
+   }
+-  return Status::OK();
+ }
+ 
+ Status BatchingSession::MergeInputTensors(
+diff --git a/tensorflow_serving/servables/tensorflow/bundle_factory_util.cc b/tensorflow_serving/servables/tensorflow/bundle_factory_util.cc
+index ec2a66c4..f6b3ca2a 100644
+--- a/tensorflow_serving/servables/tensorflow/bundle_factory_util.cc
++++ b/tensorflow_serving/servables/tensorflow/bundle_factory_util.cc
+@@ -142,6 +142,9 @@ Status WrapSessionForBatching(const BatchingParameters& batching_config,
+   batching_session_options.pad_variable_length_inputs =
+       batching_config.pad_variable_length_inputs();
+ 
++  batching_session_options.support_diff_dim_size_inputs =
++      batching_config.support_diff_dim_size_inputs();
++
+   auto create_queue = [batch_scheduler, queue_options](
+       std::function<void(std::unique_ptr<Batch<BatchingSessionTask>>)>
+           process_batch_callback,
+diff --git a/tensorflow_serving/servables/tensorflow/session_bundle_config.proto b/tensorflow_serving/servables/tensorflow/session_bundle_config.proto
+index 2ebf4830..c7d52700 100644
+--- a/tensorflow_serving/servables/tensorflow/session_bundle_config.proto
++++ b/tensorflow_serving/servables/tensorflow/session_bundle_config.proto
+@@ -152,4 +152,7 @@ message BatchingParameters {
+ 
+   // Whether to pad variable-length inputs when a batch is formed.
+   bool pad_variable_length_inputs = 7;
++
++  // should has batch_size input tensor.
++  bool support_diff_dim_size_inputs = 10;
+ }

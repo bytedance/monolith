@@ -1233,20 +1233,19 @@ class CpuTraining:
 
       if self.config.enable_fused_layout:
         self._task.ctx.feature_factory = None
-        fused_layout_callable_fn = hash_table.lookup(
-            features,
-            auxiliary_bundle,
-            ret_fused_layout_callable_fn=True,
+        lookup_callable_fn = hash_table.lookup(
+            features, auxiliary_bundle, ret_lookup_callable_fn=True,
             embedding_prefetch_capacity=self.config.embedding_prefetch_capacity)
+        # args are data we will transfer to remote deivce if needed.
+        args = (auxiliary_bundle, features)
+        logging.info(
+            f"remote input: auxiliary_bundle[{auxiliary_bundle}], features:[{features}]")
 
         def call_model_fn(args):
-          # add fused_layout_callable_fn here to support with_remote_gpu
-          logging.info(
-              f"hash_table lookup when enable_fused_layout input: {args}")
+          # add lookup_callable_fn here to support with_remote_gpu
           auxiliary_bundle_ = args[0]
           features_ = args[1]
-          layout_embeddings = fused_layout_callable_fn(auxiliary_bundle_,
-                                                       features_)
+          layout_embeddings = lookup_callable_fn(auxiliary_bundle_, features_)
           logging.info(
               f"hash_table lookup when enable_fused_layout res: {layout_embeddings} {auxiliary_bundle_} {features_}"
           )
@@ -1260,9 +1259,6 @@ class CpuTraining:
               async_function_mgr=async_function_mgr,
               async_push=self.config.enable_embedding_postpush)
           return call_raw_model_fn(features_)
-
-        #args are data we will transfer to remote deivce if needed.
-        args = (auxiliary_bundle, features)
       else:
         if self.config.reorder_fids_in_data_pipeline:
           features, res_pack = features["1"]

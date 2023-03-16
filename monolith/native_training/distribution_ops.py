@@ -309,6 +309,10 @@ def fused_embedding_to_layout(
     feature_cfgs: FeatureConfigs,
     ps_num: int,
     fid_list_emb_row_lenth: tf.Tensor = None,
+    nfl_size: tf.Tensor = None,
+    feature_size: tf.Tensor = None,
+    fid_size: tf.Tensor = None,
+    emb_size: tf.Tensor = None,
     parallel_flag: int = 0,
     version: int = 3,
 ):
@@ -322,7 +326,24 @@ def fused_embedding_to_layout(
     N += len(conf.shape)
   if version != 4:
     assert fid_list_emb_row_lenth is None
-  if version == 4:
+
+  if version == 5:
+    layout_tensors = gen_distribution_ops.monolith_embedding_to_layout_v5(
+        embeddings_list=embeddings_list,
+        fid_offset=fid_offset,
+        feature_offset=feature_offset,
+        nfl_offset=nfl_offset,
+        batch_size=batch_size,
+        nfl_size=nfl_size,
+        feature_size=feature_size,
+        fid_size=fid_size,
+        emb_size=emb_size,
+        num_out=N,
+        variant_type=variant_type,
+        feature_cfgs=feature_cfgs_str,
+        ps_num=ps_num,
+        parallel_flag=parallel_flag)
+  elif version == 4:
     assert fid_list_emb_row_lenth is not None
     layout_tensors = gen_distribution_ops.monolith_embedding_to_layout_v4(
         embeddings_list=embeddings_list,
@@ -474,6 +495,30 @@ def _fused_embedding_to_layout_grad_v4(op: tf.Operation, *grads):
       parallel_flag=0)
   return embeddings_grad_list + [None] * 5
 
+@tf.RegisterGradient("MonolithEmbeddingToLayoutV5")
+def _fused_embedding_to_layout_grad_v5(op: tf.Operation, *grads):
+  M = op.get_attr("M")  # fid_num
+  pre = 0
+  embeddings_list = op.inputs[0:M]
+  pre += M
+  fid_offset, feature_offset, nfl_offset, batch_size = op.inputs[
+      pre], op.inputs[pre + 1], op.inputs[pre + 2], op.inputs[pre + 3]
+  variant_type = op.get_attr("variant_type")
+  feature_cfgs_str = op.get_attr("feature_cfgs")
+  ps_num = op.get_attr("ps_num")
+  embeddings_grad_list = gen_distribution_ops.monolith_embedding_to_layout_grad_v3(
+      embeddings_list=embeddings_list,
+      fid_offset=fid_offset,
+      feature_offset=feature_offset,
+      nfl_offset=nfl_offset,
+      batch_size=batch_size,
+      tensors_grad=grads,
+      variant_type=variant_type,
+      feature_cfgs=feature_cfgs_str,
+      ps_num=ps_num,
+      parallel_flag=0)
+  return embeddings_grad_list + [None] * 8
+
 
 def fused_embedding_to_layout_grad(
     nfl_offset: tf.Tensor,
@@ -519,7 +564,7 @@ def fused_embedding_to_layout_grad(
         feature_cfgs=feature_cfgs_str,
         ps_num=ps_num,
         parallel_flag=parallel_flag)
-  elif version == 3:
+  elif version == 3 or version == 5:
     embeddings_grad_list = gen_distribution_ops.monolith_embedding_to_layout_grad_v3(
         embeddings_list=embeddings_list,
         fid_offset=fid_offset,
@@ -835,4 +880,10 @@ def _fused_reduce_and_split_gpu_grad(op: tf.Operation, *grads):
       op.inputs[1:len(row_split_splits)],
       grads,
       row_split_splits=row_split_splits,
-      slice_dims=slice_dims)
+      slice_dims=slice_dims
+  )
+
+def normalize_merged_split(row_split: tf.Tensor,
+                           row_split_size: tf.Tensor) -> tf.Tensor:
+  return gen_distribution_ops.monolith_normalize_merged_split(row_split,
+                                                              row_split_size)

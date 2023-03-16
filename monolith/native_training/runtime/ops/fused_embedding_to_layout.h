@@ -271,8 +271,16 @@ class MonolithEmbeddingToLayoutOp : public MonolithEmbeddingToLayoutBase {
                        const uint64 *fids_offset_vec, int total_fid_num,
                        const int32 *feature_offset_vec, int total_feature_num,
                        const uint32 *nfl_offset_vec, int total_nfl_num,
-                       int batch_size, OpKernelContext *ctx,
-                       OpOutputList *layout_tensor_list);
+                       int batch_size,
+                       const std::vector<int> &each_req_batch_size_offset,
+                       const std::vector<int> &each_req_nfl_offset,
+                       const std::vector<int> &each_req_feature_offset,
+                       const std::vector<int> &each_req_fid_offset, int req_num,
+                       OpKernelContext *ctx, OpOutputList *layout_tensor_list);
+
+ private:
+  int req_sum_ = 0;
+  int process_num_ = 0;
 };
 
 EIGEN_ALWAYS_INLINE EIGEN_DEVICE_FUNC void ScatterGrad(

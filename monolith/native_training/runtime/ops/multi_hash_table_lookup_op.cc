@@ -39,30 +39,43 @@ class MultiHashTableLookupOp : public OpKernel {
     OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &mtable));
     auto id_vec = ctx->input(1).flat<int64_t>();
     auto id_split_vec = ctx->input(2).flat<int64>();
-    OP_REQUIRES(ctx, id_split_vec.size() == mtable->size() + 1,
-                errors::InvalidArgument("id_split must be ", mtable->size() + 1,
-                                        ". Current: ", id_split_vec.size()));
+    // OP_REQUIRES(ctx, id_split_vec.size() == mtable->size() + 1,
+    //             errors::InvalidArgument("id_split must be ", mtable->size() + 1,
+    //                                     ". Current: ", id_split_vec.size()));
+    int req_size = (id_split_vec.size() - 1) / mtable->size();
+    OP_REQUIRES(ctx, id_split_vec.size() == mtable->size() * req_size + 1,
+                errors::InvalidArgument("table size: ", mtable->size(),
+                                        ". Error id_split size: ", id_split_vec.size()));
+    std::vector<int> each_emb_offset(req_size);
     int emb_size = 0;
-    for (int i = 0; i < mtable->size(); ++i) {
-      const int num_ids = id_split_vec(i + 1) - id_split_vec(i);
-      emb_size += num_ids * mtable->table(i)->dim_size();
+    for (int req_i = 0; req_i < req_size; ++req_i) {
+      each_emb_offset[req_i] = emb_size;
+      for (int i = 0; i < mtable->size(); ++i) {
+        int id_split_idx = req_i * mtable->size() + i;
+        const int num_ids = id_split_vec(id_split_idx + 1) - id_split_vec(id_split_idx);
+        emb_size += num_ids * mtable->table(i)->dim_size();
+      }
     }
     Tensor* emb_tensor;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, {emb_size}, &emb_tensor));
     int64_t* id_ptr = const_cast<int64_t*>(id_vec.data());
-    int emb_offset = 0;
+    // int emb_offset = 0;
     float* emb_data = reinterpret_cast<float*>(emb_tensor->data());
     int64_t total_hit_fid_count = 0, total_num_ids = 0;
     for (int i = 0; i < mtable->size(); ++i) {
       EmbeddingHashTableTfBridge* table = mtable->table(i);
-      const int num_ids = id_split_vec(i + 1) - id_split_vec(i);
-      total_num_ids += num_ids;
-      int64_t hit_fid_count = 0;
-      OP_REQUIRES_OK(ctx,
-                     table->BatchLookup(ctx, num_ids, id_ptr + id_split_vec(i),
-                                        emb_data + emb_offset, &hit_fid_count));
-      total_hit_fid_count += hit_fid_count;
-      emb_offset += num_ids * table->dim_size();
+      for (int req_i = 0; req_i < req_size; ++req_i) {
+        int id_split_idx = req_i * mtable->size() + i;
+        const int num_ids = id_split_vec(id_split_idx + 1) - id_split_vec(id_split_idx);
+        total_num_ids += num_ids;
+        int64_t hit_fid_count = 0;
+        OP_REQUIRES_OK(ctx,
+                       table->BatchLookup(ctx, num_ids, id_ptr + id_split_vec(i),
+                                          emb_data + each_emb_offset[req_i],
+                                          &hit_fid_count));
+        total_hit_fid_count += hit_fid_count;
+        each_emb_offset[req_i] += num_ids * table->dim_size();
+      }
     }
 
     if (mtable->size() && mtable->table(0)->IsServingEntryType() &&

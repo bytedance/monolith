@@ -304,19 +304,75 @@ void MonolithEmbeddingToLayoutOp::Compute(OpKernelContext *ctx) {
   const Tensor *batch_size_tensor;
   OP_REQUIRES_OK(ctx, ctx->input("batch_size", &batch_size_tensor));
 
+  const Tensor *nfl_size_tensor;
+  const Tensor *feature_size_tensor;
+  const Tensor *fid_size_tensor;
+  const Tensor *emb_size_tensor;
+  if (GetVersion() == 5) {
+    OP_REQUIRES_OK(ctx, ctx->input("nfl_size", &nfl_size_tensor));
+    OP_REQUIRES_OK(ctx, ctx->input("feature_size", &feature_size_tensor));
+    OP_REQUIRES_OK(ctx, ctx->input("fid_size", &fid_size_tensor));
+    OP_REQUIRES_OK(ctx, ctx->input("emb_size", &emb_size_tensor));
+  }
+
   const auto fids_offset_vec = fids_offset_input->flat<uint64>();
   int total_fid_num = fids_offset_input->dim_size(0);
   const auto feature_offset_vec = feature_offset_input->flat<int32>();
   int total_feature_num = feature_offset_input->dim_size(0);
   const auto nfl_offset_vec = nfl_offset_input->flat<uint32>();
   int total_nfl_num = nfl_offset_input->dim_size(0);
-  // value = vector_tensor->flat<int64>().data();
-  int32 batch_size = batch_size_tensor->scalar<int32>()();
+  int req_num = 1;
+  int32 max_batch_size = 0;
+  std::vector<int> each_req_batch_size_offset(1, 0);
+  std::vector<int> each_req_nfl_offset(1, 0);
+  std::vector<int> each_req_feature_offset(1, 0);
+  std::vector<int> each_req_fid_offset(1, 0);
+  if (GetVersion() == 5) {
+    const auto batch_size_vec = batch_size_tensor->flat<int32>();
+    req_num = batch_size_tensor->dim_size(0);
+
+    for (size_t i = 0; i < req_num; ++i) {
+      each_req_batch_size_offset.push_back(
+          each_req_batch_size_offset[i] + batch_size_vec(i));
+      max_batch_size = std::max(batch_size_vec(i), max_batch_size);
+    }
+
+    const auto nfl_size_vec = nfl_size_tensor->flat<int32>();
+    for (size_t i = 0; i < req_num; ++i) {
+      each_req_nfl_offset.push_back(each_req_nfl_offset[i] + nfl_size_vec(i));
+    }
+    CHECK_EQ(each_req_nfl_offset.back(), total_nfl_num);
+
+    const auto feature_size_vec = feature_size_tensor->flat<int32>();
+    for (size_t i = 0; i < req_num; ++i) {
+      each_req_feature_offset.push_back(
+          each_req_feature_offset[i] + feature_size_vec(i));
+    }
+    CHECK_EQ(each_req_feature_offset.back(), total_feature_num);
+
+    const auto fid_size_vec = fid_size_tensor->flat<int32>();
+    for (size_t i = 0; i < req_num; ++i) {
+      each_req_fid_offset.push_back(each_req_fid_offset[i] + fid_size_vec(i));
+    }
+    CHECK_EQ(each_req_fid_offset.back(), total_fid_num);
+  } else {
+    max_batch_size = batch_size_tensor->scalar<int32>()();
+    each_req_batch_size_offset.push_back(max_batch_size);
+    each_req_nfl_offset.push_back(total_nfl_num);
+    each_req_feature_offset.push_back(total_feature_num);
+    each_req_fid_offset.push_back(total_fid_num);
+  }
+  req_sum_ += req_num;
+  process_num_++;
+  LOG_EVERY_N_SEC(INFO, 60) << "input avg req num: "
+                            << req_sum_ * 1.0 / process_num_;
+
   OpOutputList layout_tensor_list;
   OP_REQUIRES_OK(ctx, ctx->output_list("tensors", &layout_tensor_list));
 
   std::vector<PtrWrapper> embeddings_data;
   if (GetVersion() == 2) {
+    CHECK_EQ(req_num, 1);
     OpInputList fid_list_row_split;
     OP_REQUIRES_OK(ctx,
                    ctx->input_list("fid_list_row_split", &fid_list_row_split));
@@ -378,12 +434,13 @@ void MonolithEmbeddingToLayoutOp::Compute(OpKernelContext *ctx) {
     CHECK_EQ(fid_list_emb_row_lenth_flat.size(),
              table_feature_dim.size() * ps_num);
 
-    embeddings_data.resize(fid_list_emb_row_lenth_flat.size());
+    embeddings_data.resize(req_num * fid_list_emb_row_lenth_flat.size());
     int pre_count = 0;
-    for (size_t i = 0; i < fid_list_emb_row_lenth_flat.size(); ++i) {
-      int table_idx = i % table_feature_dim.size();
-      int ps_index = i / table_feature_dim.size();
-      int index = table_idx * ps_num + ps_index;
+    for (size_t i = 0; i < req_num * fid_list_emb_row_lenth_flat.size(); ++i) {
+      int req_i = i / fid_list_emb_row_lenth_flat.size();
+      int table_idx = (i % fid_list_emb_row_lenth_flat.size()) % table_feature_dim.size();
+      int ps_index = (i % fid_list_emb_row_lenth_flat.size()) / table_feature_dim.size();
+      int index = req_i * fid_list_emb_row_lenth_flat.size() + table_idx * ps_num + ps_index;
 
       embeddings_data[index].ptr = embeddings_list_flat.data() + pre_count;
       embeddings_data[index].offset = 1;
@@ -391,8 +448,34 @@ void MonolithEmbeddingToLayoutOp::Compute(OpKernelContext *ctx) {
 
       pre_count += fid_list_emb_row_lenth_flat(i);
     }
-    CHECK_EQ(pre_count, embeddings_list_flat.size());
+    CHECK_EQ(pre_count, req_num * embeddings_list_flat.size());
+  } else if (GetVersion() == 5) {
+    const auto emb_size_vec = emb_size_tensor->flat<int32>();
+    std::vector<std::vector<int>> each_req_emb_offset(
+        embeddings_list.size(), std::vector<int>(req_num + 1, 0));
+    for (size_t i = 0; i < embeddings_list.size(); ++i) {
+      for (size_t req_i = 0; req_i < req_num; ++req_i) {
+        each_req_emb_offset[i][req_i + 1] =
+            each_req_emb_offset[i][req_i] +
+            emb_size_vec(i + req_i * embeddings_list.size());
+      }
+      CHECK_EQ(each_req_emb_offset[i].back(),
+               embeddings_list[i].flat<float>().size());
+    }
+
+    embeddings_data.reserve(req_num * embeddings_list.size());
+    for (size_t req_i = 0; req_i < req_num; req_i++) {
+      for (size_t i = 0; i < embeddings_list.size(); ++i) {
+        const auto &embeddings_mat_ptr_ =
+            embeddings_list[i].flat<float>().data();
+        embeddings_data.push_back(
+            PtrWrapper({embeddings_mat_ptr_ + each_req_emb_offset[i][req_i], 1,
+                        each_req_emb_offset[i][req_i + 1] -
+                            each_req_emb_offset[i][req_i]}));
+      }
+    }
   } else {
+    CHECK_EQ(req_num, 1);
     embeddings_data.reserve(embeddings_list.size());
     for (size_t i = 0; i < embeddings_list.size(); ++i) {
       const auto &embeddings_mat_ptr_ = embeddings_list[i].flat<float>().data();
@@ -414,8 +497,9 @@ void MonolithEmbeddingToLayoutOp::Compute(OpKernelContext *ctx) {
         TensorShape tensor_shape;
         for (size_t i = 0; i < shape.dims_size(); ++i) {
           if (i == 0) {
-            tensor_shape.AddDim(shape.dims(i) == -1 ? batch_size
-                                                    : shape.dims(i));
+            tensor_shape.AddDim(shape.dims(i) == -1
+                                    ? each_req_batch_size_offset.back()
+                                    : shape.dims(i));
           } else {
             CHECK_GT(shape.dims(i), 0);
             tensor_shape.AddDim(shape.dims(i));
@@ -450,7 +534,9 @@ void MonolithEmbeddingToLayoutOp::Compute(OpKernelContext *ctx) {
 
   TaskRun(layouts, embeddings_data, fids_offset_vec.data(), total_fid_num,
           feature_offset_vec.data(), total_feature_num, nfl_offset_vec.data(),
-          total_nfl_num, batch_size, ctx, &layout_tensor_list);
+          total_nfl_num, max_batch_size, each_req_batch_size_offset,
+          each_req_nfl_offset, each_req_feature_offset, each_req_fid_offset,
+          req_num, ctx, &layout_tensor_list);
 }
 
 void ForwardTaskRunImpl(int slice_conf_i, int dim_num, int64 nfl_idx,
@@ -528,7 +614,12 @@ void MonolithEmbeddingToLayoutOp::TaskRun(
     const uint64 *fids_offset_vec, int total_fid_num,
     const int32 *feature_offset_vec, int total_feature_num,
     const uint32 *nfl_offset_vec, int total_nfl_num, int batch_size,
+    const std::vector<int> &each_req_batch_size_offset,
+    const std::vector<int> &each_req_nfl_offset,
+    const std::vector<int> &each_req_feature_offset,
+    const std::vector<int> &each_req_fid_offset, int req_num,
     OpKernelContext *ctx, OpOutputList *layout_tensor_list) {
+  CHECK_EQ(req_num, 1);
   for (int32 idx = 0; idx < layout_tensor_list->size(); ++idx) {
     (*layout_tensor_list)[idx]->flat<float>().setZero();
   }
@@ -593,6 +684,12 @@ class MonolithEmbeddingToLayoutOpV4 : public MonolithEmbeddingToLayoutOp {
  public:
   explicit MonolithEmbeddingToLayoutOpV4(OpKernelConstruction *ctx)
       : MonolithEmbeddingToLayoutOp(ctx, 4) {}
+};
+
+class MonolithEmbeddingToLayoutOpV5 : public MonolithEmbeddingToLayoutOp {
+ public:
+  explicit MonolithEmbeddingToLayoutOpV5(OpKernelConstruction *ctx)
+      : MonolithEmbeddingToLayoutOp(ctx, 5) {}
 };
 
 MonolithEmbeddingToLayoutGradOp::MonolithEmbeddingToLayoutGradOp(
@@ -683,7 +780,7 @@ void MonolithEmbeddingToLayoutGradOp::Compute(OpKernelContext *ctx) {
         }
       }
     }
-  } else if (GetVersion() == 3) {
+  } else if (GetVersion() == 3 || GetVersion() == 5) {
     embeddings_grads_data.reserve(embeddings_list.size());
     for (size_t i = 0; i < embeddings_list.size(); ++i) {
       Tensor *tensor;
@@ -770,7 +867,7 @@ void MonolithEmbeddingToLayoutGradOp::Compute(OpKernelContext *ctx) {
           feature_offset_vec.data(), total_feature_num, nfl_offset_vec.data(),
           total_nfl_num, batch_size, ctx, &embeddings_grad_list,
           &embeddings_grads_data,
-          (GetVersion() == 3 || GetVersion() == 4) ? nullptr : &init);
+          (GetVersion() == 3 || GetVersion() == 4 || GetVersion() == 5) ? nullptr : &init);
 }
 
 static constexpr int NUM_LOCKS = 512;
@@ -895,6 +992,13 @@ class MonolithEmbeddingToLayoutGradOpV4
  public:
   explicit MonolithEmbeddingToLayoutGradOpV4(OpKernelConstruction *ctx)
       : MonolithEmbeddingToLayoutGradOp(ctx, 4) {}
+};
+
+class MonolithEmbeddingToLayoutGradOpV5
+    : public MonolithEmbeddingToLayoutGradOp {
+ public:
+  explicit MonolithEmbeddingToLayoutGradOpV5(OpKernelConstruction *ctx)
+      : MonolithEmbeddingToLayoutGradOp(ctx, 5) {}
 };
 
 auto forward_shape_inference_fn = [](shape_inference::InferenceContext *ctx) {
@@ -1097,6 +1201,51 @@ REGISTER_KERNEL_BUILDER(Name("MonolithEmbeddingToLayoutV4").Device(DEVICE_CPU),
 REGISTER_KERNEL_BUILDER(
     Name("MonolithEmbeddingToLayoutGradV4").Device(DEVICE_CPU),
     MonolithEmbeddingToLayoutGradOpV4);
+
+REGISTER_OP("MonolithEmbeddingToLayoutV5")
+    .Input("embeddings_list: M * float")
+    .Input("fid_offset: uint64")
+    .Input("feature_offset: int32")
+    .Input("nfl_offset: uint32")
+    .Input("batch_size: int32")
+    .Input("nfl_size: int32")
+    .Input("feature_size: int32")
+    .Input("fid_size: int32")
+    .Input("emb_size: int32")
+    .Output("tensors: num_out * float")
+    .Attr("M: int")  // num of fids_list (shard x subtable)
+    .Attr("num_out: int")
+    .Attr("variant_type: string")
+    .Attr("feature_cfgs: string")
+    .Attr("ps_num: int")
+    .Attr("parallel_flag: int = 0")
+    .SetDoNotOptimize()
+    .SetShapeFn(forward_shape_inference_fn);
+
+REGISTER_OP("MonolithEmbeddingToLayoutGradV5")
+    .Input("embeddings_list: M * float")
+    .Input("fid_offset: uint64")
+    .Input("feature_offset: int32")
+    .Input("nfl_offset: uint32")
+    .Input("batch_size: int32")
+    .Input("tensors_grad: num_input * float")
+    .Output("embeddings_grad_list: M * float")
+    .Attr("M: int")          // num of fids_list (shard x subtable)
+    .Attr("num_input: int")  // num of tensors_grad input
+    .Attr("variant_type: string")
+    .Attr("feature_cfgs: string")
+    .Attr("ps_num: int")
+    .Attr("parallel_flag: int = 0")
+    .SetDoNotOptimize()
+    .SetShapeFn(backward_shape_inference_fn);
+
+REGISTER_KERNEL_BUILDER(Name("MonolithEmbeddingToLayoutV5").Device(DEVICE_CPU),
+                        MonolithEmbeddingToLayoutOpV5);
+
+REGISTER_KERNEL_BUILDER(
+    Name("MonolithEmbeddingToLayoutGradV5").Device(DEVICE_CPU),
+    MonolithEmbeddingToLayoutGradOpV5);
+
 
 }  // namespace fused_layout
 }  // namespace monolith_tf

@@ -117,6 +117,7 @@ class ParserCtx(object):
     return self._ctx_kv.get(key, default_value)
 
 
+
 def get_default_parser_ctx() -> ParserCtx:
   global _default_parser_ctx
   if _default_parser_ctx is None:
@@ -515,7 +516,7 @@ def sharding_sparse_fids(tensor: tf.Tensor,
                          input_type: str,
                          parallel_flag: int = 0,
                          fid_list_ret_list: bool = False,
-                         version: int = 3):
+                         version: int = 5):
   assert input_type in ["example", "examplebatch", "example_batch", "instance"]
   input_type = 'examplebatch' if input_type == 'example_batch' else input_type
   table_name_list = []
@@ -531,7 +532,21 @@ def sharding_sparse_fids(tensor: tf.Tensor,
   fid_list_emb_row_lenth = None
   fid_list_table_row_length = None
   fid_list_shard_row_lenth = None
-  if version == 4:
+  fid_list_row_splits_size = None
+  nfl_size = None
+  feature_size = None
+  fid_size = None
+  emb_size = None
+  if version == 5:
+    fid_list, fid_list_row_splits, fid_list_row_splits_size, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, feature_size, fid_size, emb_size = parse_instance_ops.sharding_sparse_fids_v5(
+        pb_input=tensor,
+        ps_num=ps_num,
+        feature_cfgs=feature_cfgs.SerializeToString(),
+        N=table_count,
+        unique=unique,
+        input_type=input_type,
+        parallel_flag=parallel_flag)
+  elif version == 4:
     fid_list, fid_list_row_splits, fid_list_table_row_length, fid_list_shard_row_lenth, fid_list_emb_row_lenth, fid_offset, feature_offset, nfl_offset, batch_size = parse_instance_ops.sharding_sparse_fids_v4(
         pb_input=tensor,
         ps_num=ps_num,
@@ -548,6 +563,7 @@ def sharding_sparse_fids(tensor: tf.Tensor,
         unique=unique,
         input_type=input_type,
         parallel_flag=parallel_flag)
+    fid_list_row_splits_size = [None] * table_count
   elif version == 2:
     fid_list, fid_list_row_splits, fid_offset, feature_offset, nfl_offset, batch_size = parse_instance_ops.sharding_sparse_fids_v2(
         pb_input=tensor,
@@ -557,6 +573,7 @@ def sharding_sparse_fids(tensor: tf.Tensor,
         unique=unique,
         input_type=input_type,
         parallel_flag=parallel_flag)
+    fid_list_row_splits_size = [None] * table_count
   else:
     fid_list, fid_offset, feature_offset, nfl_offset, batch_size = parse_instance_ops.sharding_sparse_fids(
         pb_input=tensor,
@@ -567,13 +584,17 @@ def sharding_sparse_fids(tensor: tf.Tensor,
         input_type=input_type,
         parallel_flag=parallel_flag)
     fid_list_row_splits = [None] * table_count
+    fid_list_row_splits_size = [None] * table_count
   if version != 4:
     assert len(fid_list) == table_count
     assert len(fid_list_row_splits) == table_count
+  if version == 5:
+    assert len(fid_list_row_splits_size) == table_count
   if fid_list_ret_list or version == 4:
-    return fid_list, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, fid_list_table_row_length, fid_list_shard_row_lenth
+    return fid_list, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, feature_size, fid_size, emb_size, fid_list_row_splits, fid_list_row_splits_size, fid_list_emb_row_lenth, fid_list_table_row_length, fid_list_shard_row_lenth
   ret = {}
   ret_row_split = {}
+  ret_row_split_size = {}
   index = 0
   for table_idx in range(len(table_name_list)):
     table_name = table_name_list[table_idx]
@@ -581,8 +602,10 @@ def sharding_sparse_fids(tensor: tf.Tensor,
       ret[table_name + ":" + str(ps_index)] = fid_list[index]
       ret_row_split[table_name + ":" +
                     str(ps_index)] = fid_list_row_splits[index]
+      ret_row_split_size[table_name + ":" +
+                         str(ps_index)] = fid_list_row_splits_size[index]
       index += 1
-  return ret, fid_offset, feature_offset, nfl_offset, batch_size, ret_row_split, fid_list_emb_row_lenth, fid_list_table_row_length, fid_list_shard_row_lenth
+  return ret, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, feature_size, fid_size, emb_size, ret_row_split, ret_row_split_size, fid_list_emb_row_lenth, fid_list_table_row_length, fid_list_shard_row_lenth
 
 
 def sharding_sparse_fids_with_context(sparse_features: tf.Tensor,
@@ -590,8 +613,9 @@ def sharding_sparse_fids_with_context(sparse_features: tf.Tensor,
                                       parser_ctx: ParserCtx = None):
   if parser_ctx is None:
     parser_ctx = get_default_parser_ctx()
-  shards, fid_offset, feature_offset, nfl_offset, batch_size, shards_row_split, fid_list_emb_row_lenth, \
-    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
+  shards, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, \
+  feature_size, fid_size, emb_size, shards_row_split, shards_row_split_size, \
+  fid_list_emb_row_lenth, fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
       sparse_features,
       ps_num=parser_ctx.sharding_sparse_fids_op_params.num_ps,
       feature_cfgs=parser_ctx.sharding_sparse_fids_op_params.feature_configs,
@@ -599,7 +623,8 @@ def sharding_sparse_fids_with_context(sparse_features: tf.Tensor,
       input_type=parser_ctx.parser_type,
       fid_list_ret_list=parser_ctx.sharding_sparse_fids_op_params.enable_gpu_emb,
       parallel_flag=1 if parser_ctx.sharding_sparse_fids_op_params.use_gpu else 0,
-      version=4 if parser_ctx.sharding_sparse_fids_op_params.enable_gpu_emb else 3)
+      version=4 if parser_ctx.sharding_sparse_fids_op_params.enable_gpu_emb else 5)
+
   if parser_ctx.sharding_sparse_fids_op_params.enable_gpu_emb:
     '''
     table_count = len(shards) // parser_ctx.sharding_sparse_fids_op_params.num_ps
@@ -645,9 +670,14 @@ def sharding_sparse_fids_with_context(sparse_features: tf.Tensor,
         "feature_offset": feature_offset,
         "nfl_offset": nfl_offset,
         "batch_size": batch_size,
+        "nfl_size": nfl_size,
+        "feature_size": feature_size,
+        "fid_size": fid_size,
+        "emb_size": emb_size,
     }
     if parser_ctx.sharding_sparse_fids_op_params.use_native_multi_hash_table:
       features_dict.update({"shards_row_split": shards_row_split})
+      features_dict.update({"shards_row_split_size": shards_row_split_size})
     parser_ctx.sharding_sparse_fids_features_insert_to_features(
         features_dict, features)
 

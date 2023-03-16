@@ -318,6 +318,9 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
       if is_shared:  # add shared encode, 向前一位
         nfl_offset_list[-1] |= SHARD_BIT
       nfl_offset_list.append(nfl_index)
+    nfl_size_list = [len(nfl_offset_list)]
+    feature_size_list = [len(feature_offset_list)]
+    fid_size_list = [len(fid_offset_list)]
 
     logging.info(f"show fid_row_split_list: {fid_row_split_list}")
 
@@ -325,6 +328,7 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
 
     fid_to_emb = {}
     embeddings_list = []
+    emb_size_list = []
     for table_name, table in fids_dict.items():
       for idx in sorted(table):
         values = table[idx]
@@ -337,6 +341,7 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
             fid_emb.append(fid + j)
           fid_to_emb[fid] = np.array(fid_emb, dtype=float)
           emb.extend(fid_emb)
+        emb_size_list.append(len(emb))
         emb = np.array(emb, dtype=float)
         logging.info(f"show emb2 {emb}")
         embeddings_list.append(
@@ -355,8 +360,9 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
                                            extra_feature_shapes=[])
       sparse_varint = parsed_results.pop(
           ParserCtx.sharding_sparse_fids_sparse_features_key)
-      fid_list, fid_offset_list_ts, feature_offset_list_ts, nfl_offset_list_ts, batch_size_ts, fid_row_split_list_ts, fid_list_emb_row_lenth, \
-    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
+      fid_list, fid_offset_list_ts, feature_offset_list_ts, nfl_offset_list_ts, batch_size_ts, nfl_size_list_ts, feature_size_list_ts, \
+      fid_size_list_ts, emb_size_list_ts, fid_row_split_list_ts, fid_row_split_size_list_ts, fid_list_emb_row_lenth, \
+      fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
           sparse_varint,
           num_ps,
           feature_cfgs,
@@ -368,15 +374,19 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
     else:
       fid_row_split_list_ts = fid_row_split_list
       fid_offset_list_ts = tf.constant(fid_offset_list, dtype=tf.uint64)
-      feature_offset_list_ts = tf.constant(feature_offset_list[:-1],
+      feature_offset_list_ts = tf.constant(feature_offset_list,
                                            dtype=tf.int32)
-      nfl_offset_list_ts = tf.constant(nfl_offset_list[:-1], dtype=tf.uint32)
+      nfl_offset_list_ts = tf.constant(nfl_offset_list, dtype=tf.uint32)
       fid_list_emb_row_lenth = None
       if op_version >= 3:
         raise TypeError('Not imple')
         batch_size_ts = tf.constant([0] * batch_size, dtype=tf.int32)
       else:
         batch_size_ts = tf.constant([batch_size], dtype=tf.int32)
+      nfl_size_list_ts = tf.constant(nfl_size_list, dtype=tf.int32)
+      feature_size_list_ts = tf.constant(feature_size_list, dtype=tf.int32)
+      fid_size_list_ts = tf.constant(fid_size_list, dtype=tf.int32)
+      emb_size_list_ts = tf.constant(emb_size_list, dtype=tf.int32)
 
     variant_type = 'example_batch'
     if use_gpu:
@@ -400,6 +410,10 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
           feature_cfgs,
           num_ps,
           fid_list_emb_row_lenth=fid_list_emb_row_lenth,
+          nfl_size=nfl_size_list_ts,
+          feature_size=feature_size_list_ts,
+          fid_size=fid_size_list_ts,
+          emb_size=emb_size_list_ts,
           parallel_flag=parallel_flag,
           version=op_version)
     with self.session() as sess:
@@ -642,6 +656,7 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
     # gen offset
     slot2fid_offset = defaultdict(list)
     embedding_fid_list = [[] for _ in range(num_ps * len(table_cfg))]
+    emb_size_list = [0 for _ in range(num_ps * len(table_cfg))]
     fid_row_split_list = [[0] for _ in range(num_ps * len(table_cfg))]
     # record the truth
     truth = defaultdict(lambda: defaultdict(list))
@@ -656,6 +671,7 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
         ps_index = fid % num_ps
         index1 = table_idx * num_ps + ps_index
         embedding_fid_list[index1].append((fid, dim_sum))
+        emb_size_list[index1] += dim_sum
         index2 = len(embedding_fid_list[index1]) - 1
         embedding_fid_list_tmp[ps_index].append(fid)
         feature_index = len(embedding_fid_list_tmp[ps_index]) - 1
@@ -695,6 +711,9 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
         feature_offset_list.append(len(fid_offset_list))
       nfl_index = len(feature_offset_list) - 1
       nfl_offset_list.append(nfl_index)
+    nfl_size_list = [len(nfl_offset_list)]
+    feature_size_list = [len(feature_offset_list)]
+    fid_size_list = [len(fid_offset_list)]
 
     # gen emb
     embeddings_list = list()
@@ -720,8 +739,9 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
             extra_feature_shapes=[])
         sparse_varint = parsed_results.pop(
             ParserCtx.sharding_sparse_fids_sparse_features_key)
-        fid_list, fid_offset_list_ts, feature_offset_list_ts, nfl_offset_list_ts, batch_size_ts, fid_row_split_list, fid_list_emb_row_lenth, \
-    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
+        fid_list, fid_offset_list_ts, feature_offset_list_ts, nfl_offset_list_ts, batch_size_ts, nfl_size_list_ts, feature_size_list_ts, \
+        fid_size_list_ts, emb_size_list_ts, fid_row_split_list, fid_row_split_size_list, fid_list_emb_row_lenth, \
+        fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             sparse_varint,
             num_ps,
             feature_cfgs,
@@ -734,10 +754,15 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
         assert op_version == shard_op_version
       else:
         fid_offset_list_ts = tf.constant(fid_offset_list, dtype=tf.uint64)
-        feature_offset_list_ts = tf.constant(feature_offset_list[:-1],
+        feature_offset_list_ts = tf.constant(feature_offset_list,
                                              dtype=tf.int32)
-        nfl_offset_list_ts = tf.constant(nfl_offset_list[:-1], dtype=tf.uint32)
+        nfl_offset_list_ts = tf.constant(nfl_offset_list, dtype=tf.uint32)
         batch_size_ts = tf.constant([batch_size], dtype=tf.int32)
+        nfl_size_list_ts = tf.constant(nfl_size_list, dtype=tf.int32)
+        feature_size_list_ts = tf.constant(feature_size_list, dtype=tf.int32)
+        fid_size_list_ts = tf.constant(fid_size_list, dtype=tf.int32)
+        emb_size_list_ts = tf.constant(emb_size_list, dtype=tf.int32)
+
         fid_list_emb_row_lenth = None
         if op_version >= 3:
           raise TypeError('Not imple')
@@ -764,6 +789,10 @@ class FusedEmbeddingToLayoutTest(tf.test.TestCase):
             feature_cfgs,
             num_ps,
             fid_list_emb_row_lenth=fid_list_emb_row_lenth,
+            nfl_size=nfl_size_list_ts,
+            feature_size=feature_size_list_ts,
+            fid_size=fid_size_list_ts,
+            emb_size=emb_size_list_ts,
             parallel_flag=parallel_flag,
             version=op_version)
         #layouts_ret = sess.run(layouts)
@@ -956,6 +985,9 @@ class FusedEmbeddingToLayoutFitPreTest(tf.test.TestCase):
 
       nfl_index = len(feature_offset_list) - 1
       nfl_offset_list.append(nfl_index)
+    nfl_size_list = [len(nfl_offset_list)]
+    feature_size_list = [len(feature_offset_list)]
+    fid_size_list = [len(fid_offset_list)]
 
     # add shared encode
     nfl_idx = 0
@@ -976,6 +1008,7 @@ class FusedEmbeddingToLayoutFitPreTest(tf.test.TestCase):
     feature_cfgs.out_configs['ffm2'].CopyFrom(ffm2)
 
     embeddings_dict, fid_to_emb = {}, {}
+    emb_size_list = []
     fids_list, embeddings_list, embeddings_np_list = [], [], []
     for table_name, table in fids_dict.items():
       embeddings_dict[table_name] = {}
@@ -989,6 +1022,7 @@ class FusedEmbeddingToLayoutFitPreTest(tf.test.TestCase):
 
         size = (len(values), length)
         emb = np.random.uniform(size=size)
+        emb_size_list.append(len(values) * length)
         embeddings_dict[table_name][idx] = emb
         embeddings_list.append(
             tf.constant(value=emb, shape=size, dtype=tf.float32))
@@ -1002,10 +1036,14 @@ class FusedEmbeddingToLayoutFitPreTest(tf.test.TestCase):
     # layouts = distribution_ops.fused_embedding_to_layout(sparse_features_str, fids_list, embeddings_list, variant_type, feature_cfgs)
 
     fid_offset_list_ts = tf.constant(fid_offset_list, dtype=tf.uint64)
-    feature_offset_list_ts = tf.constant(feature_offset_list[:-1],
+    feature_offset_list_ts = tf.constant(feature_offset_list,
                                          dtype=tf.int32)
-    nfl_offset_list_ts = tf.constant(nfl_offset_list[:-1], dtype=tf.uint32)
+    nfl_offset_list_ts = tf.constant(nfl_offset_list, dtype=tf.uint32)
     batch_size_ts = tf.constant([batch_size], dtype=tf.int32)
+    nfl_size_list_ts = tf.constant(nfl_size_list, dtype=tf.int32)
+    feature_size_list_ts = tf.constant(feature_size_list, dtype=tf.int32)
+    fid_size_list_ts = tf.constant(fid_size_list, dtype=tf.int32)
+    emb_size_list_ts = tf.constant(emb_size_list, dtype=tf.int32)
 
     layouts_op = distribution_ops.fused_embedding_to_layout(
         embeddings_list,
@@ -1017,6 +1055,10 @@ class FusedEmbeddingToLayoutFitPreTest(tf.test.TestCase):
         variant_type,
         feature_cfgs,
         -1,
+        nfl_size=nfl_size_list_ts,
+        feature_size=feature_size_list_ts,
+        fid_size=fid_size_list_ts,
+        emb_size=emb_size_list_ts,
         version=1)
     with self.session() as sess:
       layouts = sess.run(layouts_op)
@@ -1226,8 +1268,12 @@ class FusedEmbeddingToLayoutFitPreTest(tf.test.TestCase):
         feature_offset_list.append(len(fid_offset_list))
       nfl_index = len(feature_offset_list) - 1
       nfl_offset_list.append(nfl_index)
+    nfl_size_list = [len(nfl_offset_list)]
+    feature_size_list = [len(feature_offset_list)]
+    fid_size_list = [len(fid_offset_list)]
 
     idx = 0
+    emb_size_list = []
     for embedding_fid in embedding_fid_list:
       if idx < 2:
         embeddings_dim = [13 for i in embedding_fid]
@@ -1235,6 +1281,7 @@ class FusedEmbeddingToLayoutFitPreTest(tf.test.TestCase):
         embeddings_dim = [21 for i in embedding_fid]
       size = (len(embeddings_dim), embeddings_dim[0])
       emb = np.random.uniform(size=size)
+      emb_size_list.append(size[0] * size[1])
       embeddings_list.append(
           tf.constant(value=emb, shape=size, dtype=tf.float32))
       idx += 1
@@ -1242,10 +1289,14 @@ class FusedEmbeddingToLayoutFitPreTest(tf.test.TestCase):
 
     with self.session() as sess:
       fid_offset_list_ts = tf.constant(fid_offset_list, dtype=tf.uint64)
-      feature_offset_list_ts = tf.constant(feature_offset_list[:-1],
+      feature_offset_list_ts = tf.constant(feature_offset_list,
                                            dtype=tf.int32)
-      nfl_offset_list_ts = tf.constant(nfl_offset_list[:-1], dtype=tf.uint32)
+      nfl_offset_list_ts = tf.constant(nfl_offset_list, dtype=tf.uint32)
       batch_size_ts = tf.constant([batch_size], dtype=tf.int32)
+      nfl_size_list_ts = tf.constant(nfl_size_list, dtype=tf.int32)
+      feature_size_list_ts = tf.constant(feature_size_list, dtype=tf.int32)
+      fid_size_list_ts = tf.constant(fid_size_list, dtype=tf.int32)
+      emb_size_list_ts = tf.constant(emb_size_list, dtype=tf.int32)
 
       layouts = distribution_ops.fused_embedding_to_layout(
           embeddings_list,
@@ -1257,6 +1308,10 @@ class FusedEmbeddingToLayoutFitPreTest(tf.test.TestCase):
           variant_type,
           feature_cfgs,
           -1,
+          nfl_size=nfl_size_list_ts,
+          feature_size=feature_size_list_ts,
+          fid_size=fid_size_list_ts,
+          emb_size=emb_size_list_ts,
           version=1)
       test_grads = tf.gradients(layouts, embeddings_list)
       grads = sess.run(test_grads)

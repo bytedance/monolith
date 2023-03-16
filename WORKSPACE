@@ -40,7 +40,10 @@ boost_deps()
 http_archive(
     name = "org_tensorflow_serving",
     patch_args = ["-p1"],
-    patches = ["//third_party:org_tensorflow_serving/public_tf_serving.patch"],
+    patches = [
+      "//third_party:org_tensorflow_serving/public_tf_serving.patch",
+      "//third_party:org_tensorflow_serving/support_diff_dim_size_inputs.patch"
+    ],
     sha256 = "8c1a4d31ec7ab041b9302348a01422e21349507c7a6f0974639386c8901b721b",
     strip_prefix = "serving-2.4.0",
     url = "https://github.com/tensorflow/serving/archive/2.4.0.tar.gz",

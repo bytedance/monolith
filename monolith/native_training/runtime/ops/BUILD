@@ -2,6 +2,7 @@ load("@rules_cc//cc:defs.bzl", "cc_library", "cc_proto_library", "cc_test")
 load("@org_tensorflow//tensorflow:tensorflow.bzl", "cc_header_only_library", "tf_cc_test", "tf_custom_op_library", "tf_gen_op_wrapper_py", "tf_gpu_kernel_library_allow_except", "tf_kernel_library")
 load("@com_google_protobuf//:protobuf.bzl", "py_proto_library")
 load("@rules_proto//proto:defs.bzl", "proto_library")
+load("@bazel_skylib//lib:selects.bzl", "selects")
 
 package(default_visibility = [
     "//monolith:__subpackages__",
@@ -218,10 +219,15 @@ cc_library(
 # we shouldn't link the ops into tensorflow because
 # we don't separate the ops/kernels implementation.
 # Instead, we use dynamic load to solve this problem.
+selects.config_setting_group(
+    name = "monolith_ops_for_tf_condition",
+    match_any = ["@org_tensorflow//tensorflow:framework_shared_object", ":serving_gpu"],
+)
+
 cc_library(
     name = "monolith_ops_for_tf",
     deps = select({
-        "@org_tensorflow//tensorflow:framework_shared_object": [],
+        ":monolith_ops_for_tf_condition": [],
         "//conditions:default": [
             ":monolith_ops",
         ],
@@ -266,6 +272,7 @@ tf_kernel_library(
         "split_by_indices_op.cc",
         "static_reshape_op.cc",
         "unique_mapping_ops.cc",
+        "normalize_merged_split_op.cc",
     ],
     copts = [
         "-D_ENABLE_AVX",
@@ -570,4 +577,9 @@ cc_library(
         "//conditions:default": [],
     }),
     alwayslink = 1,
+)
+
+config_setting(
+    name = "serving_gpu",
+    define_values = {"using_cuda": "true"},
 )

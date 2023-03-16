@@ -228,6 +228,8 @@ class DataOpsV2Test(tf.test.TestCase):
       for fid_list in fid_offset_map_unique[sparse_key]:
         rewrie_fid_offset(sparse_key, fid_map_unique_feature_pre_offset, f_cfg,
                           fid_list, fid_offset_list_unique)
+    feature_offset_t.append(len(fid_offset_list))
+    nfl_offset_t.append(len(feature_offset_t))
 
     print('==' * 10 + "fid_map_t" + '==' * 10)
     #print(fid_map_t)
@@ -312,8 +314,9 @@ class DataOpsV2Test(tf.test.TestCase):
       fid_map_list = []
       fid_map_unique_list = []
       for parallel_flag in parallel_flag_list:
-        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, fid_map_row_split, fid_list_emb_row_lenth, \
-    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
+        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, feature_size, fid_size, emb_size, \
+        fid_map_row_split, fid_map_row_split_size, fid_list_emb_row_lenth, \
+        fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             example_batch_varint,
             ps_num,
             feature_cfgs,
@@ -324,8 +327,9 @@ class DataOpsV2Test(tf.test.TestCase):
         fid_map_list.append([
             fid_map, fid_offset, feature_offset, nfl_offset, fid_map_row_split
         ])
-        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, fid_map_unique_row_split, fid_list_emb_row_lenth_unique, \
-    fid_list_table_row_length_unique, fid_list_shard_row_lenth_unique = sharding_sparse_fids(
+        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, feature_size, fid_size, emb_size, \
+        fid_map_unique_row_split, fid_map_unique_row_split_size, fid_list_emb_row_lenth_unique, \
+        fid_list_table_row_length_unique, fid_list_shard_row_lenth_unique = sharding_sparse_fids(
             example_batch_varint,
             ps_num,
             feature_cfgs,
@@ -1098,6 +1102,8 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
         fid_offset_list.extend(fid_list)
       for fid_list in fid_offset_map_unique[sparse_key]:
         fid_offset_list_unique.extend(fid_list)
+    feature_offset_t.append(len(fid_offset_list))
+    nfl_offset_t.append(len(feature_offset_t))
 
     print('==' * 10 + "fid_map_t" + '==' * 10)
     #print(fid_map_t)
@@ -1138,8 +1144,9 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
       fid_map_list = []
       fid_map_unique_list = []
       for parallel_flag in parallel_flag_list:
-        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, \
-    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
+        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, feature_size, fid_size, emb_size, \
+        fid_list_row_splits, fid_list_row_splits_size, fid_list_emb_row_lenth, \
+        fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             example_batch_varint,
             ps_num,
             feature_cfgs,
@@ -1148,8 +1155,9 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
             parallel_flag,
             version=1)
         fid_map_list.append([fid_map, fid_offset, feature_offset, nfl_offset])
-        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, \
-    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
+        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, feature_size, fid_size, emb_size, \
+        fid_list_row_splits, fid_list_row_splits_size, fid_list_emb_row_lenth, \
+        fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             example_batch_varint,
             ps_num,
             feature_cfgs,
@@ -1359,6 +1367,8 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
         fid_offset_list.extend(fid_list)
       for fid_list in fid_offset_map_unique[sparse_key]:
         fid_offset_list_unique.extend(fid_list)
+    feature_offset_t.append(len(fid_offset_list))
+    nfl_offset_t.append(len(feature_offset_t))
 
     print('==' * 10 + "fid_map_t" + '==' * 10, flush=True)
     #print(fid_map_t, flush=True)
@@ -1397,8 +1407,9 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
       fid_map_list = []
       fid_map_unique_list = []
       for parallel_flag in parallel_flag_list:
-        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, \
-    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
+        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, feature_size, fid_size, emb_size, \
+        fid_list_row_splits, fid_list_row_splits_size, fid_list_emb_row_lenth, \
+        fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             examples_varint,
             ps_num,
             feature_cfgs,
@@ -1407,8 +1418,9 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
             parallel_flag,
             version=1)
         fid_map_list.append([fid_map, fid_offset, feature_offset, nfl_offset])
-        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, \
-    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
+        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, feature_size, fid_size, emb_size, \
+        fid_list_row_splits, fid_list_row_splits_size, fid_list_emb_row_lenth, \
+        fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             examples_varint,
             ps_num,
             feature_cfgs,
@@ -1647,6 +1659,8 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
         fid_offset_list.extend(fid_list)
       for fid_list in fid_offset_map_unique[sparse_key]:
         fid_offset_list_unique.extend(fid_list)
+    feature_offset_t.append(len(fid_offset_list))
+    nfl_offset_t.append(len(feature_offset_t))
 
     print('==' * 10 + "fid_map_t" + '==' * 10, flush=True)
     #print(fid_map_t, flush=True)
@@ -1689,8 +1703,9 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
       fid_map_list = []
       fid_map_unique_list = []
       for parallel_flag in parallel_flag_list:
-        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, \
-    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
+        fid_map, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, feature_size, fid_size, emb_size, \
+        fid_list_row_splits, fid_list_row_splits_size, fid_list_emb_row_lenth, \
+        fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             examples_varint,
             ps_num,
             feature_cfgs,
@@ -1699,8 +1714,9 @@ class DataOpsV2TestFitPre(tf.test.TestCase):  #DataOpsV2Test
             parallel_flag,
             version=1)
         fid_map_list.append([fid_map, fid_offset, feature_offset, nfl_offset])
-        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, fid_list_row_splits, fid_list_emb_row_lenth, \
-    fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
+        fid_map_unique, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, feature_size, fid_size, emb_size, \
+        fid_list_row_splits, fid_list_row_splits_size, fid_list_emb_row_lenth, \
+        fid_list_table_row_length, fid_list_shard_row_lenth = sharding_sparse_fids(
             examples_varint,
             ps_num,
             feature_cfgs,
