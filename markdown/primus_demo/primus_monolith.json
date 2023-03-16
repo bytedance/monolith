@@ -1,0 +1,78 @@
+{
+    "name": "primus-monolith",
+    "files": [
+      "/home/ubuntu/monolith/markdown/demo",
+      "/home/ubuntu/monolith/markdown/primus_demo/main.sh"
+    ],
+    "role": [
+      {
+        "roleName": "worker",
+        "num": 2,
+        "vcores": 1,
+        "memoryMb": 4096,
+        "jvmMemoryMb": 4096,
+        "command": "env && bash main.sh",
+        "successPercent": 100,
+        "failover": {
+          "commonFailoverPolicy": {
+            "commonFailover": {
+              "restartType": "ON_FAILURE",
+              "maxFailureTimes": 1,
+              "maxFailurePolicy": "FAIL_ATTEMPT"
+            }
+          }
+        },
+        "inputPolicy": "STREAMING"
+      },
+      {
+        "roleName": "ps",
+        "num": 2,
+        "vcores": 1,
+        "memoryMb": 4096,
+        "jvmMemoryMb": 4096,
+        "command": "env && bash main.sh",
+        "successPercent": 100,
+        "failover": {
+          "commonFailoverPolicy": {
+            "commonFailover": {
+              "restartType": "ON_FAILURE",
+              "maxFailureTimes": 1,
+              "maxFailurePolicy": "FAIL_ATTEMPT"
+            }
+          }
+        }
+      }
+    ],
+    "inputManager": {
+      "fileConfig": {
+        "inputs": [
+          {
+            "name": "data",
+            "spec": {
+              "pathPattern": "/primus/data_1m/",
+              "namePattern": "part_*.csv",
+              "textInput": {}
+            }
+          }
+        ],
+        "stopPolicy": {
+          "taskSuccessPercent": 100
+        }
+      },
+      "workPreserve": {
+        "dumpIntervalSecs": 5,
+        "hdfsConfig": {}
+      },
+      "gracefulShutdown": "true"
+    },  
+    "runtimeConf": {
+      "kubernetesNativeConf": {
+        "executorPodConf": {
+          "mainContainerConf": {
+            "imageName": "monolith_ubuntu22_exec:1.0"
+          }
+        }
+      }
+    }
+  }
+  

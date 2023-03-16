@@ -12,34 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import tensorflow as tf
-import tensorflow_datasets as tfds
+from ml_dataset import get_preprocessed_dataset, serialize_one
 from tqdm import tqdm
-import time
-
 from kafka import KafkaProducer
-
-def get_preprocessed_dataset(size='100k') -> tf.data.Dataset:
-  ratings = tfds.load(f"movielens/{size}-ratings", split="train")
-  # For simplicity, we map each movie_title and user_id to numbers
-  # by Hashing. You can use other ways to number them to avoid 
-  # collision and better leverage Monolith's collision-free hash tables.  
-  max_b = (1 << 63) - 1
-  return ratings.map(lambda x: {
-    'mov': tf.strings.to_hash_bucket_fast([x['movie_title']], max_b),
-    'uid': tf.strings.to_hash_bucket_fast([x['user_id']], max_b),
-    'label': tf.expand_dims(x['user_rating'], axis=0)
-  })
-
-def serialize_one(data):
-  # serialize an training instance to string
-  return tf.train.Example(features=tf.train.Features(
-    feature={
-      'mov': tf.train.Feature(int64_list=tf.train.Int64List(value=data['mov'])),
-      'uid': tf.train.Feature(int64_list=tf.train.Int64List(value=data['uid'])),
-      'label': tf.train.Feature(float_list=tf.train.FloatList(value=data['label']))
-    }
-  )).SerializeToString() 
 
 if __name__ == "__main__":
   ds = get_preprocessed_dataset()

@@ -18,18 +18,17 @@ from absl import logging
 
 import json
 import os
+import sys
 
 import tensorflow as tf
 from kafka_receiver import decode_example, to_ragged
-from kafka_producer import get_preprocessed_dataset
+from ml_dataset import get_preprocessed_dataset
 
 from monolith.native_training.estimator import EstimatorSpec, Estimator, RunnerConfig, ServiceDiscoveryType
 from monolith.native_training.native_model import MonolithModel
 from monolith.native_training.data.datasets import create_plain_kafka_dataset
 
-tf.compat.v1.disable_eager_execution()
-
-flags.DEFINE_enum('training_type', 'batch', ['batch', 'stream'], "type of training to launch")
+flags.DEFINE_enum('training_type', 'batch', ['batch', 'stream', 'stdin'], "type of training to launch")
 FLAGS = flags.FLAGS
 
 def get_worker_count(env: dict):
@@ -80,7 +79,7 @@ class MovieRankingModelBase(MonolithModel):
 class MovieRankingBatchTraining(MovieRankingModelBase):
   def input_fn(self, mode):
     env = json.loads(os.environ['TF_CONFIG'])
-    dataset = get_preprocessed_dataset('25m')
+    dataset = get_preprocessed_dataset('1m')
     dataset = dataset.shard(get_worker_count(env), env['task']['index'])
     return dataset.batch(512, drop_remainder=True)\
       .map(to_ragged).prefetch(tf.data.AUTOTUNE)
@@ -98,11 +97,36 @@ class MovieRankingStreamTraining(MovieRankingModelBase):
         ],
     )
     return dataset.map(lambda x: decode_example(x.message))
-
+  
+def read_stdin():
+  while True:
+    line = sys.stdin.readline()
+    if line:
+      tokens = line.strip().split(',')
+      yield {
+        'mov': [int(tokens[0])],
+        'uid': [int(tokens[1])],
+        'label': float(tokens[2])
+      }
+    else:
+      return
+  
+class MovieRankingBatchTrainingStdin(MovieRankingModelBase):
+  def input_fn(self, mode):
+    return tf.data.Dataset.from_generator(
+      read_stdin,
+      output_signature={
+        'mov': tf.TensorSpec(shape=(1,), dtype=tf.int64),
+        'uid': tf.TensorSpec(shape=(1,), dtype=tf.int64),
+        'label': tf.TensorSpec(shape=(), dtype=tf.float32),
+      }
+    ).batch(512, drop_remainder=True)\
+      .map(to_ragged).prefetch(tf.data.AUTOTUNE)
 
 FLAGS = flags.FLAGS
 
 def main(_):
+  tf.compat.v1.disable_eager_execution()
   raw_tf_conf = os.environ['TF_CONFIG']
   tf_conf = json.loads(raw_tf_conf)
   config = RunnerConfig(
@@ -117,6 +141,8 @@ def main(_):
   )
   if FLAGS.training_type == "batch":
     params = MovieRankingBatchTraining.params().instantiate()
+  elif FLAGS.training_type == "stdin":
+    params = MovieRankingBatchTrainingStdin.params().instantiate()
   else:
     params = MovieRankingStreamTraining.params().instantiate()
 

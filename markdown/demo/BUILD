@@ -3,10 +3,20 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 package(default_visibility = ["//visibility:public"])
 
 py_binary(
+    name = "ml_dataset",
+    srcs = ["ml_dataset.py"],
+    deps = [
+        "@org_tensorflow//tensorflow:tensorflow_py",
+    ],
+)
+
+
+py_binary(
     name = "kafka_producer",
     srcs = ["kafka_producer.py"],
     deps = [
         "@org_tensorflow//tensorflow:tensorflow_py",
+        ":ml_dataset",
     ],
 )
 
