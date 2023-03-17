@@ -39,9 +39,10 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('tfs_log', '/var/log/tfs.std.log',
                     'The tfs log file path')
 def run_agent(agent_config_path: str, tfs_log: str,
-              use_mps: bool, dense_service_index: int):
+              use_mps: bool, replica_id: int,
+              dense_service_index: int):
   if use_mps:
-    os.environ["REPLICA_ID"] = str(dense_service_index)
+    os.environ["REPLICA_ID"] = str(replica_id)
     os.environ["DENSE_SERVICE_IDX"] = str(dense_service_index)
     tfs_log = "{}.mps{}".format(tfs_log, dense_service_index)
 
@@ -85,13 +86,14 @@ def main(_):
   if config.deploy_type == DeployType.DENSE and config.dense_service_num > 1:
     p_list = []
     for i in range(config.dense_service_num):
-      p = Process(target=run_agent, args=(FLAGS.conf, FLAGS.tfs_log, True, i))
+      cur_rid = config.replica_id * config.dense_service_num + i
+      p = Process(target=run_agent, args=(FLAGS.conf, FLAGS.tfs_log, True, cur_rid, i))
       p.start()
       p_list.append(p)
     for p in p_list:
       p.join()
   else:
-    run_agent(FLAGS.conf, FLAGS.tfs_log, False, 0)
+    run_agent(FLAGS.conf, FLAGS.tfs_log, False, config.replica_id, 0)
 
 if __name__ == '__main__':
   app.run(main)
