@@ -11,9 +11,9 @@ Monolith is built on the top of TensorFlow and supports batch/real-time training
 
 ## Discussion Group
 
-### Join us at Slack
+### Join us at Discord
 
-https://join.slack.com/t/monolithusergroup/shared_invite/zt-1mewhxi5v-L7EPkRTaoONIbjtLCVALdw
+https://discord.gg/QYTDeKxGMX
 
 ## Quick start
 
