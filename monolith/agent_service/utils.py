@@ -655,12 +655,26 @@ class AgentConfig(TfServingConfig):
     cmd, port = self.get_cmd_and_port(binary, server_type)
     return cmd
 
+  def get_server_schedule_iter(self, server_type):
+    if self.deploy_type == DeployType.MIXED or self.deploy_type == DeployType.PS:
+      if server_type == TFSServerType.PS:
+        for i in range(self.num_ps):
+          if i % self.num_shard == self.shard_id:
+            yield i
+      else:
+        yield None
+    elif self.deploy_type == DeployType.DENSE and server_type == TFSServerType.DENSE:
+      # [TODO] (fitz) maybe there is a bug, fix it later
+      yield self.replica_id
+    else:
+        yield None
+
   def _gen_model_server_config(
       self,
       server_type: str = None,
-      version_policy: str = 'latest',
-      version_data: Union[int, List[int]] = 1,
   ) -> model_server_config_pb2.ModelServerConfig:
+    version_policy: str = self.version_policy
+    version_data: int = self.version_data
     server_type = self.deploy_type.compat_server_type(server_type)
     assert server_type is not None
 
@@ -668,25 +682,24 @@ class AgentConfig(TfServingConfig):
     model_config_list = model_server_config.model_config_list.config
 
     if server_type == TFSServerType.PS:
-      for i in range(self.num_ps):
-        if i % self.num_shard == self.shard_id:
-          name = f'{server_type}_{i}'
+      for i in self.get_server_schedule_iter(server_type):
+        name = f'{server_type}_{i}'
+        model_config = model_config_list.add()
+        model_config.CopyFrom(
+            gen_model_config(name=name,
+                              base_path=os.path.join(self.base_path, name),
+                              version_policy=version_policy,
+                              version_data=version_data))
+        if self.rough_sort_model_name and self.rough_sort_model_loaded_server == RoughSortModelLoadedServer.PS:
+          name = f'{RoughSortModelPrefix.PS}_{i}'
           model_config = model_config_list.add()
+          rough_model_path = os.path.join(self.rough_sort_model_local_path,
+                                          self.rough_sort_model_name, name)
           model_config.CopyFrom(
               gen_model_config(name=name,
-                               base_path=os.path.join(self.base_path, name),
-                               version_policy=version_policy,
-                               version_data=version_data))
-          if self.rough_sort_model_name and self.rough_sort_model_loaded_server == RoughSortModelLoadedServer.PS:
-            name = f'{RoughSortModelPrefix.PS}_{i}'
-            model_config = model_config_list.add()
-            rough_model_path = os.path.join(self.rough_sort_model_local_path,
-                                            self.rough_sort_model_name, name)
-            model_config.CopyFrom(
-                gen_model_config(name=name,
-                                 base_path=rough_model_path,
-                                 version_policy=version_policy,
-                                 version_data=version_data))
+                                base_path=rough_model_path,
+                                version_policy=version_policy,
+                                version_data=version_data))
     else:
       if server_type == TFSServerType.DENSE:
         name = f'{server_type}_0'

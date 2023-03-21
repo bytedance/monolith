@@ -214,7 +214,53 @@ class ReplicaWatcher(object):
                 replicas_tmp[task_path][str(int(replica))] = meta
 
         with self._lock:
+          old_paths, new_paths = {}, {}
+          for task, replicas in self.replicas.items():
+            for replica in replicas:
+              key = os.path.join(task, replica)
+              old_paths[key] = self.replicas[task][replica]
+          for task, replicas in replicas_tmp.items():
+            for replica in replicas:
+              key = os.path.join(task, replica)
+              new_paths[key] = replicas_tmp[task][replica]
+          to_removed_replicas = set(old_paths) - set(new_paths)
+          if self._conf.deploy_type == DeployType.MIXED or self._conf.deploy_type == DeployType.PS:
+            server_type = TFSServerType.PS
+            port_grpc, port_archon = self._conf.tfs_port_grpc, self._conf.tfs_ps_archon_port
+          elif self._conf.deploy_type == DeployType.DENSE:
+            server_type = TFSServerType.DENSE
+            port_grpc, port_archon = self._conf.tfs_dense_port, self._conf.tfs_dense_archon_port
+          else:
+            server_type = None
+          
+          need_register_replicas: Dict[str, ReplicaMeta] = {}
+          if server_type and to_removed_replicas:
+            for i in self._conf.get_server_schedule_iter(server_type):
+              for replica in to_removed_replicas:
+                if f'/{server_type}:{i}/{self._conf.replica_id}' in replica:
+                  meta: ReplicaMeta = old_paths[replica]
+                  meta.address = f"{meta.address.split(':')[0]}:{port_grpc}"
+                  meta.address_ipv6 = f"{meta.address_ipv6.split(':')[0]}:{port_grpc}"
+                  meta.archon_address = f"{meta.archon_address.split(':')[0]}:{port_archon}"
+                  meta.archon_address_ipv6 = f"{meta.archon_address_ipv6.split(':')[0]}:{port_archon}"
+                  need_register_replicas[replica] = meta
+          
+          # update self.replicas
           self.replicas = replicas_tmp
+
+          # register
+          while need_register_replicas:
+            zk_path, meta = need_register_replicas.popitem()
+            replica_meta_bytes = bytes(meta.to_json(), encoding='utf-8')
+            try:
+              self.zk.retry(self.zk.create,
+                            path=zk_path,
+                            value=replica_meta_bytes,
+                            ephemeral=True,
+                            makepath=True,
+                            sequence=False)
+            except NodeExistsError:
+              logging.info(f'{zk_path} has already exists')
       except Exception as e:
         exc_type, exc_value, exc_traceback_obj = sys.exc_info()
         logging.log_every_n_seconds(logging.ERROR, f"exc_type: {exc_type}",
