@@ -57,11 +57,13 @@ from monolith.native_training import distributed_ps_sync
 from monolith.native_training import embedding_combiners
 from monolith.native_training import entry
 from monolith.native_training import feature
+from monolith.native_training import gflags_utils
 from monolith.native_training import hash_filter_ops
 from monolith.native_training import hash_table_ops
 from monolith.native_training import hvd_lib
 from monolith.native_training import multi_hash_table_ops
 from monolith.native_training import logging_ops
+from monolith.native_training import mlp_utils
 from monolith.native_training import monolith_checkpoint_state_pb2
 from monolith.native_training import multi_type_hash_table
 from monolith.native_training import native_task
@@ -78,6 +80,7 @@ from monolith.native_training import variables
 from monolith.native_training import distributed_serving_ops
 from monolith.native_training import yarn_runtime
 from monolith.native_training.alert import alert_manager
+from monolith.native_training.data import datasets
 from monolith.native_training.hash_table_utils import infer_dim_size
 from monolith.native_training.distributed_serving_ops import ParameterSyncClient
 from monolith.native_training.hash_filter_ops import FilterType
@@ -290,7 +293,7 @@ def get_req_time(features):
   else:
     return None
 
-
+@gflags_utils.LinkDataclassToFlags(linked_map={"use_dataservice": "dataset_use_dataservice"})
 @dataclasses.dataclass
 class CpuTrainingConfig:
   """The CPU training config.
@@ -418,6 +421,7 @@ class CpuTrainingConfig:
   enable_alias_map_auto_gen: bool = None
   enable_model_dump: bool = False
   device_fn: Callable[[tf.Operation], str] = None
+  use_dataservice : bool = None
 
   @property
   def enable_full_sync_training(self):
@@ -621,10 +625,11 @@ class CpuTraining:
     enable_reorder = (mode != tf.estimator.ModeKeys.PREDICT and
                       self.config.reorder_fids_in_data_pipeline and
                       not self.config.enable_fused_layout)
+    use_dataservice = self.config.use_dataservice
     feature_name_config = self.feature_configs[0]
     embedding_feature_names = feature_name_config.keys()
 
-    def input_fn_factory(input_fn, enable_reorder, feature_name_config,
+    def input_fn_factory(input_fn, enable_reorder, use_dataservice, feature_name_config,
                          embedding_feature_names):
 
       def reorder_parse_fn(*args):
@@ -692,6 +697,14 @@ class CpuTraining:
           if isinstance(ds, tf.data.Dataset):
             if enable_reorder:
               ds = ds.map(reorder_parse_fn, num_parallel_calls=tf.data.AUTOTUNE)
+            if use_dataservice:
+              # This is a temporary hack. Will revisit here once we decided to
+              # do the remanagement.
+              tmp_mlp_env = mlp_utils.MLPEnv()
+              ds = datasets.distribute(ds, 
+                                       target=tmp_mlp_env.dispatcher_target(),
+                                       num_worker=tmp_mlp_env.num_replicas(role='worker'),
+                                       worker_idx=tmp_mlp_env.index)
             # Always enable prefetch since input_fn might be wrapped by
             # many other decorators.
             ds = ds.prefetch(tf.data.AUTOTUNE)
@@ -699,7 +712,7 @@ class CpuTraining:
 
       return wrapped_input_fn
 
-    return input_fn_factory(input_fn, enable_reorder, feature_name_config,
+    return input_fn_factory(input_fn, enable_reorder, use_dataservice, feature_name_config,
                             embedding_feature_names)
 
   def create_model_fn(self):
@@ -1234,12 +1247,15 @@ class CpuTraining:
       if self.config.enable_fused_layout:
         self._task.ctx.feature_factory = None
         lookup_callable_fn = hash_table.lookup(
-            features, auxiliary_bundle, ret_lookup_callable_fn=True,
+            features,
+            auxiliary_bundle,
+            ret_lookup_callable_fn=True,
             embedding_prefetch_capacity=self.config.embedding_prefetch_capacity)
         # args are data we will transfer to remote deivce if needed.
         args = (auxiliary_bundle, features)
         logging.info(
-            f"remote input: auxiliary_bundle[{auxiliary_bundle}], features:[{features}]")
+            f"remote input: auxiliary_bundle[{auxiliary_bundle}], features:[{features}]"
+        )
 
         def call_model_fn(args):
           # add lookup_callable_fn here to support with_remote_gpu

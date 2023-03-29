@@ -14,11 +14,14 @@
 
 from absl.flags import FlagValues
 from absl import logging, flags
+import dataclasses
 from dataclasses import Field
 from enum import Enum
 import re
 import sys
-from typing import get_type_hints
+from typing import get_type_hints, Iterable, Tuple
+
+FLAGS = flags.FLAGS
 
 _SPACE = re.compile(r"\s+")
 _PARAM = re.compile(r"^:param\s+([a-zA-Z0-9._-]+)\s*:\s*(.*)")
@@ -183,3 +186,51 @@ def update(config):
       continue
 
   return config
+
+
+class LinkDataclassToFlags:
+  """Links a field's default value to a flag. Example:
+  
+  flags.DEFINE_int("c_value", 0, "")
+
+  @LinkDataclassToFlags(linked_map={"v": "v_value"})
+  @dataclass.dataclasses
+  class C:
+    v: int = 0
+
+  When we instantiate C as c, if v_value is not 0, and c.v is the default value (which is 0 in this case),
+  c.v = FLAGS.v_value
+  """
+
+  def __init__(self, linked_list=None, linked_map=None):
+    """Elements `e` in linked_list is equivalent to `e:e` in the linekd_map """
+    self._m = {}
+    self._m.update(linked_map or {})
+    linked_list = linked_list or []
+    for name in linked_list:
+      self._m[name] = name
+
+  def __call__(self, cls):
+
+    assert dataclasses.is_dataclass(
+        cls), "LinkDataclassToFlag should be used on dataclasses"
+    fields = dataclasses.fields(cls)
+    named_fields = {field.name: field for field in fields}
+    for name, flag in self._m.items():
+      if name not in named_fields:
+        raise ValueError(f"{name} is not a valid attribute of {type(cls)}")
+      if flag not in FLAGS:
+        raise ValueError(f"{flag} is not defined in gflags")
+
+    orig_init = cls.__init__
+
+    def __init__(cls_self, *args, **kwargs):
+      orig_init(cls_self, *args, **kwargs)
+      for name, flag in self._m.items():
+        if getattr(cls_self, name) == named_fields[name].default and getattr(
+            FLAGS, flag) != FLAGS[flag].default:
+          setattr(cls_self, name, getattr(FLAGS, flag))
+
+    cls.__init__ = __init__
+
+    return cls

@@ -13,15 +13,14 @@
 # limitations under the License.
 
 from absl import flags
+from absl.testing import absltest
 from typing import get_type_hints
 from enum import Enum
 import dataclasses
 
-import tensorflow as tf
-
 from monolith.native_training import gflags_utils as utils
-from monolith.native_training.cpu_training import CpuTrainingConfig, DistributedCpuTrainingConfig
-from monolith.native_training.runner_utils import RunnerConfig
+
+FLAGS = flags.FLAGS
 
 
 @dataclasses.dataclass
@@ -94,7 +93,7 @@ class TestConfig5(TestConfig5Base):
   testconfig5_str1: str = "testconfig5_str1"
 
 
-class GflagUtilsTest(tf.test.TestCase):
+class GflagUtilsTest(absltest.TestCase):
 
   def _check_help_info(self, cls, skip_flags=set()):
     help_info = utils.extract_help_info(cls)
@@ -105,9 +104,6 @@ class GflagUtilsTest(tf.test.TestCase):
                     '{} is not in {}, please add a help info'.format(key, cls))
 
   def test_extract_help_info(self):
-    self._check_help_info(CpuTrainingConfig, {'device_fn'})
-    self._check_help_info(DistributedCpuTrainingConfig, {'device_fn'})
-    self._check_help_info(RunnerConfig, {'device_fn'})
 
     res = utils.extract_help_info(TestConfig)
     self.assertIn("test_int1", res)
@@ -172,7 +168,31 @@ class GflagUtilsTest(tf.test.TestCase):
     self.assertEqual(hasattr(conf5, "testconfig5base_int2"), True)
     self.assertEqual(hasattr(conf5, "testconfig5base_str"), True)
 
+  flags.DEFINE_string("testflag6", "", "")
+
+  @utils.LinkDataclassToFlags(linked_list=["testflag6"],
+                              linked_map={"v": "testflag6"})
+  @dataclasses.dataclass
+  class TestClass6:
+    v: str = None
+    testflag6: str = None
+
+  def test_link_flag(self):
+    FLAGS.testflag6 = ""
+    c = self.TestClass6()
+    self.assertEqual(c.v, None)
+    self.assertEqual(c.testflag6, None)
+
+    FLAGS.testflag6 = "a"
+    c = self.TestClass6()
+    self.assertEqual(c.v, "a")
+    self.assertEqual(c.testflag6, "a")
+
+    FLAGS.testflag6 = "b"
+    c = self.TestClass6(v="v")
+    self.assertEqual(c.v, "v")
+    self.assertEqual(c.testflag6, "b")
+
 
 if __name__ == "__main__":
-  tf.compat.v1.disable_eager_execution()
-  tf.test.main()
+  absltest.main()

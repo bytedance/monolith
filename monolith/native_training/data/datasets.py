@@ -1433,5 +1433,5 @@ Dataset.instance_reweight = instance_reweight
 Dataset.negative_gen = negative_gen
 Dataset.split_flow = split_flow
 Dataset.merge_flow = merge_flow
-Dataset.distribute = distribute
+Dataset.distribute = lambda ds, *args, **kwargs: ds
 Dataset.merged_window = merged_window

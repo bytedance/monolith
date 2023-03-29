@@ -316,9 +316,9 @@ py_library(
     deps = [
         ":distributed_ps",
         ":distribution_ops",
+        ":feature_utils",
         ":multi_type_hash_table",
         ":prefetch_queue",
-        ":feature_utils",
     ],
 )
 
@@ -441,13 +441,13 @@ py_library(
     srcs = ["feature.py"],
     visibility = ["//visibility:public"],
     deps = [
-        ":prefetch_queue",
         "embedding_combiners",
         ":device_utils",
         ":distribution_ops",
         ":entry",
         ":learning_rate_functions",
         ":monolith_export",
+        ":prefetch_queue",
         ":ragged_utils",
         "//monolith:utils",
         "//monolith/native_training/model_export:export_context",
@@ -553,10 +553,12 @@ py_library(
         ":distribution_utils",
         ":env_utils",
         ":feature",
+        ":gflags_utils",
         ":hash_table_ops",
         ":hash_table_utils",
         ":hvd_lib",
         ":logging_ops",
+        ":mlp_utils",
         ":multi_type_hash_table",
         ":native_task",
         ":native_task_context",
@@ -996,13 +998,13 @@ py_library(
     srcs = ["estimator.py"],
     deps = [
         ":cpu_training",
+        ":distribution_utils",
         ":env_utils",
         ":monolith_export",
         ":native_task",
         ":runner_utils",
         ":service_discovery",
         ":zk_utils",
-        ":distribution_utils",
         "//monolith:utils",
         "//monolith/agent_service:backends",
         "//monolith/agent_service:replica_manager",
@@ -1087,9 +1089,7 @@ py_test(
     name = "gflags_utils_test",
     srcs = ["gflags_utils_test.py"],
     deps = [
-        ":cpu_training",
         ":gflags_utils",
-        ":runner_utils",
     ],
 )
 
@@ -1252,7 +1252,7 @@ py_library(
     name = "mlp_utils",
     srcs = ["mlp_utils.py"],
     deps = [
-        ":yarn_runtime",
         ":distribution_utils",
+        ":yarn_runtime",
     ],
 )
