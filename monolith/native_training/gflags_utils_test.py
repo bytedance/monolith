@@ -170,6 +170,7 @@ class GflagUtilsTest(absltest.TestCase):
 
   flags.DEFINE_string("testflag6", "", "")
 
+  @utils.update_by_flags
   @utils.LinkDataclassToFlags(linked_list=["testflag6"],
                               linked_map={"v": "testflag6"})
   @dataclasses.dataclass
@@ -192,6 +193,24 @@ class GflagUtilsTest(absltest.TestCase):
     c = self.TestClass6(v="v")
     self.assertEqual(c.v, "v")
     self.assertEqual(c.testflag6, "b")
+
+  flags.DEFINE_string("testflag7", "", "")
+
+  @utils.LinkDataclassToFlags(linked_map={"v": "testflag7"})
+  @dataclasses.dataclass
+  class TestClass7Base:
+    v: str = None
+
+  @utils.update_by_flags
+  @dataclasses.dataclass
+  class TestClass7Inherit(TestClass7Base):
+    v2: str = "v2"
+
+  def test_link_flag_inheritance(self):
+    FLAGS.testflag7 = "a"
+    c = self.TestClass7Inherit()
+    self.assertEqual(c.v, "a")
+    self.assertEqual(c.v2, "v2")
 
 
 if __name__ == "__main__":

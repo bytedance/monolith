@@ -62,9 +62,12 @@ def gen_get_checkpoint_state():
       checkpoint_state = old_get_checkpoint_state(checkpoint_dir,
                                                   latest_filename)
       cur_cnt, max_retry = 0, 5
-      coord_checkpoint_filename = checkpoint_management._GetCheckpointFilename(checkpoint_dir, latest_filename)
-      while checkpoint_state is None and tf.io.gfile.exists(coord_checkpoint_filename) and cur_cnt < max_retry:
-        checkpoint_state = old_get_checkpoint_state(checkpoint_dir, latest_filename)
+      coord_checkpoint_filename = checkpoint_management._GetCheckpointFilename(
+          checkpoint_dir, latest_filename)
+      while checkpoint_state is None and tf.io.gfile.exists(
+          coord_checkpoint_filename) and cur_cnt < max_retry:
+        checkpoint_state = old_get_checkpoint_state(checkpoint_dir,
+                                                    latest_filename)
         cur_cnt += 1
       if cur_cnt >= max_retry:
         raise Exception("read ckpt error!")
@@ -138,7 +141,9 @@ class ContainerType(Enum):
   NATIVE = 2
 
 
-@gflags_utils.extract_flags_decorator(remove_flags={'device_fn'}, is_nested=True)
+@gflags_utils.update_by_flags
+@gflags_utils.extract_flags_decorator(remove_flags={'device_fn'},
+                                      is_nested=True)
 @dataclass
 class RunnerConfig(DistributedCpuTrainingConfig):
   """RunnerConfig for start a running.

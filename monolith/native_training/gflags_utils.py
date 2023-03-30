@@ -17,9 +17,10 @@ from absl import logging, flags
 import dataclasses
 from dataclasses import Field
 from enum import Enum
+import inspect
 import re
 import sys
-from typing import get_type_hints, Iterable, Tuple
+from typing import get_type_hints, Iterable, Tuple, Dict
 
 FLAGS = flags.FLAGS
 
@@ -188,6 +189,22 @@ def update(config):
   return config
 
 
+@dataclasses.dataclass
+class _MonolithGflagMeta:
+  # Link a field `name` to `flag`
+  linked_map: Dict[str, str] = dataclasses.field(default_factory=dict)
+
+
+def _get_flag_obj(cls, set_if_not_exists=False) -> _MonolithGflagMeta:
+  attr = "_monolith_gflag_meta"
+  if not hasattr(cls, attr):
+    if set_if_not_exists:
+      setattr(cls, attr, _MonolithGflagMeta())
+    else:
+      return _MonolithGflagMeta()
+  return getattr(cls, attr)
+
+
 class LinkDataclassToFlags:
   """Links a field's default value to a flag. Example:
   
@@ -214,23 +231,52 @@ class LinkDataclassToFlags:
 
     assert dataclasses.is_dataclass(
         cls), "LinkDataclassToFlag should be used on dataclasses"
+
     fields = dataclasses.fields(cls)
     named_fields = {field.name: field for field in fields}
+
     for name, flag in self._m.items():
       if name not in named_fields:
         raise ValueError(f"{name} is not a valid attribute of {type(cls)}")
       if flag not in FLAGS:
         raise ValueError(f"{flag} is not defined in gflags")
 
-    orig_init = cls.__init__
-
-    def __init__(cls_self, *args, **kwargs):
-      orig_init(cls_self, *args, **kwargs)
-      for name, flag in self._m.items():
-        if getattr(cls_self, name) == named_fields[name].default and getattr(
-            FLAGS, flag) != FLAGS[flag].default:
-          setattr(cls_self, name, getattr(FLAGS, flag))
-
-    cls.__init__ = __init__
+    obj = _get_flag_obj(cls, set_if_not_exists=True)
+    for name, flag in self._m.items():
+      obj.linked_map[name] = flag
 
     return cls
+
+
+def _get_merged_meta(cls):
+  meta = _MonolithGflagMeta()
+  classes = inspect.getmro(cls)
+  for c in classes:
+    obj = _get_flag_obj(c)
+    meta.linked_map.update(obj.linked_map)
+
+  return meta
+
+
+def update_by_flags(cls):
+  assert dataclasses.is_dataclass(
+      cls), "update_by_flag should be used on dataclasses"
+  orig_init = cls.__init__
+  fields = dataclasses.fields(cls)
+  named_fields = {field.name: field for field in fields}
+  del fields
+  meta = _get_merged_meta(cls)
+
+  def create_init(orig_init, named_fields, meta):
+
+    def __init__(self, *args, **kwargs):
+      orig_init(self, *args, **kwargs)
+      for name, flag in meta.linked_map.items():
+        if getattr(self, name) == named_fields[name].default and getattr(
+            FLAGS, flag) != FLAGS[flag].default:
+          setattr(self, name, getattr(FLAGS, flag))
+
+    return __init__
+
+  cls.__init__ = create_init(orig_init, named_fields, meta)
+  return cls
