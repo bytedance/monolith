@@ -325,6 +325,7 @@ cc_library(
     ],
     deps = [
         "@org_tensorflow//tensorflow/core:framework_headers_lib",
+        "//monolith/native_training/runtime/hash_table:embedding_hash_table_cc_proto",
     ],
     alwayslink = 1,
 )

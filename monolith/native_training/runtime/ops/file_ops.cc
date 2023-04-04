@@ -16,7 +16,10 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_op_kernel.h"
+#include "tensorflow/core/lib/io/record_writer.h"
 #include "tensorflow/core/platform/path.h"
+
+#include "monolith/native_training/runtime/hash_table/embedding_hash_table.pb.h"
 
 namespace tensorflow {
 namespace monolith_tf {
@@ -43,6 +46,16 @@ class FileResource : public ResourceBase {
     return f_->Append(data);
   }
 
+  Status AppendRecord(const string& serialized) {
+    absl::MutexLock l(&mu_);
+    if (!record_writer_) {
+      record_writer_.reset(new tensorflow::io::RecordWriter(
+          f_.get(),
+          tensorflow::io::RecordWriterOptions::CreateRecordWriterOptions("")));
+    }
+    return record_writer_->WriteRecord(serialized);
+  }
+
   ~FileResource() {
     absl::MutexLock l(&mu_);
     if (!closed_) {
@@ -57,6 +70,8 @@ class FileResource : public ResourceBase {
  private:
   absl::Mutex mu_;
   std::unique_ptr<WritableFile> f_ ABSL_GUARDED_BY(mu_);
+  std::unique_ptr<tensorflow::io::RecordWriter> record_writer_
+      ABSL_GUARDED_BY(mu_);
   const std::string debugging_info_;
   bool closed_ ABSL_GUARDED_BY(mu_);
 };
@@ -143,6 +158,46 @@ REGISTER_OP("MonolithWritableFileAppend")
 
 REGISTER_KERNEL_BUILDER(Name("MonolithWritableFileAppend").Device(DEVICE_CPU),
                         MonolithWritableFileAppendOp);
+
+class MonolithEntryDumpFileAppendOp : public OpKernel {
+ public:
+  explicit MonolithEntryDumpFileAppendOp(OpKernelConstruction* c)
+      : OpKernel(c) {}
+
+  void Compute(OpKernelContext* c) override {
+    FileResource* f;
+    OP_REQUIRES_OK(c, LookupResource(c, HandleFromInput(c, 0), &f));
+    core::ScopedUnref unref(f);
+    const auto& item_id = c->input(1).flat<int64>();
+    const auto& bias = c->input(2).flat<float>();
+    const auto& embedding = c->input(3).flat<float>();
+
+    size_t batch_size = item_id.size();
+    CHECK_GT(batch_size, 0);
+    CHECK_EQ(embedding.size() % batch_size, 0);
+    size_t embedding_len = embedding.size() / batch_size;
+    for (size_t batch_id = 0; batch_id < batch_size; batch_id++) {
+      monolith::hash_table::EntryDump d;
+      d.set_id(item_id(batch_id));
+      d.add_num(bias(batch_id));
+      for (size_t i = 0; i < embedding_len; i++) {
+        d.add_num(embedding(batch_id * embedding_len + i));
+      }
+      OP_REQUIRES_OK(c, f->AppendRecord(d.SerializeAsString()));
+    }
+  }
+};
+
+REGISTER_OP("MonolithEntryDumpFileAppend")
+    .Input("handle: resource")
+    .Input("item_id: int64")
+    .Input("bias: float")
+    .Input("embedding: float")
+    .SetIsStateful()
+    .SetShapeFn(shape_inference::UnknownShape);
+
+REGISTER_KERNEL_BUILDER(Name("MonolithEntryDumpFileAppend").Device(DEVICE_CPU),
+                        MonolithEntryDumpFileAppendOp);
 
 }  // namespace monolith_tf
 }  // namespace tensorflow

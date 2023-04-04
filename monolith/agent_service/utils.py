@@ -357,6 +357,7 @@ class AgentConfig(TfServingConfig):
   rough_sort_model_local_path: str = DefaultRoughSortModelLocalPath
   rough_sort_model_loaded_server: str = RoughSortModelLoadedServer.ENTRY
   rough_sort_model_p2p_path: str = DefaultRoughSortModelP2PPath
+  rough_sort_resource_constrained: bool = False
   dc_aware: bool = False
   # for unified container
   layout_pattern: str = None
@@ -711,7 +712,17 @@ class AgentConfig(TfServingConfig):
                            base_path=os.path.join(self.base_path, name),
                            version_policy=version_policy,
                            version_data=version_data))
-      if (self.rough_sort_model_name and (self.rough_sort_model_loaded_server
+
+      if self.rough_sort_resource_constrained and self.rough_sort_model_loaded_server == RoughSortModelLoadedServer.ENTRY:
+        name = f'{RoughSortModelPrefix.ENTRY}_0'
+        model_config = model_config_list.add()
+        rough_model_path = os.path.join(self.base_path, name)
+        model_config.CopyFrom(
+            gen_model_config(name=name,
+                             base_path=rough_model_path,
+                             version_policy=version_policy,
+                             version_data=version_data))
+      elif (self.rough_sort_model_name and (self.rough_sort_model_loaded_server
                                           == RoughSortModelLoadedServer.ENTRY or
                                           self.rough_sort_model_loaded_server
                                           == RoughSortModelLoadedServer.DENSE)):

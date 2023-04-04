@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from absl import logging
+from absl import logging, flags
 import os
 import struct
 from copy import deepcopy
@@ -41,6 +41,7 @@ _line_id_descriptor = LineId.DESCRIPTOR
 
 _default_parser_ctx = None
 
+FLAGS = flags.FLAGS
 
 @dataclass
 class ShardingSparseFidsOpParams:
@@ -55,6 +56,7 @@ class ShardingSparseFidsOpParams:
 
 
 class ParserCtx(object):
+  enable_resource_constrained_roughsort = False
   sharding_sparse_fids_features_prefix = "__sharding_sparse_fids__"
   sharding_sparse_fids_sparse_features_key = "__sharding_sparse_fids__sparse_features"
 
@@ -70,7 +72,6 @@ class ParserCtx(object):
     self._old_parser_ctx = _default_parser_ctx
     _default_parser_ctx = self
     return self
-
   def __exit__(self, exc_type, exc_val, exc_tb):
     global _default_parser_ctx
     _default_parser_ctx = self._old_parser_ctx
@@ -260,6 +261,14 @@ def parse_instances(tensor: tf.Tensor,
   
   """
 
+  if ParserCtx.enable_resource_constrained_roughsort:
+    if extra_features is None:
+      extra_features = ["item_id"]
+      extra_feature_shapes = [1]
+    elif "item_id" not in extra_features:
+      extra_features.append("item_id")
+      extra_feature_shapes.append(1)
+
   if dense_features:
     assert dense_feature_shapes is not None
     assert len(dense_feature_shapes) == len(dense_features)
@@ -277,6 +286,8 @@ def parse_instances(tensor: tf.Tensor,
   add_to_collections('extra_features', extra_features)
   add_to_collections('extra_feature_shapes', extra_feature_shapes)
   add_to_collections('variant_type', 'instance')
+  get_default_parser_ctx().set('fidv1_features', fidv1_features)
+  get_default_parser_ctx().set('fidv2_features', fidv2_features)
 
   names, shapes, types = [], [], []
 
@@ -378,6 +389,7 @@ def parse_examples(tensor: tf.Tensor,
   add_to_collections('extra_features', extra_features)
   add_to_collections('extra_feature_shapes', extra_feature_shapes)
   add_to_collections('variant_type', 'example')
+  get_default_parser_ctx().set('sparse_features', sparse_features)
 
   names, shapes, types = [], [], []
 
@@ -461,6 +473,7 @@ def parse_example_batch(
   add_to_collections('extra_features', extra_features)
   add_to_collections('extra_feature_shapes', extra_feature_shapes)
   add_to_collections('variant_type', 'example_batch')
+  get_default_parser_ctx().set('sparse_features', sparse_features)
 
   names, shapes, types = [], [], []
 

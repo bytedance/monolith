@@ -598,6 +598,9 @@ py_library(
         "//monolith/native_training/model_export:saved_model_exporters",
         "//monolith/native_training/proto:debugging_info_py_proto",
         "//monolith/native_training/runtime/hash_table:embedding_hash_table_py_proto",
+        requirement("numpy"),
+        requirement("pyarrow"),
+        requirement("cityhash"),
     ],
 )
 

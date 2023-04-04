@@ -22,6 +22,7 @@ import dataclasses
 import getpass
 import json
 import os
+import io
 import platform
 import socket
 import threading
@@ -149,6 +150,59 @@ def _lookup_embedding_ids(
     name_to_embedding_ids: Dict[str, tf.RaggedTensor]) -> Dict[str, tf.Tensor]:
   name_to_ids = {k: v.values for k, v in name_to_embedding_ids.items()}
   return hash_table.lookup(name_to_ids)
+
+
+def _convert_parquets_to_instance(parquets_path, instance_path):
+  import pyarrow.parquet as pq
+  from struct import pack
+  from cityhash import CityHash64
+  from idl.matrix.proto.proto_parser_pb2 import Instance
+
+  # choose latest date in parquets_path
+  if not tf.io.gfile.isdir(parquets_path):
+    raise ValueError(f"Argument parquet_path is not a directory. {parquets_path}")
+  valid_dates = [fn for fn in tf.io.gfile.listdir(parquets_path) if fn.isdigit() and len(fn)==8 and tf.io.gfile.isdir(os.path.join(parquets_path, fn))]
+  if len(valid_dates) == 0:
+    raise ValueError(f"No vaild subdirectory in parquet_path: {parquets_path}")
+  selected_date = max(valid_dates)
+  parquets_path = os.path.join(parquets_path, selected_date)
+  logging.info(f"start to convert parquets files to a instance pb file, latest parquet_path={parquets_path}")
+
+  # collect item_to_fids dict
+  item_to_fids = {}
+  parquet_files = [os.path.join(parquets_path, fn) for fn in tf.io.gfile.listdir(parquets_path) if fn.endswith(".snappy.parquet")]
+  if len(parquet_files) == 0:
+    raise ValueError(f"None of .snappy.parquet file found in {parquets_path}")
+  logging.info(f"{len(parquet_files)} .snappy.paruqet file found.")
+  for file_id, file_path in enumerate(parquet_files):
+    logging.info(f"{file_id+1}/{len(parquet_files)} start to parse parquet file: {file_path}")
+    with tf.io.gfile.GFile(file_path, "rb") as f:
+      f_bin = f.read()
+      pq_data = pq.read_table(io.BytesIO(f_bin))
+    logging.info(f"{len(pq_data)} items detected.")
+    item_id_col = pq_data['item_id'].to_pylist()
+    fids_col = pq_data['fids'].to_pylist()
+    for i in range(len(pq_data)):
+      item_id = CityHash64(str(item_id_col[i])) & ((1<<63)-1)
+      fids = [int(fid) for fid in fids_col[i].split()]
+      if item_id in item_to_fids:
+        logging.info(f"{item_id} already in dict, use latest")
+      item_to_fids[item_id] = fids
+
+  logging.info(f"convert finished, totally {len(item_to_fids)} items collected.")
+
+  # generate instance pb file
+  logging.info(f"start to generate items instance pb file to {instance_path}.")
+  with tf.io.gfile.GFile(instance_path, "wb") as f:
+    for item_id, fids in item_to_fids.items():
+      inst = Instance()
+      inst.line_id.item_id = item_id
+      for fid in fids:
+        inst.fid.append(fid)
+      serialized = inst.SerializeToString()
+      f.write(pack("<Q", len(serialized)))
+      f.write(serialized)
+  logging.info(f"items instance pb file generated in {instance_path}.")
 
 
 def create_exporter(task,
@@ -358,6 +412,13 @@ class CpuTrainingConfig:
     :param reload_alias_map: A dict map the old variable name to the new one
     :param enable_alias_map_auto_gen: Whether enable alias_map auto generate
     :param enable_model_dump: Whether enable model dump for scurelty purpose
+    :param enable_resource_constrained_roughsort: Whether enable resource constrained roughsort
+    :param roughsort_candidate_items_path: candidate item data file path
+    :param roughsort_items_use_parquet: if item candidate data format is parquet
+    :param items_input_lagrangex_header: If items input file has lagrangex_header flag
+    :param items_input_has_sort_id: If items input file has sort_id flag
+    :param items_input_kafka_dump: If items input file has kafka_dump flag
+    :param items_input_kafka_dump_prefix: If items input file has kafka_dump_prefix flag
   """
 
   server_type: str = "worker"
@@ -420,6 +481,13 @@ class CpuTrainingConfig:
   reload_alias_map: Dict[str, int] = None
   enable_alias_map_auto_gen: bool = None
   enable_model_dump: bool = False
+  enable_resource_constrained_roughsort: bool = False
+  roughsort_candidate_items_path: str = None
+  roughsort_items_use_parquet: bool = False
+  items_input_lagrangex_header: bool = False
+  items_input_has_sort_id: bool = False
+  items_input_kafka_dump: bool = False
+  items_input_kafka_dump_prefix: bool = False
   device_fn: Callable[[tf.Operation], str] = None
   use_dataservice : bool = None
 
@@ -497,6 +565,8 @@ class CpuTraining:
     if config.use_native_multi_hash_table is None:
       config.use_native_multi_hash_table = True
 
+    get_default_parser_ctx().enable_fused_layout = config.enable_fused_layout
+    ParserCtx.enable_resource_constrained_roughsort = config.enable_resource_constrained_roughsort
     FLAGS.dataset_worker_idx = config.index
     FLAGS.dataset_num_workers = config.num_workers
 
@@ -1699,8 +1769,26 @@ def _do_worker_train(config: DistributedCpuTrainingConfig,
       _save_debugging_info(config, cluster, training)
     run_hooks = get_sync_run_hooks(False)
     estimator.train(training.create_input_fn(config.mode),
-                    hooks=run_hooks,
-                    max_steps=params.train.max_steps)
+                hooks=run_hooks,
+                max_steps=params.train.max_steps)
+
+    if is_chief(config) and config.enable_resource_constrained_roughsort and config.mode==tf.estimator.ModeKeys.TRAIN:
+      logging.info(f"roughsort_items_use_parquet: {config.roughsort_items_use_parquet}")
+      if config.roughsort_items_use_parquet:
+        items_path = os.path.join(config.model_dir, "candidate_items.pb")
+        _convert_parquets_to_instance(config.roughsort_candidate_items_path, items_path)
+      else:
+        items_path = config.roughsort_candidate_items_path
+
+      logging.info("Start to evaluate item data...")
+      # params.p.only_save_item_cache_hashtable = True
+      params.mode = tf.estimator.ModeKeys.PREDICT
+      native_task = params.instantiate()
+      training = CpuTraining(config, native_task)
+      estimator = tf.estimator.Estimator(training.create_model_fn(), config=run_config)
+      estimator.train(training._task.create_item_input_fn(
+          items_path), max_steps=params.train.max_steps)
+
   finally:
     # TODO(leqi.zou): we have some thread safety issue in the test.
     if "TF_CONFIG" in os.environ:
@@ -2155,6 +2243,24 @@ def local_train_internal(params: InstantiableParams,
   estimator = tf.estimator.Estimator(training.create_model_fn(), config=config)
   estimator.train(training.create_input_fn(tf.estimator.ModeKeys.TRAIN),
                   steps=steps)
+
+  if conf.enable_resource_constrained_roughsort and conf.mode == tf.estimator.ModeKeys.TRAIN:
+    logging.info(f"roughsort_items_use_parquet: {conf.roughsort_items_use_parquet}")
+    if conf.roughsort_items_use_parquet:
+      items_path = os.path.join(conf.model_dir, "candidate_items.pb")
+      _convert_parquets_to_instance(conf.roughsort_candidate_items_path, items_path)
+    else:
+      items_path = conf.roughsort_candidate_items_path
+
+    params.mode = tf.estimator.ModeKeys.PREDICT
+    # params.p.only_save_item_cache_hashtable = True
+    task = params.instantiate()
+    training = CpuTraining(conf, task)
+    config = tf.estimator.RunConfig(model_dir=model_dir,
+                                    session_config=session_config)
+    estimator = tf.estimator.Estimator(training.create_model_fn(), config=config)
+    estimator.train(training._task.create_item_input_fn(
+        items_path), steps=steps)
 
   if "TF_CONFIG" in os.environ:
     del os.environ["TF_CONFIG"]

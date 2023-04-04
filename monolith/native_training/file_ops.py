@@ -32,6 +32,9 @@ class WritableFile:
     """
     return file_ops.monolith_writable_file_append(self._handle, content)
 
+  def append_entry_dump(self, item_id, bias, embedding):
+    return file_ops.monolith_entry_dump_file_append(self._handle, item_id, bias, embedding)
+
   def close(self):
     return file_ops.monolith_writable_file_close(self._handle)
 

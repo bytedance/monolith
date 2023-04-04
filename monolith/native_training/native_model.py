@@ -60,7 +60,8 @@ from monolith.native_training.dense_reload_utils import CustomRestoreListener, C
 from monolith.native_training.layers.utils import dim_size
 from monolith.native_training.metric.metric_hook import KafkaMetricHook, FileMetricHook, vepfs_key_fn, vepfs_layout_fn
 from idl.matrix.proto.example_pb2 import OutConfig, OutType, TensorShape
-from monolith.native_training.data.datasets import POOL_KEY
+from monolith.native_training.data.datasets import POOL_KEY, PBDataset, PbType
+from monolith.native_training.data.parsers import ParserCtx, get_default_parser_ctx, parse_instances, parse_examples
 from monolith.native_training.model_dump.graph_utils import _node_name
 from monolith.native_training.distribution_utils import enable_sync_training
 from monolith.native_training.device_utils import input_device_fn, model_device_fn, serving_input_device_fn, maybe_device_if_allowed
@@ -231,6 +232,7 @@ class MonolithBaseModel(NativeTask, ABC):
     p.define('file_name', '', 'the test input file name')
     p.define('enable_grads_and_vars_summary', False,
              'enable_grads_and_vars_summary')
+    # p.define("only_save_item_cache_hashtable", False, "if set, then only save item cache table in next run")
     p.define('dense_weight_decay', 0.0, 'dense_weight_decay')
     p.define("clip_norm", 1000.0, "float, clip_norm")
     p.define("sparse_norm_warmup_steps", None, "int, sparse norm warmup steps")
@@ -305,6 +307,17 @@ class MonolithBaseModel(NativeTask, ABC):
     write_op = op_file.append(tf.strings.reduce_join(result))
     return op_file, write_op
 
+  def _dump_item_embedding_ops(self, features):
+    assert isinstance(self, DeepRoughSortBaseModel)
+    assert 'item_id' in features and 'item_bias' in features and 'item_vec' in features
+    item_cache_table_path = self._cal_item_cache_table_path()
+    cache_table_file_name = "MonolithHashTable_cached_item_embeddings-00000-of-00001"
+    output_path = os.path.join(item_cache_table_path, cache_table_file_name)
+    logging.info(f"_dump_item_embedding_ops: output_path={output_path}")
+    op_file = file_ops.WritableFile(output_path)
+    write_op = op_file.append_entry_dump(features['item_id'], features['item_bias'], features['item_vec'])
+    return op_file, write_op
+    
   def _get_real_mode(self, mode: tf.estimator.ModeKeys):
     if mode == tf.estimator.ModeKeys.PREDICT:
       return mode
@@ -464,6 +477,30 @@ class MonolithBaseModel(NativeTask, ABC):
 
       if self.losses:
         loss = loss + tf.add_n(self.losses)
+
+      # in predict mode, when enable_resource_constrained_roughsort, only generate item_cache_hashtable
+      if not is_exporting() and real_mode == tf.estimator.ModeKeys.PREDICT and FLAGS.enable_resource_constrained_roughsort:
+        assert isinstance(self, DeepRoughSortBaseModel)
+        if isinstance(pred, (list, tuple)):
+          assert isinstance(head_name,
+                            (list, tuple)) and len(pred) == len(head_name)
+          predictions = dict(zip(head_name, pred))
+        else:
+          predictions = pred
+      
+        item_cache_op_file, item_cache_write_op = self._dump_item_embedding_ops(features)
+        close_hook = file_ops.FileCloseHook([item_cache_op_file])
+        with tf.control_dependencies(control_inputs=[item_cache_write_op]):
+          if isinstance(predictions, dict):
+            predictions = {k: tf.identity(v) for k, v in predictions.items()}
+          else:
+            predictions = tf.identity(predictions)
+          return tf.estimator.EstimatorSpec(tf.estimator.ModeKeys.PREDICT,
+                                            loss=tf.constant(1),
+                                            train_op=tf.no_op(),
+                                            training_hooks=[close_hook] +
+                                            self._training_hooks,
+                                            predictions=predictions)
 
       if real_mode == tf.estimator.ModeKeys.PREDICT:
         if isinstance(pred, (list, tuple)):
