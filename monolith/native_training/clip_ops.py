@@ -24,6 +24,8 @@ gen_clip_ops = gen_monolith_ops
 
 def _global_norm(t_list: List[tf.Tensor]) -> tf.Tensor:
   """Computes the global norm of multiple tensors."""
+  if len(t_list) == 0:
+    return None
   l2_sum = gen_clip_ops.global_l2_reduce(t_list)
   return tf.sqrt(l2_sum)
 

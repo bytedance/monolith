@@ -457,7 +457,11 @@ class FusedReduceAndSplitGPU : public OpKernel {
     auto config =
         GetGpuLaunchConfig(fao_alloc.get_unaligned_total(), gpu_device,
                            FusedReduceSumAndSplitKernel<T>, smem_sz, 0);
-    GpuLaunchKernel(FusedReduceSumAndSplitKernel<T>, config.block_count,
+    auto grid_offset = 24;
+    char* ptr = std::getenv("MONOLITH_GT_OVERSUB_SM");
+    if (ptr) grid_offset = std::atoi(ptr);
+    grid_offset += 2;
+    GpuLaunchKernel(FusedReduceSumAndSplitKernel<T>, config.block_count - grid_offset,
                     config.thread_per_block, smem_sz, gpu_device.stream(),
                     table_splits.data(), table_infos.data(),
                     GetGpuDeviceArrayOnHost(&col_infos.data()),

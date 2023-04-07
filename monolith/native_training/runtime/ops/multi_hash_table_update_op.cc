@@ -241,10 +241,10 @@ void MultiHashTableFusedOptimizeOp<CPUDevice>::ComputeH(OpKernelContext* ctx) {
         auto learning_rate = absl::MakeConstSpan(
             learning_rates + learning_rate_offset, table->slice_size());
         learning_rate_offset += table->slice_size();
-        table->BatchOptimize(
-            ctx, slot_size_vec[curr_idx], ids + key_offsets[curr_idx],
-            id_grads + emb_offsets[curr_idx], learning_rate, req_time,
-            enable_grad_accumulation_, global_step);
+        table->BatchOptimize(ctx, slot_size_vec[curr_idx],
+                             ids + key_offsets[curr_idx],
+                             id_grads + emb_offsets[curr_idx], learning_rate,
+                             req_time, enable_grad_accumulation_, global_step);
       }
     }
   };

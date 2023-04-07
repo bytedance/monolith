@@ -43,6 +43,7 @@ if enable_hvd != None:
   from horovod.tensorflow.compression import FP16Compressor, NoneCompressor
 
 control_ops = []
+dense_opt_ops = []
 
 def allreduce_cond(grads, scale = 1):
   if enable_bps and enable_bps_allreduce:
@@ -165,24 +166,18 @@ def apply_gradients_with_var_optimizer(
         grads_and_vars_tmp.append((gv[0] if gv[0] is not None else tf.zeros_like(gv[1]), gv[1]))
       grads_and_vars = grads_and_vars_tmp
 
-    unused_filter = [
-        True if gv[0] is not None else False for gv in grads_and_vars
-    ]
-    unused_dense_filter = unused_filter[:len(variables)]
-    unused_emb_filter = unused_filter[len(variables):]
-    variables = [v for v, used in zip(variables, unused_dense_filter) if used]
-    all_embeddings = [
-        e for e, used in zip(all_embeddings, unused_emb_filter) if used
-    ]
+    dense_gvs = [gv for gv in grads_and_vars[:len(variables)] if gv[0] is not None]
+    sparse_gvs = [gv for gv in grads_and_vars[len(variables):] if gv[0] is not None]
     if is_fused_layout:
       feature_columns = []
     else:
       feature_columns = [
-          fc for fc, used in zip(feature_columns, unused_emb_filter) if used
+          fc for fc, gv in zip(feature_columns, grads_and_vars[len(variables):]) if gv[0] is not None
       ]
-    grads_and_vars = [
-        gv for gv, used in zip(grads_and_vars, unused_filter) if used
-    ]
+    
+    variables = [gv[1] for gv in dense_gvs]
+    all_embeddings = [gv[1] for gv in sparse_gvs]
+    grads_and_vars = dense_gvs + sparse_gvs
     grads = [grad_and_var[0] for grad_and_var in grads_and_vars]
     # UE conditional gradient check
     if ue_gradient_check:
@@ -317,6 +312,7 @@ def apply_gradients_with_var_optimizer(
     train_ops = []
     grads_and_vars_without_optimizer = []
     if variables:
+      global dense_opt_ops
       for i, var in enumerate(variables):
         if hasattr(var, 'optimizer') and var.optimizer:
           train_ops.append(
@@ -329,22 +325,25 @@ def apply_gradients_with_var_optimizer(
       train_ops.append(
           ctx.add_async_function(var_opt.apply_gradients,
                                  (grads_and_vars_without_optimizer,)))
+      dense_opt_ops = train_ops.copy()
+
+    with tf.device('/device:CPU:0'):
+      train_ops.append(
+          ctx.apply_embedding_gradients(
+              list(zip(sparse_clipped_grads, all_embeddings)), sparse_scale))
 
     if global_step is not None:
       # The control dependency here ensures that
       # when the StepCounterHook tries to get the global_step
       # from the training session at the same time of training,
       # the read_value should be consistent (before assign_add).
+      # Also makes sure that the global step is incremented after the optimize ops, 
+      # since embedding optimizer requires this global step as input
       with tf.control_dependencies(
-          [training_util._get_or_create_global_step_read()]):
+          train_ops + [training_util._get_or_create_global_step_read()]):
         train_ops.append(
             ctx.add_async_function(tf.compat.v1.assign_add, (global_step, 1)))
-
-    with tf.device('/device:CPU:0'):
-      train_ops.append(
-          ctx.apply_embedding_gradients(
-              list(zip(sparse_clipped_grads, all_embeddings)), sparse_scale))
-      return tf.group(*train_ops)
+    return tf.group(*train_ops)
 
 
 def apply_gradients(ctx: NativeContext,

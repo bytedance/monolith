@@ -15,6 +15,9 @@
 from unittest import mock
 
 import tensorflow as tf
+from tensorflow.python.framework import test_util
+import os
+os.environ['MONOLITH_WITH_ALLREDUCE_FUSION'] = 'one'
 
 from monolith.native_training import embedding_combiners
 from monolith.native_training import feature, feature_utils
@@ -71,6 +74,33 @@ class FeatureUtilsTest(tf.test.TestCase):
       self.assertAllEqual(sess.run(var), 0.5)
       self.assertAllEqual(sess.run(emb_var), [[0.5, 0.5, 0.5, 1.0]])
       self.assertAllEqual(sess.run(global_step), 1)
+
+  @test_util.run_gpu_only
+  def test_apply_gradients_with_dense_optimizer_gpu(self):
+    # this test tests the fusion of clip_by_global_norm with later kernels
+    with test_util.use_gpu():
+      ctx, fc, emb_var, emb = _setup_test_embedding()
+      emb_loss = tf.reduce_sum(tf.reduce_sum(emb))
+      var = tf.Variable(1.0)
+      global_step = tf.compat.v1.train.get_or_create_global_step()
+      loss = emb_loss + var
+      opt = tf.compat.v1.train.GradientDescentOptimizer(1.0)
+      # norm is 2, will be clipped by 1
+      op = feature_utils.apply_gradients_with_var_optimizer(
+          ctx, [fc],
+          opt,
+          loss,
+          clip_norm=1.0,
+          global_step=global_step,
+          grads_and_vars_summary=False,
+          use_allreduce=True)
+
+      with self.session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
+        sess.run(op)
+        self.assertAllEqual(sess.run(var), 0.5)
+        self.assertAllEqual(sess.run(emb_var), [[0.5, 0.5, 0.5, 1.0]])
+        self.assertAllEqual(sess.run(global_step), 1)
 
   def test_apply_gradients_with_dense_optimizer_post_push(self):
     ctx, fc, emb_var, emb = _setup_test_embedding(is_async=True)

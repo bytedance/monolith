@@ -2158,7 +2158,7 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
       start_step = config.profile_some_steps_from
       end_step = start_step + 10
       options = tf.profiler.experimental.ProfilerOptions(
-          host_tracer_level=3,
+          host_tracer_level=int(os.getenv('MONOLITH_TRACE_LEVEL', '3')),
           python_tracer_level=1,
           # CUPTI_ERROR_MULTIPLE_SUBSCRIBERS_NOT_SUPPORTED:
           # CUPTI doesn't allow multiple callback subscribers.

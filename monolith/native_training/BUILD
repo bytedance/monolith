@@ -769,10 +769,6 @@ py_test(
 )
 
 py_library(
-    name = "sync_training_hooks_addtional_deps",
-)
-
-py_library(
     name = "sync_training_hooks",
     srcs = ["sync_training_hooks.py"],
     deps = [
@@ -780,7 +776,6 @@ py_library(
         ":hash_table_ops",
         ":hvd_lib",
         ":native_task",
-        ":sync_training_hooks_addtional_deps",
         "//monolith/agent_service:backends",
         "//monolith/native_training/data:datasets_py",
     ],

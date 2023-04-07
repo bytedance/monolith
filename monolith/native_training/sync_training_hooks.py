@@ -182,8 +182,6 @@ class SyncTrainingSaverControlHook(tf.estimator.SessionRunHook):
         self._target_timer.disable()
 
 
-
-
 class SyncTrainingInfoHook(tf.estimator.SessionRunHook):
 
   def begin(self):

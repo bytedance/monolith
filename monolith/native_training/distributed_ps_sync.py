@@ -483,16 +483,17 @@ class DistributedMultiTypeHashTableMpi(
     if q:
       self.add_queue_hook(EnqueueHook(q))
 
-    with tf.device("/GPU:0"):
-      updated_table = self._table.fused_apply_gradient(
-          auxiliary_bundle.pop("id_flat_t"),
-          auxiliary_bundle.pop("indices"),
-          auxiliary_bundle.pop("id_size_flat_t"),
-          auxiliary_bundle.pop("grad_flat_t"),
-          auxiliary_bundle.pop("id_offsets"),
-          auxiliary_bundle.pop("emb_offsets"),
-          auxiliary_bundle.pop("global_step"), auxiliary_bundle.pop("req_time"),
-          self._shard_num)
+    with tf.control_dependencies(feature_utils.dense_opt_ops):
+      with tf.device("/GPU:0"):
+        updated_table = self._table.fused_apply_gradient(
+            auxiliary_bundle.pop("id_flat_t"),
+            auxiliary_bundle.pop("indices"),
+            auxiliary_bundle.pop("id_size_flat_t"),
+            auxiliary_bundle.pop("grad_flat_t"),
+            auxiliary_bundle.pop("id_offsets"),
+            auxiliary_bundle.pop("emb_offsets"),
+            auxiliary_bundle.pop("global_step"), auxiliary_bundle.pop("req_time"),
+            self._shard_num)
 
     update_op = self._copy_with_new_table(updated_table)
     # TODO(zouxuan): add better tests to test the async optimize.

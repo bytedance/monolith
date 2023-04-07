@@ -194,8 +194,12 @@ class FusedGatherEmbeddingsByInputOpGPU : public OpKernel {
     // while searching the idx input bucket to which the output val belongs to.
     auto config =
         GetGpuLaunchConfig(fao_alloc.get_unaligned_total(), gpu_device);
+    auto grid_offset = 24;
+    char* ptr = std::getenv("MONOLITH_GT_OVERSUB_SM");
+    if (ptr) grid_offset = std::atoi(ptr);
+    grid_offset += 2;
     GpuLaunchKernel(
-        FusedGatherKernel<T>, config.block_count, config.thread_per_block,
+        FusedGatherKernel<T>, config.block_count - grid_offset, config.thread_per_block,
         /*shared_memory_size_bytes=*/smem_usage, gpu_device.stream(),
         fused_embeddings_flat.data(), input_ptrs.data(), output_ptrs.data(),
         embedding_dims.data(), offsets.data(), fao_alloc.get_unaligned_total());
