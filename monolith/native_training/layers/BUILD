@@ -13,6 +13,7 @@ py_library(
         "//monolith:utils",
         "//monolith/native_training:monolith_export",
         "//monolith/native_training:utils",
+        "//monolith/native_training/summary:summary_ops",
     ],
 )
 
@@ -349,8 +350,10 @@ tf_kernel_library(
     srcs = [
         "kernels/ffm_kernels.cc",
         "kernels/ffm_kernels.h",
+        "kernels/feature_insight_kernels.cc",
         "ops/ffm_ops.cc",
         "ops/nas_ops.cc",
+        "ops/feature_insight_ops.cc",
     ],
     copts = ["-DNDEBUG"],
     gpu_srcs = [
@@ -390,24 +393,18 @@ py_library(
     deps = [
         ":layer_ops",
         ":utils",
+        "//monolith/native_training/data:feature_list",
         "@org_tensorflow//tensorflow:tensorflow_py",
     ],
 )
 
-py_test(
-    name = "sparse_nas_test",
-    srcs = ["sparse_nas_test.py"],
-    python_version = "PY3",
-    srcs_version = "PY3",
-    deps = [
-        ":sparse_nas",
-    ],
-)
 
 exports_files([
     "kernels/ffm_kernels.cc",
     "kernels/ffm_kernels.cu.cc",
+    "kernels/feature_insight_kernels.cc",
     "ops/ffm_ops.cc",
     "kernels/nas_kernels.cc",
     "ops/nas_ops.cc",
+    "ops/feature_insight_ops.cc",
 ])

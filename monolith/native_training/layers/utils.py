@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import numpy as np
 import tensorflow as tf
 from tensorflow.python.ops import array_ops
 
@@ -114,3 +115,45 @@ def merge_tensor_list(tensor_list,
     output = tensor_list
 
   return output
+
+
+EPSILON = np.finfo(tf.float32.as_numpy_dtype).tiny
+
+# Copy from: https://github.com/ermongroup/subsets/blob/master/subsets/sample_subsets.py
+# Reparameterizable Subset Sampling via Continuous Relaxations (https://arxiv.org/pdf/1901.10517.pdf)
+# [code](https://github.com/ermongroup/subsets)
+def gumbel_keys(w):
+    # sample some gumbels
+    uniform = tf.random_uniform(
+        tf.shape(w),
+        minval=EPSILON,
+        maxval=1.0)
+    z = -tf.log(-tf.log(uniform))
+    w = w + z
+    return w
+
+
+def continuous_topk(w, k, t, separate=False):
+    khot_list = []
+    onehot_approx = tf.zeros_like(w, dtype=tf.float32)
+    for i in range(k):
+        khot_mask = tf.maximum(1.0 - onehot_approx, EPSILON)
+        w += tf.log(khot_mask)
+        onehot_approx = tf.nn.softmax(w / t, axis=-1)
+        khot_list.append(onehot_approx)
+    if separate:
+        return khot_list
+    else:
+        return tf.reduce_sum(khot_list, 0)
+
+
+def sample_subset(w, k, t=0.1):
+    '''
+    Args:
+        w (Tensor): Float Tensor of weights for each element. In gumbel mode
+            these are interpreted as log probabilities
+        k (int): number of elements in the subset sample
+        t (float): temperature of the softmax
+    '''
+    w = gumbel_keys(w)
+    return continuous_topk(w, k, t)

@@ -21,7 +21,7 @@ from monolith.agent_service.tfs_client import main as tfs_client_main
 
 FLAGS = flags.FLAGS
 flags.DEFINE_enum("bin_name", "agent",
-                  ["agent", "agent_client"],
+                  ["agent", "agent_client", "tfs_client"],
                   "bin_name: agent, agent_client")
 
 def main(_):

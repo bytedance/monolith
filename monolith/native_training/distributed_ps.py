@@ -1001,7 +1001,18 @@ class PartitionedHashTable(object):
 
     with tf.name_scope("pht_lookup"):
       if ParserCtx.sharding_sparse_fids_sparse_features_key in features:
-        assert False, "not support, please use sharding_sparse_fids_with_context before call lookup"
+        #assert False, "not support, please use sharding_sparse_fids_with_context before call lookup"
+        # only support for cpu training(without dsworker)
+        shards, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, \
+          feature_size, fid_size, emb_size, shards_row_split, shards_row_split_size, \
+          fid_list_emb_row_lenth, fid_list_table_row_length, fid_list_shard_row_lenth = \
+          sharding_sparse_fids(
+              features[ParserCtx.sharding_sparse_fids_sparse_features_key],
+              ps_num=self._num_ps,
+              feature_cfgs=self._feature_configs,
+              unique=self._unique(),
+              input_type=self._inner_data_type,
+              parallel_flag=0)
       else:
         sharding_features = ParserCtx.sharding_sparse_fids_features_parse_from_features(
             features)

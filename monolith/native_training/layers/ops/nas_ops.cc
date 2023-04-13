@@ -116,4 +116,33 @@ REGISTER_OP("NasArchWeight")
       return Status::OK();
     });
 
+REGISTER_OP("BinaryMaskToSlotWeight")
+    .Input("weight: float")
+    .Input("mask: int32")
+    .Input("shape: int32")
+    .Output("output: float")
+    .SetShapeFn([](shape_inference::InferenceContext *ctx) {
+      ctx->set_output(0, ctx->Vector(ctx->UnknownDim()));
+      return Status::OK();
+    });
+
+REGISTER_OP("BinaryMaskToSlotWeightGrad")
+    .Input("grad: float")
+    .Input("mask: int32")
+    .Input("shape: int32")
+    .Output("output: float")
+    .SetShapeFn([](shape_inference::InferenceContext *ctx) {
+      ctx->set_output(0, ctx->Vector(ctx->UnknownDim()));
+      return Status::OK();
+    });
+
+REGISTER_OP("SegmentDiscreteGate")
+    .Input("proba: float")
+    .Input("segment_sizes: int32")
+    .Output("output: float")
+    .Attr("use_gumbel: bool")
+    .SetShapeFn([](shape_inference::InferenceContext *ctx) {
+      ctx->set_output(0, ctx->input(0));
+      return Status::OK();
+    });
 }  // namespace tensorflow

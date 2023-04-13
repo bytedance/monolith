@@ -35,6 +35,8 @@ from monolith.native_training.utils import add_to_collections
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import common_shapes
 
+FLAGS = flags.FLAGS
+
 parse_instance_ops = gen_monolith_ops
 
 _line_id_descriptor = LineId.DESCRIPTOR
@@ -330,8 +332,9 @@ def parse_instances(tensor: tf.Tensor,
     out_list, instances = parse_instance_ops.parse_instances_v2(
         tensor, [], [], names, shapes, types, extra_features or [])
     features = _assemble([], names, shapes, types, out_list)
-    if get_default_parser_ctx().sharding_sparse_fids_op_params is not None:
-      sharding_sparse_fids_with_context(instances, features)
+    parser_ctx = get_default_parser_ctx()
+    if parser_ctx.sharding_sparse_fids_op_params is not None and (parser_ctx.sharding_sparse_fids_op_params.use_gpu or FLAGS.dataset_use_dataservice):
+      sharding_sparse_fids_with_context(instances, features, parser_ctx)
     else:
       features[ParserCtx.sharding_sparse_fids_sparse_features_key] = instances
     if "__FAKE_FEATURE__" in features:
@@ -416,8 +419,9 @@ def parse_examples(tensor: tf.Tensor,
     out_list, examples = parse_instance_ops.parse_examples_v2(
         tensor, names, shapes, types, extra_features or [])
     features = _assemble([], names, shapes, types, out_list)
-    if get_default_parser_ctx().sharding_sparse_fids_op_params is not None:
-      sharding_sparse_fids_with_context(examples, features)
+    parser_ctx = get_default_parser_ctx()
+    if parser_ctx.sharding_sparse_fids_op_params is not None and (parser_ctx.sharding_sparse_fids_op_params.use_gpu or FLAGS.dataset_use_dataservice):
+      sharding_sparse_fids_with_context(examples, features, parser_ctx)
     else:
       features[ParserCtx.sharding_sparse_fids_sparse_features_key] = examples
     if "__FAKE_FEATURE__" in features:
@@ -500,8 +504,9 @@ def parse_example_batch(
     out_list, example_batch = parse_instance_ops.parse_example_batch_v2(
         tensor, names, shapes, types, extra_features or [])
     features = _assemble([], names, shapes, types, out_list)
-    if get_default_parser_ctx().sharding_sparse_fids_op_params is not None:
-      sharding_sparse_fids_with_context(example_batch, features)
+    parser_ctx = get_default_parser_ctx()
+    if parser_ctx.sharding_sparse_fids_op_params is not None and (parser_ctx.sharding_sparse_fids_op_params.use_gpu or FLAGS.dataset_use_dataservice):
+      sharding_sparse_fids_with_context(example_batch, features, parser_ctx)
     else:
       features[
           ParserCtx.sharding_sparse_fids_sparse_features_key] = example_batch

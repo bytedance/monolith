@@ -26,7 +26,7 @@ os.environ['MONOLITH_ROOT_LOG_INTERVAL'] = "10"
 import time
 import tensorflow as tf
 tf.compat.v1.set_random_seed(42)
-
+import getpass
 from tensorflow.python.framework import test_util
 
 from monolith.native_training import cpu_training
@@ -155,7 +155,7 @@ class CpuSyncTrainTest(tf.test.TestCase):
       # save_checkpoints_steps=10000,
       num_ps=0,
       num_workers=hvd.size(),
-      model_dir=f'/tmp/hanzhizhou/monolith_test/{int(time.time())}',
+      model_dir=f'/tmp/{getpass.getuser()}/monolith_test/{int(time.time())}',
       reorder_fids_in_data_pipeline=True,
       embedding_prefetch_capacity=0,
       enable_sync_training=True,

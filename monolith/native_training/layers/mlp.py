@@ -22,6 +22,7 @@ from monolith.native_training.layers.dense import Dense
 from monolith.native_training.utils import extend_as_list, with_params
 import monolith.native_training.layers.advanced_activations as ad_acts
 from monolith.native_training.monolith_export import monolith_export
+from monolith.native_training.summary.summary_ops import feature_insight_data
 
 
 @monolith_export
@@ -144,6 +145,14 @@ class MLP(Layer):
     input_t, output_t = input, None
     for layer in self._stacked_layers:
       output_t = layer(input_t)
+      if layer.name.endswith('dense_0') and len(kwargs) > 0:
+        segment_names = kwargs.get('segment_names')
+        segment_sizes = kwargs.get('segment_sizes')
+        group_info = kwargs.get('group_info')
+        label = kwargs.get('label')
+        if segment_names is not None and segment_sizes is not None:
+          feature_insight_data(input_t, segment_names, segment_sizes,
+                               weight=layer.kernel, group_info=group_info, label=label)
       input_t = output_t
     return output_t
 

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from glob import glob
-import os
+import os, re
 from absl import logging, flags
 import numpy as np
 from typing import List
@@ -26,9 +26,6 @@ from tensorflow.python.keras.engine.input_spec import InputSpec
 
 from monolith.native_training.utils import with_params
 from monolith.native_training.monolith_export import monolith_export
-from monolith.native_training.layers.layer_ops import bernoulli_gate, discrete_gate, discrete_truncated_gate, \
-                                                      nas_arch_weight
 from monolith.native_training.layers.utils import check_dim, dim_size
-
-FLAGS = flags.FLAGS
-
+from monolith.native_training.data.feature_list import FeatureList
+from monolith.native_training.summary.utils import SummaryType
