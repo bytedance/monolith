@@ -73,6 +73,8 @@ flags.DEFINE_string(
 )
 flags.DEFINE_bool('dataset_input_use_snappy', None,
                   'bool, dataset_input_use_snappy')
+flags.DEFINE_string('dataset_input_compression_type', None,
+                    'string, dataset_input_compression_type')
 flags.DEFINE_bool('dataset_input_use_parquet', None,
                   'bool dataset_input_use_parquet')
 flags.DEFINE_integer('dataset_worker_idx', None, 'int dataset_worker_idx')
@@ -391,6 +393,16 @@ class ParquetDataset(dataset_ops.DatasetSource):
 
 
 @monolith_export
+class CompressType(Enum):
+  UNKNOW = 0
+  NO = 1
+  SNAPPY = 2
+  ZSTD = 3
+  ZLIB = 4
+  GZIP = 5
+
+
+@monolith_export
 class FilePBDataset(dataset_ops.DatasetSource):
   """从标准输入/pb文件中读取序列化数据, 并将其反序列化存于TF的Variant类型中. 这样做的好处是可以直接对PB对象进行过滤与修改, 
   不用等到parse以后. Monolith提供了一系列工具操作Variant变量, 如filter_by_fids, filter_by_value, negative_sample等
@@ -418,6 +430,7 @@ class FilePBDataset(dataset_ops.DatasetSource):
       feature_pruning_type: int = FeaturePruningType.PRUNING_RAW_FEATURE,
       disable_iterator_save_restore: bool = True,
       use_snappy: bool = None,
+      compression_type: CompressType = CompressType.UNKNOW,
       **kwargs):
 
     input_pb_type = input_pb_type or _get_params('data_type', PbType.INSTANCE)
@@ -460,17 +473,24 @@ class FilePBDataset(dataset_ops.DatasetSource):
         ckpt_hooks.disable_iterator_save_restore()
 
     default_buffer_size = 128 * 1024 * 1024 if input_pb_type == PbType.EXAMPLEBATCH else 64 * 1024 * 1024
+
+    logging.info(
+        f"FilePBDataset input compression_type: {compression_type} {FLAGS.dataset_input_compression_type} {use_snappy} {FLAGS.dataset_input_use_snappy}"
+    )
+    if compression_type == CompressType.UNKNOW and FLAGS.dataset_input_compression_type is not None:
+      compression_type = CompressType[
+          FLAGS.dataset_input_compression_type.upper()]
+      logging.info(f"FilePBDataset change compression_type {compression_type}")
+
+    logging.info(f"FilePBDataset compression_type {compression_type}")
+    use_snappy = use_snappy or FLAGS.dataset_input_use_snappy
     if use_snappy is None:
-      if isinstance(file_name, str):
-        use_snappy = file_name.endswith('.snappy')
+      if isinstance(file_name, str) and file_name.endswith('.snappy'):
+        use_snappy = True
         logging.info(f"FilePBDataset change use_snappy {use_snappy}")
     if use_snappy is None:
-      use_snappy = FLAGS.dataset_input_use_snappy
-      logging.info(
-          f"FilePBDataset change use_snappy {FLAGS.dataset_input_use_snappy}")
-    if use_snappy is None:
       use_snappy = False
-    assert use_snappy is not None
+
     variant_tensor = pb_datasource_ops.pb_dataset(
         file_name=file_name,
         use_snappy=use_snappy,
@@ -485,6 +505,7 @@ class FilePBDataset(dataset_ops.DatasetSource):
         feature_name_list=feature_name_list,
         feature_id_list=feature_id_list,
         out_type=self._out_type,
+        compression_type=compression_type.value,
     )
     logging.info("Start init of the pb instance dataset base.")
     super().__init__(variant_tensor)
@@ -499,7 +520,6 @@ class DistributedFilePBDataset(dataset_ops.DatasetSource):
   def __init__(
       self,
       patterns: Union[str, List[str]],
-      use_snappy=None,
       buffer_size: int = None,
       input_pb_type: PbType = None,
       output_pb_type: PbType = None,
@@ -531,7 +551,6 @@ class DistributedFilePBDataset(dataset_ops.DatasetSource):
     else:
       map_func = lambda file_name: FilePBDataset(
           file_name=file_name,
-          use_snappy=use_snappy,
           buffer_size=buffer_size,
           input_pb_type=input_pb_type,
           output_pb_type=output_pb_type,

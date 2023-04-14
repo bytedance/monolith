@@ -26,6 +26,7 @@ REGISTER_OP("InstanceDataset")
     .Input("kafka_dump: bool")
     .Input("kafka_dump_prefix: bool")
     .Output("handle: variant")
+    .Attr("compression_type: int = 0")
     .SetDoNotOptimize()  // Source dataset ops must disable constant folding.
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle unused;

@@ -64,6 +64,21 @@ cc_library(
 )
 
 cc_library(
+    name="zstd_inputbuffer",
+    srcs=[
+        "cc/zstd_inputbuffer.cc",
+    ],
+    hdrs=[
+        "cc/zstd_inputbuffer.h",
+    ],
+    deps=[
+        ":cached_mem_pool",
+        "@org_tensorflow//tensorflow/core:framework_headers_lib",
+        "@zstd",
+    ],
+)
+
+cc_library(
     name = "ue_compress",
     srcs = ["cc/ue_compress.cc"],
     hdrs = ["cc/ue_compress.h"],
@@ -89,17 +104,18 @@ cc_library(
 )
 
 cc_library(
-    name = "data_reader",
-    srcs = [
+    name="data_reader",
+    srcs=[
         "cc/data_reader.cc",
         "cc/data_reader.h",
         "cc/pb_variant.cc",
         "cc/pb_variant.h",
     ],
-    deps = [
+    deps=[
         ":data_format_options",
         ":reader_util",
         ":snappy_inputbuffer",
+        ":zstd_inputbuffer",
         ":ue_compress",
         "//idl:example_cc_proto",
         "//idl:proto_parser_cc_proto",
@@ -228,6 +244,7 @@ py_library(
         "//monolith:utils",
         "//monolith/native_training:runner_utils",
         "//monolith/native_training/distribute:distributed_dataset",
+        "//monolith/native_training/data:datasets_py",
         "//monolith/native_training/hooks:ckpt_hooks",
         "//monolith/native_training/runtime/ops:gen_monolith_ops",
         "@org_tensorflow//tensorflow:tensorflow_py",

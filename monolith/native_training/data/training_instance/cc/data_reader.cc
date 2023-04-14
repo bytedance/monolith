@@ -18,10 +18,13 @@
 #include <climits>
 
 #include "monolith/native_training/data/training_instance/cc/snappy_inputbuffer.h"
+#include "monolith/native_training/data/training_instance/cc/zstd_inputbuffer.h"
 #include "tensorflow/core/lib/core/coding.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/io/buffered_inputstream.h"
 #include "tensorflow/core/lib/io/random_inputstream.h"
+#include "tensorflow/core/lib/io/zlib_compression_options.h"
+#include "tensorflow/core/lib/io/zlib_inputstream.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/profiler/lib/traceme.h"
 
@@ -421,11 +424,26 @@ InputStreamReader::InputStreamReader(
 namespace {
 
 std::unique_ptr<io::InputStreamInterface> CreateInputFileStream(
-    RandomAccessFile *f, bool use_snappy, int64 buffer_size) {
-  if (use_snappy) {
-    int64 buffer_size = buffer_size ? buffer_size : kDEFAULT_SNAPPY_BUFFER_SIZE;
+    RandomAccessFile *f, const InputCompressType compression_type,
+    int64 buffer_size) {
+  buffer_size = buffer_size ? buffer_size : kDEFAULT_SNAPPY_BUFFER_SIZE;
+  if (compression_type == InputCompressType::SNAPPY) {
     return std::make_unique<io::ByteSnappyInputBuffer>(f, buffer_size,
                                                        buffer_size);
+  } else if (compression_type == InputCompressType::ZSTD) {
+    auto s = std::make_unique<io::RandomAccessInputStream>(f);
+    return std::make_unique<io::MonolithZstdInputStream>(
+        s.release(), buffer_size, buffer_size);
+  } else if (compression_type == InputCompressType::ZLIB ||
+             compression_type == InputCompressType::GZIP) {
+    const io::ZlibCompressionOptions zlib_options =
+        compression_type == InputCompressType::ZLIB
+            ? io::ZlibCompressionOptions::DEFAULT()
+            : io::ZlibCompressionOptions::GZIP();
+    auto s = std::make_unique<io::RandomAccessInputStream>(f);
+    return std::make_unique<io::ZlibInputStream>(
+        s.release(), static_cast<size_t>(buffer_size),
+        static_cast<size_t>(buffer_size), zlib_options);
   } else {
     auto s = std::make_unique<io::RandomAccessInputStream>(f);
     return std::make_unique<io::BufferedInputStream>(s.release(), buffer_size,
@@ -437,9 +455,10 @@ std::unique_ptr<io::InputStreamInterface> CreateInputFileStream(
 
 FileStreamReader::FileStreamReader(const DataFormatOptions &options,
                                    std::unique_ptr<RandomAccessFile> f,
-                                   bool use_snappy, int64 buffer_size)
-    : InputStreamReader(
-          options, CreateInputFileStream(f.get(), use_snappy, buffer_size)),
+                                   const InputCompressType compression_type,
+                                   int64 buffer_size)
+    : InputStreamReader(options, CreateInputFileStream(
+                                     f.get(), compression_type, buffer_size)),
       f_(std::move(f)) {}
 
 Status InputStreamReader::ReadNBytes(size_t n, tstring *result) {

@@ -40,17 +40,18 @@ namespace {
 using Example = ::monolith::io::proto::Example;
 using ExampleBatch = ::monolith::io::proto::ExampleBatch;
 using Instance = ::parser::proto::Instance;
+using ::tensorflow::monolith_tf::BaseStreamReader;
+using ::tensorflow::monolith_tf::DataFormatOptions;
 using ::tensorflow::monolith_tf::ExampleBatchIterator;
 using ::tensorflow::monolith_tf::ExampleToInstance;
 using ::tensorflow::monolith_tf::FeatureNameMapper;
 using ::tensorflow::monolith_tf::FeatureNameMapperTfBridge;
 using ::tensorflow::monolith_tf::FeaturePruningType;
+using ::tensorflow::monolith_tf::FileStreamReader;
+using ::tensorflow::monolith_tf::InputCompressType;
 using ::tensorflow::monolith_tf::InstanceToExample;
 using ::tensorflow::monolith_tf::PBIterator;
-using ::tensorflow::monolith_tf::DataFormatOptions;
-using ::tensorflow::monolith_tf::BaseStreamReader;
 using ::tensorflow::monolith_tf::StdinStreamReader;
-using ::tensorflow::monolith_tf::FileStreamReader;
 
 const std::string EXAMPLEBATCH = "examplebatch";
 const std::string EXAMPLE = "example";
@@ -59,6 +60,7 @@ const std::string PLAINTEXT = "plaintext";
 
 struct DsOptions : DataFormatOptions {
   bool use_snappy = false;
+  int32 compression_type = InputCompressType::UNKNOW;
   int64 buffer_size = 64 * 1024 * 1024;
 };
 
@@ -82,9 +84,11 @@ class PBDatasetOp : public DatasetOpKernel {
       "feature_pruning_type";
   static constexpr const char *const kFeatureNameList = "feature_name_list";
   static constexpr const char *const kFeatureIdList = "feature_id_list";
+  static constexpr const char *const kCompressionType = "compression_type";
 
   explicit PBDatasetOp(OpKernelConstruction *ctx) : DatasetOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr(kOutType, &out_type_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr(kCompressionType, &compression_type_));
 
     auto creator = [this](FeatureNameMapperTfBridge **out_mapper) {
       TF_RETURN_IF_ERROR(FeatureNameMapperTfBridge::New(out_mapper));
@@ -107,6 +111,7 @@ class PBDatasetOp : public DatasetOpKernel {
                    ParseScalarArgument<tstring>(ctx, kFileName, &file_name));
     OP_REQUIRES_OK(
         ctx, ParseScalarArgument<bool>(ctx, kUseSnappy, &options.use_snappy));
+    options.compression_type = compression_type_;
     OP_REQUIRES_OK(
         ctx, ParseScalarArgument<bool>(ctx, kHasSortId, &options.has_sort_id));
     OP_REQUIRES_OK(
@@ -162,6 +167,7 @@ class PBDatasetOp : public DatasetOpKernel {
     nlohmann::json j;
     j[kFileName] = file_name;
     j[kUseSnappy] = options.use_snappy;
+    j[kCompressionType] = options.compression_type;
     j[kHasSortId] = options.has_sort_id;
     j[kKafkaDump] = options.kafka_dump;
     j[kKafkaDumpPrefix] = options.kafka_dump_prefix;
@@ -201,9 +207,9 @@ class PBDatasetOp : public DatasetOpKernel {
       }
       CHECK(mapper_->SetMapping(name_to_id, id_to_name));
       if (input_pb_type == "examplebatch" && output_pb_type == "example") {
-//        mapper_->TurnOn();
+        //        mapper_->TurnOn();
       }
-//      LOG_FIRST_N(INFO, 1) << "NameToId: " << mapper_->DebugString();
+      //      LOG_FIRST_N(INFO, 1) << "NameToId: " << mapper_->DebugString();
     }
 
     std::unique_ptr<IteratorBase> MakeIteratorInternal(
@@ -263,13 +269,16 @@ class PBDatasetOp : public DatasetOpKernel {
       TF_RETURN_IF_ERROR(b->AddVector(feature_id_list_, &feature_id_list));
       AttrValue out_type;
       b->BuildAttrValue(out_type_, &out_type);
+      AttrValue compression_type;
+      b->BuildAttrValue(options_.compression_type, &compression_type);
 
       TF_RETURN_IF_ERROR(b->AddDataset(
           this,
           {filename, use_snappy, has_sort_id, kafka_dump, kafka_dump_prefix,
            buffer_size, lagrangex_header, input_pb_type, output_pb_type,
            feature_pruning_type, feature_name_list, feature_id_list},
-          {{kOutType, out_type}}, output));
+          {{kOutType, out_type}, {kCompressionType, compression_type}},
+          output));
       return Status::OK();
     }
 
@@ -403,16 +412,17 @@ class PBDatasetOp : public DatasetOpKernel {
       Status SetupStreamsLocked(Env *env) TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
         std::unique_ptr<BaseStreamReader> stream_reader;
         if (dataset()->file_name_.empty()) {
-          stream_reader =
-              std::make_unique<StdinStreamReader>(
-                  dataset()->options_, dataset()->options_.buffer_size);
+          stream_reader = std::make_unique<StdinStreamReader>(
+              dataset()->options_, dataset()->options_.buffer_size);
         } else {
           std::unique_ptr<RandomAccessFile> f;
           TF_RETURN_IF_ERROR(
               env->NewRandomAccessFile(dataset()->file_name_, &f));
-          stream_reader = std::make_unique<FileStreamReader>(
-              dataset()->options_, std::move(f),
+          auto compression_type = FileStreamReader::GetCompressType(
               dataset()->options_.use_snappy,
+              dataset()->options_.compression_type);
+          stream_reader = std::make_unique<FileStreamReader>(
+              dataset()->options_, std::move(f), compression_type,
               dataset()->options_.buffer_size);
         }
         if (dataset()->input_pb_type_ == "instance" ||
@@ -454,6 +464,7 @@ class PBDatasetOp : public DatasetOpKernel {
 
   Dataset *output_ = nullptr;
   DataType out_type_;
+  int32 compression_type_;
   FeatureNameMapperTfBridge *mapper_ = nullptr;
 };
 

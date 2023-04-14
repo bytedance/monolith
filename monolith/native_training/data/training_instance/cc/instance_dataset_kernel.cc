@@ -28,15 +28,17 @@ namespace tensorflow {
 namespace data {
 namespace monolith_tf {
 
+using ::tensorflow::monolith_tf::BaseStreamReader;
+using ::tensorflow::monolith_tf::DataFormatOptions;
+using ::tensorflow::monolith_tf::FileStreamReader;
+using ::tensorflow::monolith_tf::InputCompressType;
 using ::tensorflow::monolith_tf::PBIterator;
 using ::tensorflow::monolith_tf::PRUNING_RAW_FEATURE;
-using ::tensorflow::monolith_tf::DataFormatOptions;
-using ::tensorflow::monolith_tf::BaseStreamReader;
 using ::tensorflow::monolith_tf::StdinStreamReader;
-using ::tensorflow::monolith_tf::FileStreamReader;
 
 struct DsOptions : DataFormatOptions {
   bool use_snappy = false;
+  int32 compression_type = InputCompressType::UNKNOW;
 };
 
 // This is the instance dataset op and used in the estimator as input fn.
@@ -48,9 +50,11 @@ class InstanceDatasetOp : public DatasetOpKernel {
   static constexpr const char* const kHasSortId = "has_sort_id";
   static constexpr const char* const kKafkaDump = "kafka_dump";
   static constexpr const char* const kKafkaDumpPrefix = "kafka_dump_prefix";
+  static constexpr const char* const kCompressionType = "compression_type";
 
-  explicit InstanceDatasetOp(OpKernelConstruction* ctx)
-      : DatasetOpKernel(ctx) {}
+  explicit InstanceDatasetOp(OpKernelConstruction* ctx) : DatasetOpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr(kCompressionType, &compression_type_));
+  }
   ~InstanceDatasetOp() {}
 
  private:
@@ -61,6 +65,7 @@ class InstanceDatasetOp : public DatasetOpKernel {
                    ParseScalarArgument<tstring>(ctx, kFileName, &file_name));
     OP_REQUIRES_OK(
         ctx, ParseScalarArgument<bool>(ctx, kUseSnappy, &options.use_snappy));
+    options.compression_type = compression_type_;
     OP_REQUIRES_OK(
         ctx, ParseScalarArgument<bool>(ctx, kHasSortId, &options.has_sort_id));
     OP_REQUIRES_OK(
@@ -117,9 +122,12 @@ class InstanceDatasetOp : public DatasetOpKernel {
       Node* kafka_dump_prefix = nullptr;
       TF_RETURN_IF_ERROR(
           b->AddScalar(options_.kafka_dump_prefix, &kafka_dump_prefix));
-      TF_RETURN_IF_ERROR(b->AddDataset(this, {filename, use_snappy, has_sort_id,
-                                              kafka_dump, kafka_dump_prefix},
-                                       output));
+      AttrValue compression_type;
+      b->BuildAttrValue(options_.compression_type, &compression_type);
+      TF_RETURN_IF_ERROR(b->AddDataset(
+          this,
+          {filename, use_snappy, has_sort_id, kafka_dump, kafka_dump_prefix},
+          {{kCompressionType, compression_type}}, output));
       return Status::OK();
     }
 
@@ -202,9 +210,12 @@ class InstanceDatasetOp : public DatasetOpKernel {
           std::unique_ptr<RandomAccessFile> f;
           TF_RETURN_IF_ERROR(
               env->NewRandomAccessFile(dataset()->file_name_, &f));
+
+          auto compression_type = FileStreamReader::GetCompressType(
+              dataset()->options_.use_snappy,
+              dataset()->options_.compression_type);
           stream_reader = std::make_unique<FileStreamReader>(
-              dataset()->options_, std::move(f),
-              dataset()->options_.use_snappy);
+              dataset()->options_, std::move(f), compression_type);
         }
         reader_ = absl::make_unique<PBIterator>(std::move(stream_reader),
                                                 PRUNING_RAW_FEATURE);
@@ -225,6 +236,7 @@ class InstanceDatasetOp : public DatasetOpKernel {
     tstring file_name_;
     DsOptions options_;
   };
+  int32 compression_type_;
   Dataset* output_ = nullptr;
 };
 

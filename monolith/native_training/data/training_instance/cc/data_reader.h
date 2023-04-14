@@ -157,12 +157,46 @@ class InputStreamReader : public BaseStreamReader {
   TF_DISALLOW_COPY_AND_ASSIGN(InputStreamReader);
 };
 
+enum InputCompressType {
+  UNKNOW = 0,
+  NO = 1,
+  SNAPPY = 2,
+  ZSTD = 3,
+  ZLIB = 4,
+  GZIP = 5,
+  MAX = 6
+};
+
 class FileStreamReader : public InputStreamReader {
  public:
   explicit FileStreamReader(const DataFormatOptions &options,
                             std::unique_ptr<RandomAccessFile> f,
-                            bool use_snappy,
+                            const InputCompressType compression_type,
                             int64 buffer_size = 64 * 1024 * 1024);
+  static InputCompressType GetCompressType(const bool use_snappy,
+                                           const int32 compression_type) {
+    if (compression_type < InputCompressType::UNKNOW ||
+        compression_type >= InputCompressType::MAX) {
+      LOG(FATAL) << "GetCompressType error : compression_type"
+                 << compression_type;
+    }
+    InputCompressType ret = InputCompressType::NO;
+    if (use_snappy) {
+      if (compression_type != InputCompressType::SNAPPY &&
+          compression_type != InputCompressType::UNKNOW) {
+        LOG(FATAL) << "GetCompressType error: " << use_snappy << ","
+                   << compression_type;
+      }
+      ret = InputCompressType::SNAPPY;
+    } else {
+      if (compression_type == InputCompressType::UNKNOW) {
+        ret = InputCompressType::NO;
+      } else {
+        ret = static_cast<InputCompressType>(compression_type);
+      }
+    }
+    return ret;
+  }
 
  private:
   std::unique_ptr<RandomAccessFile> f_;

@@ -33,6 +33,7 @@ REGISTER_OP("PBDataset")
     .Input("feature_name_list: string")
     .Input("feature_id_list: int32")
     .Attr("out_type: {variant, string}")
+    .Attr("compression_type: int = 0")
     .Output("handle: variant")
     .SetDoNotOptimize()  // Source dataset ops must disable constant folding.
     .SetShapeFn([](shape_inference::InferenceContext* c) {

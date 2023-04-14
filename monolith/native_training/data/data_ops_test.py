@@ -19,8 +19,10 @@ import tensorflow as tf
 from absl import logging, flags
 import numpy as np
 from struct import unpack
+import zlib
+import gzip
 
-from monolith.native_training.data.datasets import PBDataset, InstanceReweightDataset, PbType, \
+from monolith.native_training.data.datasets import PBDataset, InstanceReweightDataset, PbType, CompressType, \
   FilePBDataset, KafkaDataset, CacheOneDataset
 from monolith.native_training.data.parsers import parse_instances, parse_examples, parse_example_batch
 from monolith.native_training.data.feature_utils import filter_by_fids, filter_by_value, negative_sample, \
@@ -413,6 +415,86 @@ class CahceOneDatasetTest(tf.test.TestCase):
 
     self.assertEqual(self.evaluate(it.get_next()), (1, False))
     self.assertEqual(self.evaluate(it.get_next()), (2, True))
+
+
+class DecompressTest(tf.test.TestCase):
+  raw_file_name = "monolith/native_training/data/training_instance/examplebatch.data"
+  file_name = "examplebatch.data.copy"
+
+  @classmethod
+  def setUpClass(cls):
+    logging.info(
+        f"cp resp: {os.system(f'cp -rL {cls.raw_file_name} {cls.file_name}')}")
+
+  def prase_base(self, compress_file_name, compression_type):
+    with self.session() as sess:
+      dataset = PBDataset(topics_or_files=[compress_file_name],
+                          lagrangex_header=True,
+                          has_sort_id=False,
+                          input_pb_type=PbType.EXAMPLEBATCH,
+                          output_pb_type=PbType.EXAMPLEBATCH,
+                          compression_type=compression_type)
+
+      def parse(serialized: tf.Tensor):
+        return parse_example_batch(
+            serialized,
+            sparse_features=list(features.keys()),
+            dense_features=['label'],
+            dense_feature_shapes=[2],
+            dense_feature_types=[tf.float32],
+            extra_features=['uid', 'req_time', 'item_id'],
+            extra_feature_shapes=[1, 1, 1])
+
+      dataset = dataset.batch(16, drop_remainder=True).map(parse)
+      it = tf.compat.v1.data.make_initializable_iterator(dataset)
+      element = it.get_next()
+      element_num = None
+
+      config = tf.compat.v1.ConfigProto()
+      config.graph_options.rewrite_options.disable_meta_optimizer = True
+      tf.compat.v1.train.SingularMonitoredSession(
+          hooks=[session_hooks.SetCurrentSessionHook()], config=config)
+      sess.run(it.initializer)
+      for _ in range(10):
+        try:
+          element_num = sess.run(element)
+          print(element_num)
+          #assert False
+        except tf.errors.OutOfRangeError:
+          break
+
+  def testDecompressZstd(self):
+    #FLAGS.data_type = 'examplebatch'
+    compress_file_name = self.file_name + ".zstd"
+    logging.info(
+        f"zstd resp: {os.system(f'/opt/tiger/ss_bin/zstd {self.file_name} -o {compress_file_name}')}"
+    )
+    logging.info(f"zstd resp: {os.system(f'ls -l {self.file_name}*')}")
+    self.prase_base(compress_file_name, CompressType.ZSTD)
+
+  def testDecompressZlib(self):
+    #FLAGS.data_type = 'examplebatch'
+    compress_file_name = self.file_name + ".zlib"
+
+    with open(self.file_name, 'rb') as in_f:
+      s = in_f.read()
+      z = zlib.compress(s)
+    with open(compress_file_name, 'wb') as f:
+      f.write(z)
+    logging.info(f"zstd resp: {os.system(f'ls -l {self.file_name}*')}")
+    self.prase_base(compress_file_name, CompressType.ZLIB)
+
+  def testDecompressGzip(self):
+    #FLAGS.data_type = 'examplebatch'
+    compress_file_name = self.file_name + ".gzip"
+
+    with open(self.file_name, 'rb') as in_f:
+      s = in_f.read()
+      z = gzip.compress(s)
+    with open(compress_file_name, 'wb') as f:
+      f.write(z)
+    logging.info(f"zstd resp: {os.system(f'ls -l {self.file_name}*')}")
+    self.prase_base(compress_file_name, CompressType.GZIP)
 
 
 if __name__ == '__main__':
