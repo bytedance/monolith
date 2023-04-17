@@ -294,10 +294,6 @@ def init_sync_train_and_update_conf(dct_config):
                                      model_dir_suffix)
             dct_config.model_dir = model_dir
     else:
-      local_size = int(os.environ.get('OMPI_COMM_WORLD_LOCAL_SIZE'))
-      rank = int(os.environ.get('OMPI_COMM_WORLD_RANK'))
-      local_rank = rank % local_size
-      os.environ['CUDA_VISIBLE_DEVICES'] = str(local_rank)
       import horovod.tensorflow as hvd
       if not _SYNC_TRAIN_INITED:
         hvd.init()
@@ -424,6 +420,11 @@ def get_sync_run_hooks(is_full_sync: bool = False):
 def update_session_config_for_gpu(session_config):
   enable_bps = int(os.getenv("MONOLITH_WITH_BYTEPS", "0"))
   if enable_sync_training():
+    # It's recommended to set the visible device list in session config instead of the CUDA_VISIBLE_DEVICES environment variable. 
+    # Setting the CUDA_VISIBLE_DEVICES variable may mislead NCCL as per my testing
+    # https://horovod.readthedocs.io/en/stable/tensorflow.html?highlight=visible_device_list
+    # https://horovod.readthedocs.io/en/stable/troubleshooting.html?highlight=cuda_visible_devices#running-out-of-memory
+    local_rank = os.environ.get('OMPI_COMM_WORLD_LOCAL_RANK', "0")
     if os.environ.get('MONOLITH_FORCE_GPU_COMPATIBLE', '1') == '1':
       session_config.gpu_options.force_gpu_compatible = True
       logging.info("set force_gpu_compatible=True")
@@ -434,9 +435,9 @@ def update_session_config_for_gpu(session_config):
       # The cuda visible devices are also limited to one device only.
       session_config.gpu_options.allow_growth = False
       session_config.gpu_options.per_process_gpu_memory_fraction = 0.4
-      session_config.gpu_options.visible_device_list = '0'
+      session_config.gpu_options.visible_device_list = local_rank
     else:
       session_config.gpu_options.allow_growth = True
-      session_config.gpu_options.visible_device_list = '0'
+      session_config.gpu_options.visible_device_list = local_rank
   else:
     session_config.gpu_options.allow_growth = True

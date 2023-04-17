@@ -13,9 +13,6 @@
 # limitations under the License.
 
 import os
-local_size = int(os.environ.get('OMPI_COMM_WORLD_LOCAL_SIZE', 1))
-rank = int(os.environ.get('OMPI_COMM_WORLD_RANK', 0))
-os.environ['CUDA_VISIBLE_DEVICES'] = str(rank % local_size)
 os.environ["MONOLITH_WITH_HOROVOD"] = "True"
 os.environ["HOROVOD_AUTOTUNE"] = "1"
 os.environ["HOROVOD_CYCLE_TIME"] = "0.1"
