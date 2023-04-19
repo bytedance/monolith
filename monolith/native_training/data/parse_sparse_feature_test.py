@@ -232,11 +232,11 @@ class DataOpsV2Test(tf.test.TestCase):
     nfl_offset_t.append(len(feature_offset_t))
 
     print('==' * 10 + "fid_map_t" + '==' * 10)
-    #print(fid_map_t)
+    # print(fid_map_t)
     print('==' * 10 + "fid_map_unique_t" + '==' * 10)
-    #print(fid_map_unique_t)
+    # print(fid_map_unique_t)
     print('==' * 10 + "fid_offset_map" + '==' * 10)
-    #print(fid_offset_map)
+    # print(fid_offset_map)
     return nfl_offset_t, feature_offset_t, fid_offset_list, fid_offset_list_unique, fid_map_t, fid_map_unique_t
 
   def diff_test(self, input_type, parse_func, input_str_list, feature_name_sort,
@@ -395,11 +395,17 @@ class DataOpsV2Test(tf.test.TestCase):
           #print(fid_map1, flush=True)
           #print('==' * 10 + "fid_map_unique1" + '==' * 10, flush=True)
           #print(fid_map_unique1, flush=True)
+          
+          #print('==' * 10 + "fid_offset2" + '==' * 10, flush=True)
+          #print(list(fid_offset2), flush=True)
+          #print('==' * 10 + "fid_offset_list_unique" + '==' * 10, flush=True)
+          #print(list(fid_offset_list_unique), flush=True)
           fid_map1, fid_offset1, feature_offset1, nfl_offset1, fid_map_row_split1 = fid_map1_list
           fid_map2, fid_offset2, feature_offset2, nfl_offset2, fid_map_unique_row_split1 = fid_map_unique1_list
           print('==' * 10 + "diff fidoffset " +
                 str(parallel_flag_list[fid_map_index]) + '==' * 10,
                 flush=True)
+
           diff("nfl_offset", nfl_offset1, nfl_offset_t)
           diff("nfl_offset2", nfl_offset2, nfl_offset_t)
           diff("feature_offset", feature_offset1, feature_offset_t)
@@ -448,15 +454,16 @@ class DataOpsV2Test(tf.test.TestCase):
                 fid_list_table_row_length_unique, fid_list_shard_row_lenth_unique, \
                   fid_list_emb_row_lenth, fid_list_emb_row_lenth_unique], \
               feed_dict={input_placeholder: input_str_list})
+            
           diff("", fid_list_table_row_length_1.tolist(),
                fid_list_table_row_length_t)
           diff("", fid_list_shard_row_lenth_1.tolist(),
                fid_list_shard_row_lenth_t)
+          diff("", fid_list_emb_row_lenth_1.tolist(), fid_list_emb_row_lenth_t)
           diff("", fid_list_table_row_length_unique_1.tolist(),
                fid_list_table_row_length_unique_t)
           diff("", fid_list_shard_row_lenth_unique_1.tolist(),
                fid_list_shard_row_lenth_unique_t)
-          diff("", fid_list_emb_row_lenth_1.tolist(), fid_list_emb_row_lenth_t)
           diff("", fid_list_emb_row_lenth_unique_1.tolist(),
                fid_list_emb_row_lenth_unique_t)
 

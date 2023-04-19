@@ -118,3 +118,22 @@ cc_library(
         "@arrow",
     ]
 )
+
+cc_library(
+    name = "uniq_hashtable",
+    hdrs = ["uniq_hashtable.h"],
+    deps = [
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_glog//:glog",
+    ],
+)
+
+tf_cc_test(
+    name = "uniq_hashtable_test",
+    srcs = ["uniq_hashtable_test.cc"],
+    deps = [
+        ":uniq_hashtable",
+        "@com_google_googletest//:gtest_main",
+        "@org_tensorflow//tensorflow/core:test",
+    ]
+)

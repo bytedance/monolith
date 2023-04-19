@@ -19,7 +19,6 @@
 
 #include "monolith/native_training/data/kernels/parse_sparse_feature.h"
 #include "monolith/native_training/data/training_instance/cc/pb_variant.h"
-#include "monolith/native_training/runtime/common/metrics.h"
 
 namespace tensorflow {
 namespace monolith_tf {
@@ -31,7 +30,9 @@ ShardingSparseFidsOp::ShardingSparseFidsOp(OpKernelConstruction *ctx,
   OP_REQUIRES_OK(ctx, ctx->GetAttr("feature_cfgs", &feature_cfgs_str));
   OP_REQUIRES_OK(ctx, ctx->GetAttr("unique", &unique_));
   OP_REQUIRES_OK(ctx, ctx->GetAttr("parallel_flag", &parallel_flag_));
+  OP_REQUIRES_OK(ctx, ctx->GetAttr("single_thread_feature_watermark", &single_thread_feature_watermark_));
   std::string input_type;
+  LOG(INFO) << "[ShardingSparseFidsOp] version: " << version;
   OP_REQUIRES_OK(ctx, ctx->GetAttr("input_type", &input_type));
   if (input_type == "example") {
     input_type_ = 0;
@@ -57,9 +58,10 @@ ShardingSparseFidsOp::ShardingSparseFidsOp(OpKernelConstruction *ctx,
     return Status::OK();
   };
   ResourceMgr *resource_mgr = ctx->resource_manager();
-  OP_REQUIRES_OK(ctx, resource_mgr->LookupOrCreate<FeatureNameMapperTfBridge>(
-                          resource_mgr->default_container(),
-                          FeatureNameMapperTfBridge::kName, &mapper_, creator));
+  OP_REQUIRES_OK(ctx,
+                 resource_mgr->LookupOrCreate<FeatureNameMapperTfBridge>(
+                     resource_mgr->default_container(),
+                     FeatureNameMapperTfBridge::kName, &mapper_, creator));
   std::vector<std::string> feature_names;
   feature_names.reserve(feature_cfgs.feature_configs_size());
   for (const auto &pair : feature_cfgs.feature_configs()) {
@@ -183,6 +185,18 @@ ShardingSparseFidsOp::ShardingSparseFidsOp(OpKernelConstruction *ctx,
 
 void ShardingSparseFidsOp::FillFidList(
     uint64_t value, std::vector<std::vector<uint64_t>> &shard_vec,
+    MultiShardUniqHashTable &shard_uniq_hashtable,
+    tensorflow::TTypes<uint64_t>::Flat fid_offset_flat,
+    int feature_output_index, int *offset) {
+  if (unique_) {
+    FillFidList(value, shard_uniq_hashtable, fid_offset_flat, feature_output_index, offset);
+  } else {
+    FillFidList(value, shard_vec, fid_offset_flat, feature_output_index, offset);
+  }
+}
+
+void ShardingSparseFidsOp::FillFidList(
+    uint64_t value, std::vector<std::vector<uint64_t>> &shard_vec,
     tensorflow::TTypes<uint64_t>::Flat fid_offset_flat,
     int feature_output_index, int *offset) {
   auto mod = value % ps_num_;
@@ -198,20 +212,25 @@ void ShardingSparseFidsOp::FillFidList(
 }
 
 void ShardingSparseFidsOp::FillFidList(
-    uint64_t value, std::vector<absl::flat_hash_map<uint64_t, int>> &shard_vec,
+    uint64_t value, MultiShardUniqHashTable &shard_uniq_hashtable,
     tensorflow::TTypes<uint64_t>::Flat fid_offset_flat,
     int feature_output_index, int *offset) {
   auto mod = value % ps_num_;
   int output_offset =
       feature_cfg_list_[feature_output_index]->GetFidOutputIndex(mod);
-  auto fid_find_iter = shard_vec[mod].find(value);
-  int feature_offset = -1;
-  if (fid_find_iter == shard_vec[mod].end()) {
-    feature_offset = shard_vec[mod].size();
-    shard_vec[mod].emplace(value, feature_offset);
-  } else {
-    feature_offset = fid_find_iter->second;
-  }
+
+  auto feature_offset = shard_uniq_hashtable.uniq_fid(value, mod);
+
+  // auto fid_find_iter = shard_vec[mod].find(value);
+  // int feature_offset1 = -1;
+  // if (fid_find_iter == shard_vec[mod].end()) {
+  //   feature_offset1 = shard_vec[mod].size();
+  //   shard_vec[mod].emplace(value, feature_offset1);
+  // } else {
+  //   feature_offset1 = fid_find_iter->second;
+  // }
+  // CHECK_EQ(feature_offset1, feature_offset);
+
   if (version_ == 3 || version_ == 4 || version_ == 5) {
     feature_offset *= feature_cfg_list_[feature_output_index]->dims_sum;
   }
@@ -280,29 +299,29 @@ Status ShardingSparseFidsOp::CreateOffsetTensor(
     feature_size_tensor->flat<int32>()(0) = all_feature_counter_size + 1;
   }
 
-  int all_feature_size = 0;
+  int all_fid_size = 0;
   int feature_offset_index = 0;
   for (uint i = 0; i < all_feature_counter.size(); ++i) {
     auto &feature_counter = all_feature_counter[i];
     nfl_offset_flat(i) = feature_offset_index;
     if (shared_feature->size() > 0 && shared_feature->count(i) > 0) {
-      nfl_offset_flat(i) |= shard_flag_;
+      nfl_offset_flat(i) |= SHARED_FLAG;
     }
-    (*nfl_fid_offset)[i] = all_feature_size;
+    (*nfl_fid_offset)[i] = all_fid_size;
 
     for (uint j = 0; j < feature_counter.size(); ++j) {
-      feature_offset_flat(feature_offset_index) = all_feature_size;
-      all_feature_size += abs(feature_counter[j]);
+      feature_offset_flat(feature_offset_index) = all_fid_size;
+      all_fid_size += abs(feature_counter[j]);
       ++feature_offset_index;
     }
   }
   CHECK_EQ(feature_offset_index, all_feature_counter_size);
-  feature_offset_flat(feature_offset_index) = all_feature_size;
+  feature_offset_flat(feature_offset_index) = all_fid_size;
   nfl_offset_flat(all_feature_counter.size()) = feature_offset_index + 1;
   // fid_size
   TF_RETURN_IF_ERROR(ctx,
                      ctx->allocate_output("fid_offset", TensorShape({
-                                                            all_feature_size,
+                                                            all_fid_size,
                                                         }),
                                           fid_offset_tensor));
 
@@ -312,7 +331,7 @@ Status ShardingSparseFidsOp::CreateOffsetTensor(
                                                                  1,
                                                              }),
                                                  &fid_size_tensor));
-    fid_size_tensor->flat<int32>()(0) = all_feature_size;
+    fid_size_tensor->flat<int32>()(0) = all_fid_size;
   }
 
   if (version_ == 4) {
@@ -323,10 +342,11 @@ Status ShardingSparseFidsOp::CreateOffsetTensor(
     }
     all_feature_count *= ps_num_;
     TF_RETURN_IF_ERROR(
-        ctx, ctx->allocate_output("fid_list_row_splits", TensorShape({
-                                                             all_feature_count,
-                                                         }),
-                                  &fid_list_row_lengths_tensor));
+        ctx,
+        ctx->allocate_output("fid_list_row_splits", TensorShape({
+                                                        all_feature_count,
+                                                    }),
+                             &fid_list_row_lengths_tensor));
     auto cur_tensor_flat = fid_list_row_lengths_tensor->flat<int64_t>();
     cur_tensor_flat.setZero();
     fid_list_row_splits_flat_list.resize(table_cfg_list_.size() * ps_num_);
@@ -456,8 +476,9 @@ void ShardingSparseFidsOp::Compute(OpKernelContext *ctx) {
   OpOutputList fid_list_row_splits_out_list;
   OpOutputList fid_list_row_splits_size_out_list;
   if (version_ == 2 || version_ == 3) {
-    OP_REQUIRES_OK(ctx, ctx->output_list("fid_list_row_splits",
-                                         &fid_list_row_splits_out_list));
+    OP_REQUIRES_OK(
+        ctx,
+        ctx->output_list("fid_list_row_splits", &fid_list_row_splits_out_list));
   }
   if (version_ == 5) {
     OP_REQUIRES_OK(ctx, ctx->output_list("fid_list_row_splits",
@@ -477,29 +498,17 @@ void ShardingSparseFidsOp::Compute(OpKernelContext *ctx) {
       CHECK_NOTNULL(example);
       examples.push_back(example);
     }
-    if (unique_) {
-      st = FeatureParallelUniqueParse(ctx, examples, &out_list,
-                                      &fid_list_row_splits_out_list,
-                                      &fid_list_row_splits_size_out_list);
-    } else {
-      st = FeatureParallelParse(ctx, examples, &out_list,
-                                &fid_list_row_splits_out_list,
-                                &fid_list_row_splits_size_out_list);
-    }
+    st = FeatureParallelParse(ctx, examples, &out_list,
+                              &fid_list_row_splits_out_list,
+                              &fid_list_row_splits_size_out_list);
 
   } else if (input_type_ == 1) {
     const auto &example_batch =
         *(pb_input->scalar<Variant>()().get<ExampleBatch>());
     batch_size = example_batch.batch_size();
-    if (unique_) {
-      st = FeatureParallelUniqueParse(ctx, example_batch, &out_list,
-                                      &fid_list_row_splits_out_list,
-                                      &fid_list_row_splits_size_out_list);
-    } else {
-      st = FeatureParallelParse(ctx, example_batch, &out_list,
-                                &fid_list_row_splits_out_list,
-                                &fid_list_row_splits_size_out_list);
-    }
+    st = FeatureParallelParse(ctx, example_batch, &out_list,
+                              &fid_list_row_splits_out_list,
+                              &fid_list_row_splits_size_out_list);
   } else if (input_type_ == 2) {
     const auto &pb_variant_tensor = pb_input->vec<Variant>();
     batch_size = pb_variant_tensor.dimension(0);
@@ -511,16 +520,9 @@ void ShardingSparseFidsOp::Compute(OpKernelContext *ctx) {
       instance_wapper.instances.push_back(instance);
     }
     InitInstanceWrapper(&instance_wapper);
-
-    if (unique_) {
-      st = FeatureParallelUniqueParse(ctx, instance_wapper, &out_list,
-                                      &fid_list_row_splits_out_list,
-                                      &fid_list_row_splits_size_out_list);
-    } else {
-      st = FeatureParallelParse(ctx, instance_wapper, &out_list,
-                                &fid_list_row_splits_out_list,
-                                &fid_list_row_splits_size_out_list);
-    }
+    st = FeatureParallelParse(ctx, instance_wapper, &out_list,
+                              &fid_list_row_splits_out_list,
+                              &fid_list_row_splits_size_out_list);
   }
   OP_REQUIRES_OK(ctx, st);
 
@@ -613,6 +615,7 @@ REGISTER_OP("ShardingSparseFids")
     .Attr("unique: bool")
     .Attr("input_type: string")
     .Attr("parallel_flag: int")
+    .Attr("single_thread_feature_watermark: int = 320000")
     .SetDoNotOptimize()  // Source dataset ops must disable constant folding.
     .SetShapeFn([](shape_inference::InferenceContext *ctx) {
       // fid_list
@@ -643,6 +646,7 @@ REGISTER_OP("ShardingSparseFidsV2")
     .Attr("unique: bool")
     .Attr("input_type: string")
     .Attr("parallel_flag: int")
+    .Attr("single_thread_feature_watermark: int = 320000")
     .SetDoNotOptimize()  // Source dataset ops must disable constant folding.
     .SetShapeFn([](shape_inference::InferenceContext *ctx) {
       // fid_list
@@ -678,6 +682,7 @@ REGISTER_OP("ShardingSparseFidsV3")
     .Attr("unique: bool")
     .Attr("input_type: string")
     .Attr("parallel_flag: int")
+    .Attr("single_thread_feature_watermark: int = 320000")
     .SetDoNotOptimize()  // Source dataset ops must disable constant folding.
     .SetShapeFn([](shape_inference::InferenceContext *ctx) {
       // fid_list
@@ -729,6 +734,7 @@ REGISTER_OP("ShardingSparseFidsV4")
     .Attr("unique: bool")
     .Attr("input_type: string")
     .Attr("parallel_flag: int")
+    .Attr("single_thread_feature_watermark: int = 320000")
     .SetDoNotOptimize()  // Source dataset ops must disable constant folding.
     .SetShapeFn([](shape_inference::InferenceContext *ctx) {
       int ps_num = 0;
@@ -783,6 +789,7 @@ REGISTER_OP("ShardingSparseFidsV5")
     .Attr("unique: bool")
     .Attr("input_type: string")
     .Attr("parallel_flag: int")
+    .Attr("single_thread_feature_watermark: int = 320000")
     .SetDoNotOptimize()  // Source dataset ops must disable constant folding.
     .SetShapeFn([](shape_inference::InferenceContext *ctx) {
       // fid_list

@@ -27,6 +27,8 @@ from idl.matrix.proto.line_id_pb2 import LineId
 from idl.matrix.proto.example_pb2 import FeatureConfigs
 
 from monolith.utils import get_libops_path
+from monolith.native_training import logging_ops
+from monolith.native_training import native_task_context
 from monolith.native_training.monolith_export import monolith_export
 from monolith.native_training.data.feature_list import get_feature_name_and_slot, FeatureList
 from monolith.native_training.data.data_op_config_pb2 import LabelConf, TaskLabelConf
@@ -555,6 +557,7 @@ def sharding_sparse_fids(tensor: tf.Tensor,
   feature_size = None
   fid_size = None
   emb_size = None
+  (tensor,), start_ts = logging_ops.tensors_timestamp([tensor])
   if version == 5:
     fid_list, fid_list_row_splits, fid_list_row_splits_size, fid_offset, feature_offset, nfl_offset, batch_size, nfl_size, feature_size, fid_size, emb_size = parse_instance_ops.sharding_sparse_fids_v5(
         pb_input=tensor,
@@ -580,7 +583,8 @@ def sharding_sparse_fids(tensor: tf.Tensor,
         N=table_count,
         unique=unique,
         input_type=input_type,
-        parallel_flag=parallel_flag)
+        parallel_flag=parallel_flag,
+        single_thread_feature_watermark=4*80000)
     fid_list_row_splits_size = [None] * table_count
   elif version == 2:
     fid_list, fid_list_row_splits, fid_offset, feature_offset, nfl_offset, batch_size = parse_instance_ops.sharding_sparse_fids_v2(
@@ -603,6 +607,18 @@ def sharding_sparse_fids(tensor: tf.Tensor,
         parallel_flag=parallel_flag)
     fid_list_row_splits = [None] * table_count
     fid_list_row_splits_size = [None] * table_count
+  (fid_offset,), end_ts = logging_ops.tensors_timestamp([fid_offset])
+  def emit_sharding_sparse_timer_ops(interval):
+    return [
+        logging_ops.emit_timer(
+            "sharding_sparse_fids",
+            tf.cast(interval, tf.float32),
+            tags={
+                "model_name": native_task_context.get().model_name
+            })
+    ]
+  with tf.control_dependencies(emit_sharding_sparse_timer_ops(end_ts - start_ts)):
+    tf.no_op()
   if version != 4:
     assert len(fid_list) == table_count
     assert len(fid_list_row_splits) == table_count

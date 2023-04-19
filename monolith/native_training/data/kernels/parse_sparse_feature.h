@@ -15,6 +15,7 @@
 #ifndef MONOLITH_NATIVE_TRAINING_DATA_KERNELS_PARSE_SPARSE_FEATURE_LIB_H_
 #define MONOLITH_NATIVE_TRAINING_DATA_KERNELS_PARSE_SPARSE_FEATURE_LIB_H_
 
+#include <numeric>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -24,7 +25,9 @@
 
 #include "monolith/native_training/data/kernels/feature_name_mapper_tf_bridge.h"
 #include "monolith/native_training/data/kernels/internal/label_utils.h"
+#include "monolith/native_training/data/kernels/internal/uniq_hashtable.h"
 #include "monolith/native_training/data/training_instance/cc/reader_util.h"
+#include "monolith/native_training/runtime/common/metrics.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/platform/env.h"
 
@@ -62,21 +65,11 @@ class ShardingSparseFidsOp : public OpKernel {
   };
   void InitInstanceWrapper(InstanceWrapper *instance_wrapper);
 
-  template <typename TInput, typename TFidList>
-  Status FeatureParallelParseBase(OpKernelContext *ctx, const TInput &input,
-                                  OpOutputList *fid_list_out_list,
-                                  OpOutputList *fid_list_row_splits_out_list,
-                                  OpOutputList *fid_list_row_splits_size_out_list);
   template <typename TInput>
   Status FeatureParallelParse(OpKernelContext *ctx, const TInput &input,
                               OpOutputList *fid_list_out_list,
                               OpOutputList *fid_list_row_splits_out_list,
                               OpOutputList *fid_list_row_splits_size_out_list);
-  template <typename TInput>
-  Status FeatureParallelUniqueParse(OpKernelContext *ctx, const TInput &input,
-                                    OpOutputList *fid_list_out_list,
-                                    OpOutputList *fid_list_row_splits_out_list,
-                                    OpOutputList *fid_list_row_splits_size_out_list);
 
   int GetBatchSize(const InstanceWrapper &instance_wrapper) {
     return instance_wrapper.instances.size();
@@ -102,10 +95,15 @@ class ShardingSparseFidsOp : public OpKernel {
   };
   void FillFidList(uint64_t value,
                    std::vector<std::vector<uint64_t>> &shard_vec,
+                   MultiShardUniqHashTable &shard_uniq_hashtable,
                    tensorflow::TTypes<uint64_t>::Flat fid_offset_flat,
                    int feature_output_index, int *offset);
   void FillFidList(uint64_t value,
-                   std::vector<absl::flat_hash_map<uint64_t, int>> &shard_vec,
+                   std::vector<std::vector<uint64_t>> &shard_vec,
+                   tensorflow::TTypes<uint64_t>::Flat fid_offset_flat,
+                   int feature_output_index, int *offset);
+  void FillFidList(uint64_t value,
+                   MultiShardUniqHashTable &shard_uniq_hashtable,
                    tensorflow::TTypes<uint64_t>::Flat fid_offset_flat,
                    int feature_output_index, int *offset);
   void CopyFidList(const std::vector<uint64_t> &shard_ptr, int offset,
@@ -175,7 +173,7 @@ class ShardingSparseFidsOp : public OpKernel {
   int single_thread_assign_watermark_ = 100000 * 4;
   int int64_size_ = sizeof(int64_t);
 
-  uint32_t shard_flag_ = (1L << 31);
+  static constexpr uint32_t SHARED_FLAG = (1L << 31);
 
   bool unique_ = false;
   int parallel_flag_ = 0;
@@ -295,7 +293,7 @@ void ShardingSparseFidsOp::FeatureParallelMakeUpTask1Context(
     }
 
     const auto &named_feature_list = example_batch.named_feature_list(n_i);
-    int feature_size = 0;
+    int fid_size = 0;
     if (named_feature_list.type() == FeatureListType::SHARED) {
       const auto &feature = named_feature_list.feature(0);
       int tmp_counter = 0;
@@ -304,7 +302,7 @@ void ShardingSparseFidsOp::FeatureParallelMakeUpTask1Context(
       } else if (feature.has_fid_v2_list()) {
         tmp_counter = feature.fid_v2_list().value_size();
       }
-      feature_size += tmp_counter;
+      fid_size += tmp_counter;
       feature_counter.push_back(tmp_counter);
       shared_feature->insert(i);
       *all_feature_counter_size += 1;
@@ -318,12 +316,12 @@ void ShardingSparseFidsOp::FeatureParallelMakeUpTask1Context(
         } else if (feature.has_fid_v2_list()) {
           tmp_counter = feature.fid_v2_list().value_size();
         }
-        feature_size += tmp_counter;
+        fid_size += tmp_counter;
         feature_counter.push_back(tmp_counter);
       }
     }
-    if (feature_size > 0) {
-      task_context->size += feature_size;
+    if (fid_size > 0) {
+      task_context->size += fid_size;
     }
   }
 }
@@ -359,13 +357,13 @@ void ShardingSparseFidsOp::FeatureParallelMakeUpTask1Context(
     const ::monolith::io::proto::Example *example = examples[ex_i];
     CHECK_NOTNULL(example);
     for (const auto &named_feature : example->named_feature()) {
-      int feature_size = 0;
+      int fid_size = 0;
       const auto &feature = named_feature.feature();
-      feature_size = feature.fid_v2_list().value_size();
-      if (feature_size == 0) {
-        feature_size = feature.fid_v1_list().value_size();
+      fid_size = feature.fid_v2_list().value_size();
+      if (fid_size == 0) {
+        fid_size = feature.fid_v1_list().value_size();
       }
-      if (feature_size <= 0) continue;
+      if (fid_size <= 0) continue;
 
       int feature_index = -1;
       auto sorted_id = named_feature.sorted_id();
@@ -395,8 +393,8 @@ void ShardingSparseFidsOp::FeatureParallelMakeUpTask1Context(
       CHECK(feature_index >= 0 && feature_index < task_context_list->size());
       auto &task_context = (*task_context_list)[feature_index];
       auto &feature_counter = (*all_feature_counter)[feature_index];
-      feature_counter[ex_i] = feature_size;
-      task_context.size += feature_size;
+      feature_counter[ex_i] = fid_size;
+      task_context.size += fid_size;
       task_context.named_feature_ptr_list.push_back(&named_feature);
       task_context.feature_sample_index.push_back(feature_index * batch_size +
                                                   ex_i);
@@ -473,19 +471,19 @@ void ShardingSparseFidsOp::FeatureParallelMakeUpTask1Context(
       auto named_feature = info.first;
       auto ex_i = info.second;
 
-      int feature_size = 0;
+      int fid_size = 0;
       if (named_feature.fid_v1) {
-        feature_size = named_feature.fid_v1->size();
+        fid_size = named_feature.fid_v1->size();
       } else {
-        feature_size += named_feature.fid_v2->fid_size();
+        fid_size += named_feature.fid_v2->fid_size();
         // this is a sequence feature list.
         for (const auto &fidlist : named_feature.fid_v2->fid_list()) {
-          feature_size += fidlist.value_size();
+          fid_size += fidlist.value_size();
         }
       }
-      if (feature_size > 0) {
-        feature_counter[ex_i] = feature_size;
-        task_context->size += feature_size;
+      if (fid_size > 0) {
+        feature_counter[ex_i] = fid_size;
+        task_context->size += fid_size;
         task_context->instance_feature_ptr_list.push_back(named_feature);
         task_context->feature_sample_index.push_back(i * batch_size + ex_i);
       }
@@ -501,6 +499,7 @@ void ShardingSparseFidsOp::FeatureParallelDoTask1(
     tensorflow::TTypes<uint64_t>::Flat fid_offset_flat,
     tensorflow::TTypes<int32_t>::Flat feature_offset_flat) {
   auto &shard_vec = task_context->fid_list;
+  auto &uniq_hashtable = task_context->uniq_hashtable;
   const auto &named_feature_list = example_batch.named_feature_list(
       task_context->example_batch_feature_index);
   auto feature_output_index = task_context->feature_output_index;
@@ -510,14 +509,14 @@ void ShardingSparseFidsOp::FeatureParallelDoTask1(
     if (feature.has_fid_v1_list()) {
       for (int i = 0; i < feature.fid_v1_list().value_size(); ++i) {
         auto value = convert_fid_v1_to_v2(feature.fid_v1_list().value(i));
-        FillFidList(value, shard_vec, fid_offset_flat, feature_output_index,
-                    &offset);
+        FillFidList(value, shard_vec, uniq_hashtable, fid_offset_flat,
+                    feature_output_index, &offset);
       }
     } else if (feature.has_fid_v2_list()) {
       for (int i = 0; i < feature.fid_v2_list().value_size(); ++i) {
         auto value = feature.fid_v2_list().value(i);
-        FillFidList(value, shard_vec, fid_offset_flat, feature_output_index,
-                    &offset);
+        FillFidList(value, shard_vec, uniq_hashtable, fid_offset_flat,
+                    feature_output_index, &offset);
       }
     }
   } else {
@@ -525,14 +524,14 @@ void ShardingSparseFidsOp::FeatureParallelDoTask1(
       if (feature.has_fid_v1_list()) {
         for (int i = 0; i < feature.fid_v1_list().value_size(); ++i) {
           auto value = convert_fid_v1_to_v2(feature.fid_v1_list().value(i));
-          FillFidList(value, shard_vec, fid_offset_flat, feature_output_index,
-                      &offset);
+          FillFidList(value, shard_vec, uniq_hashtable, fid_offset_flat,
+                      feature_output_index, &offset);
         }
       } else if (feature.has_fid_v2_list()) {
         for (int i = 0; i < feature.fid_v2_list().value_size(); ++i) {
           auto value = feature.fid_v2_list().value(i);
-          FillFidList(value, shard_vec, fid_offset_flat, feature_output_index,
-                      &offset);
+          FillFidList(value, shard_vec, uniq_hashtable, fid_offset_flat,
+                      feature_output_index, &offset);
         }
       }
     }
@@ -548,6 +547,7 @@ void ShardingSparseFidsOp::FeatureParallelDoTask1(
     tensorflow::TTypes<uint64_t>::Flat fid_offset_flat,
     tensorflow::TTypes<int32_t>::Flat feature_offset_flat) {
   auto &shard_vec = task_context->fid_list;
+  auto &uniq_hashtable = task_context->uniq_hashtable;
   auto feature_output_index = task_context->feature_output_index;
   int offset = 0;
   for (uint sub_task_index = 0;
@@ -561,14 +561,14 @@ void ShardingSparseFidsOp::FeatureParallelDoTask1(
     if (feature.has_fid_v1_list()) {
       for (int i = 0; i < feature.fid_v1_list().value_size(); ++i) {
         auto value = convert_fid_v1_to_v2(feature.fid_v1_list().value(i));
-        FillFidList(value, shard_vec, fid_offset_flat, feature_output_index,
-                    &offset);
+        FillFidList(value, shard_vec, uniq_hashtable, fid_offset_flat,
+                    feature_output_index, &offset);
       }
     } else if (feature.has_fid_v2_list()) {
       for (int i = 0; i < feature.fid_v2_list().value_size(); ++i) {
         auto value = feature.fid_v2_list().value(i);
-        FillFidList(value, shard_vec, fid_offset_flat, feature_output_index,
-                    &offset);
+        FillFidList(value, shard_vec, uniq_hashtable, fid_offset_flat,
+                    feature_output_index, &offset);
       }
     }
   }
@@ -583,6 +583,7 @@ void ShardingSparseFidsOp::FeatureParallelDoTask1(
     tensorflow::TTypes<uint64_t>::Flat fid_offset_flat,
     tensorflow::TTypes<int32_t>::Flat feature_offset_flat) {
   auto &shard_vec = task_context->fid_list;
+  auto &uniq_hashtable = task_context->uniq_hashtable;
   auto feature_output_index = task_context->feature_output_index;
   int offset = 0;
   for (uint sub_task_index = 0;
@@ -595,19 +596,19 @@ void ShardingSparseFidsOp::FeatureParallelDoTask1(
     if (named_feature_ptr.fid_v1) {
       for (auto value : *named_feature_ptr.fid_v1) {
         value = convert_fid_v1_to_v2(value);
-        FillFidList(value, shard_vec, fid_offset_flat, feature_output_index,
-                    &offset);
+        FillFidList(value, shard_vec, uniq_hashtable, fid_offset_flat,
+                    feature_output_index, &offset);
       }
     } else {
       for (const auto &value : named_feature_ptr.fid_v2->fid()) {
-        FillFidList(value, shard_vec, fid_offset_flat, feature_output_index,
-                    &offset);
+        FillFidList(value, shard_vec, uniq_hashtable, fid_offset_flat,
+                    feature_output_index, &offset);
       }
       // this is a sequence feature list.
-      for (const auto &fidlist : named_feature_ptr.fid_v2->fid_list()) {
-        for (const auto &value : fidlist.value()) {
-          FillFidList(value, shard_vec, fid_offset_flat, feature_output_index,
-                      &offset);
+      for (const auto &fid_list : named_feature_ptr.fid_v2->fid_list()) {
+        for (const auto &value : fid_list.value()) {
+          FillFidList(value, shard_vec, uniq_hashtable, fid_offset_flat,
+                      feature_output_index, &offset);
         }
       }
     }
@@ -615,14 +616,15 @@ void ShardingSparseFidsOp::FeatureParallelDoTask1(
   task_context->feature_offset = offset - nfl_fid_offset[feature_output_index];
 }
 
-template <typename TInput, typename TFidList>
-Status ShardingSparseFidsOp::FeatureParallelParseBase(
+template <typename TInput>
+Status ShardingSparseFidsOp::FeatureParallelParse(
     OpKernelContext *ctx, const TInput &input, OpOutputList *fid_list_out_list,
     OpOutputList *fid_list_row_splits_out_list,
     OpOutputList *fid_list_row_splits_size_out_list) {
   int batch_size = GetBatchSize(input);
   struct FeatureParallelTask1Context {
-    std::vector<TFidList> fid_list;
+    std::vector<std::vector<uint64_t>> fid_list;
+    MultiShardUniqHashTable uniq_hashtable;
     int example_batch_feature_index = -1;  // use for example_batch
     std::vector<const ::monolith::io::proto::NamedFeature *>
         named_feature_ptr_list;  // use for example
@@ -660,11 +662,16 @@ Status ShardingSparseFidsOp::FeatureParallelParseBase(
         &all_feature_counter_size);
     for (auto &task_context : task_context_list) {
       task_context.fid_list.resize(ps_num_);
+      task_context.uniq_hashtable.resize(ps_num_);
       task_context.table_offset.resize(ps_num_, 0);
       if (task_context.size > 0) {
         int reserve_size = task_context.size * 6 / 5 / ps_num_;
-        for (auto &fid_list_part : task_context.fid_list) {
-          fid_list_part.reserve(reserve_size);
+        if (unique_) {
+          task_context.uniq_hashtable.reserve(reserve_size);
+        } else {
+          for (auto &fid_list_part : task_context.fid_list) {
+            fid_list_part.reserve(reserve_size);
+          }
         }
       }
     }
@@ -686,35 +693,62 @@ Status ShardingSparseFidsOp::FeatureParallelParseBase(
       task_context_list, single_thread_feature_watermark_, &task_split);
   {
     profiler::TraceMe activity([]() { return "ShardingSparseFidsOp::AddVec"; });
+    activity.AppendMetadata([&task_split, &task_context_list] {
+      return profiler::TraceMeEncode({{"task_num", task_context_list.size()},
+                                      {"split_num", task_split.size()}});
+    });
+    std::vector<size_t> capacities(task_split.size(), 0);
     auto task_func = [this, &task_context_list, &input, &task_split,
-                      &nfl_fid_offset, &fid_offset_flat, &feature_offset_flat](
-                         const int64 begin, const int64 end) {
+                      &nfl_fid_offset, &fid_offset_flat, &feature_offset_flat,
+                      &capacities](const int64 begin, const int64 end) {
+      UniqHashTable uniq_hashtable;
       for (int64 task_index = begin; task_index < end; ++task_index) {
         auto &task_index_list = task_split[task_index];
         for (auto index : task_index_list) {
           auto &task_context = task_context_list[index];
+          if (unique_) {
+            uniq_hashtable.Reset();
+            task_context.uniq_hashtable.init(&uniq_hashtable);
+          }
           FeatureParallelDoTask1(input, &task_context, nfl_fid_offset,
                                  fid_offset_flat, feature_offset_flat);
         }
+        capacities[task_index] = uniq_hashtable.Capacity();
       }
     };
 
     ParallelRun(ctx, task_split.size(), task_func);
+
+    double avg_capacity = 0;
+    if (capacities.size() > 0) {
+      avg_capacity = static_cast<double>(std::accumulate(capacities.begin(),
+                                                         capacities.end(), 0)) /
+                     capacities.size();
+    }
+    activity.AppendMetadata([&avg_capacity] {
+      return profiler::TraceMeEncode({{"hashtable_size", avg_capacity}});
+    });
+    monolith::GetMetrics()->emit_timer("sharding_sparse_fids_op_hashtable_capacity",
+                                        avg_capacity);
   }
 
   struct TaskContext2 {
     // fill fid_list
     TaskContext2(const TensorSliceAccessor<int64_t> &accessor_,
-                 TFidList *shard_ptr_, int size_, int offset_)
+                 std::vector<uint64_t> *shard_fid_list_, std::vector<uint64_t> *shard_ptr_,
+                 int size_, int offset_)
         : accessor(accessor_),
+          shard_fid_list(shard_fid_list_),
           shard_ptr(shard_ptr_),
           size(size_),
           offset(offset_) {}
+
     // rewrite fid_offset
     explicit TaskContext2(FeatureParallelTask1Context *task_context_)
         : task1_context(task_context_), size(task_context_->feature_offset) {}
     TensorSliceAccessor<int64_t> accessor;
-    TFidList *shard_ptr;
+    std::vector<uint64_t> *shard_fid_list = nullptr;
+    std::vector<uint64_t> *shard_ptr = nullptr;
     int size = -1;
     int offset = -1;
     FeatureParallelTask1Context *task1_context = nullptr;
@@ -741,18 +775,22 @@ Status ShardingSparseFidsOp::FeatureParallelParseBase(
         int &size = size_record[table_index * ps_num_ + ps_num_i];
         if (feature_vec_ptr != nullptr) {
           for (auto task_context_ptr : *feature_vec_ptr) {
-            size += task_context_ptr->fid_list[ps_num_i].size();
+            if (unique_) {
+              size += task_context_ptr->uniq_hashtable.fid_num(ps_num_i);
+            } else {
+              size += task_context_ptr->fid_list[ps_num_i].size();
+            }
           }
         }
         size_record_total += size;
       }
     }
     Tensor *fid_list_tensor;
-    TF_RETURN_IF_ERROR(ctx, ctx->allocate_output("fid_list",
-                                                 TensorShape({
-                                                     size_record_total,
-                                                 }),
-                                                 &fid_list_tensor));
+    TF_RETURN_IF_ERROR(ctx,
+                       ctx->allocate_output("fid_list", TensorShape({
+                                                            size_record_total,
+                                                        }),
+                                            &fid_list_tensor));
     fid_list_tensor->flat<int64_t>().setZero();
 
     int pre_count = 0;
@@ -770,11 +808,12 @@ Status ShardingSparseFidsOp::FeatureParallelParseBase(
     }
 
     TF_RETURN_IF_ERROR(
-        ctx, ctx->allocate_output("fid_list_table_row_length",
-                                  tensorflow::TensorShape({
-                                      ps_num_ * table_cfg_list_.size(),
-                                  }),
-                                  &fid_list_table_row_length_tensor));
+        ctx,
+        ctx->allocate_output("fid_list_table_row_length",
+                             tensorflow::TensorShape({
+                                 ps_num_ * table_cfg_list_.size(),
+                             }),
+                             &fid_list_table_row_length_tensor));
     fid_list_table_row_length_tensor->flat<int32_t>().setZero();
 
     TF_RETURN_IF_ERROR(ctx,
@@ -786,11 +825,12 @@ Status ShardingSparseFidsOp::FeatureParallelParseBase(
     fid_list_shard_row_lenth_tensor->flat<int32_t>().setZero();
 
     TF_RETURN_IF_ERROR(
-        ctx, ctx->allocate_output("fid_list_emb_row_lenth",
-                                  tensorflow::TensorShape({
-                                      ps_num_ * table_cfg_list_.size(),
-                                  }),
-                                  &fid_list_emb_row_lenth_tensor));
+        ctx,
+        ctx->allocate_output("fid_list_emb_row_lenth",
+                             tensorflow::TensorShape({
+                                 ps_num_ * table_cfg_list_.size(),
+                             }),
+                             &fid_list_emb_row_lenth_tensor));
     fid_list_emb_row_lenth_tensor->flat<int32_t>().setZero();
   }
   int index = -1;
@@ -818,10 +858,18 @@ Status ShardingSparseFidsOp::FeatureParallelParseBase(
       if (feature_vec_ptr != nullptr) {
         for (auto task_context_ptr : *feature_vec_ptr) {
           task_context_ptr->table_offset[ps_num_i] = pre_offset;
-          size += task_context_ptr->fid_list[ps_num_i].size();
+          int cur_fid_size = 0;
+          if (unique_) {
+            cur_fid_size = task_context_ptr->uniq_hashtable.fid_num(ps_num_i);
+          } else {
+            cur_fid_size = task_context_ptr->fid_list[ps_num_i].size();
+          }
+          size += cur_fid_size;
+          // std::cerr << "cur_fid_size: " << cur_fid_size << " size: " << size
+          // << std::endl << std::flush;
           if (version_ == 3 || version_ == 4 || version_ == 5) {
             int emb_size =
-                task_context_ptr->fid_list[ps_num_i].size() *
+                cur_fid_size *
                 feature_cfg_list_[task_context_ptr->feature_output_index]
                     ->dims_sum;
             if (version_ == 4) {
@@ -838,8 +886,7 @@ Status ShardingSparseFidsOp::FeatureParallelParseBase(
               feature_cfg_list_[task_context_ptr->feature_output_index]
                   ->feature_in_table_index +
               1;
-          cur_tensor_flat(cur_tensor_flat_index) =
-              task_context_ptr->fid_list[ps_num_i].size();
+          cur_tensor_flat(cur_tensor_flat_index) = cur_fid_size;
         }
       }
       if (version_ == 5) {
@@ -852,8 +899,9 @@ Status ShardingSparseFidsOp::FeatureParallelParseBase(
       if (version_ != 4) {
         Tensor *cur_tensor;
         TF_RETURN_IF_ERROR(
-            ctx, fid_list_out_list->allocate(
-                     ++index, tensorflow::TensorShape{size}, &cur_tensor));
+            ctx,
+            fid_list_out_list->allocate(++index, tensorflow::TensorShape{size},
+                                        &cur_tensor));
         if (size == 0) {
           std::memset(cur_tensor->data(), 0, cur_tensor->TotalBytes());
           continue;
@@ -870,11 +918,22 @@ Status ShardingSparseFidsOp::FeatureParallelParseBase(
       }
       int offset = 0;
       for (auto task_context_ptr : *feature_vec_ptr) {
-        auto &fid_list = task_context_ptr->fid_list[ps_num_i];
-        TaskContext2 tmp_task_context(cur_accessor, &fid_list, fid_list.size(),
-                                      offset);
+        std::vector<uint64_t> *shard_fid_list = nullptr;
+        std::vector<uint64_t> *shard_ptr = nullptr;
+        int tmp_size = 0;
+        if (unique_) {
+          shard_fid_list =
+              &(task_context_ptr->uniq_hashtable.fid_list(ps_num_i));
+          tmp_size = shard_fid_list->size();
+        } else {
+          shard_ptr = &(task_context_ptr->fid_list[ps_num_i]);
+          tmp_size = shard_ptr->size();
+        }
+        DCHECK_LE(offset + tmp_size, size);
+        TaskContext2 tmp_task_context(cur_accessor, shard_fid_list, shard_ptr,
+                                      tmp_size, offset);
         task2_context_list.emplace_back(tmp_task_context);
-        offset += fid_list.size();
+        offset += tmp_size;
       }
     }
     if (version_ != 2) {
@@ -893,9 +952,9 @@ Status ShardingSparseFidsOp::FeatureParallelParseBase(
 
   {
     profiler::TraceMe activity([]() { return "ShardingSparseFidsOp::Copy"; });
-    auto tensor_assgin_func = [this, ctx, &task2_context_list, &task2_split,
+    auto tensor_assign_func = [this, ctx, &task2_context_list, &task2_split,
                                &nfl_fid_offset, &fid_offset_flat](
-                                  const int64 begin, const int64 end) {
+        const int64 begin, const int64 end) {
       for (int64 task_index = begin; task_index < end; ++task_index) {
         auto &task_index_list = task2_split[task_index];
         for (auto index : task_index_list) {
@@ -922,6 +981,9 @@ Status ShardingSparseFidsOp::FeatureParallelParseBase(
                   feature_cfg->GetPsShard(static_cast<int>(cur >> 32)));
               fid_offset_flat(offset) = cur;
             }
+          } else if (unique_) {
+            CopyFidList(*task_context.shard_fid_list, task_context.offset,
+                        &task_context.accessor);
           } else {
             CopyFidList(*task_context.shard_ptr, task_context.offset,
                         &task_context.accessor);
@@ -929,29 +991,9 @@ Status ShardingSparseFidsOp::FeatureParallelParseBase(
         }
       }
     };
-    ParallelRun(ctx, task2_split.size(), tensor_assgin_func);
+    ParallelRun(ctx, task2_split.size(), tensor_assign_func);
   }
   return Status::OK();
-}
-
-template <typename TInput>
-Status ShardingSparseFidsOp::FeatureParallelParse(
-    OpKernelContext *ctx, const TInput &input, OpOutputList *fid_list_out_list,
-    OpOutputList *fid_list_row_splits_out_list,
-    OpOutputList *fid_list_row_splits_size_out_list) {
-  return FeatureParallelParseBase<TInput, std::vector<uint64_t>>(
-      ctx, input, fid_list_out_list, fid_list_row_splits_out_list,
-      fid_list_row_splits_size_out_list);
-}
-
-template <typename TInput>
-Status ShardingSparseFidsOp::FeatureParallelUniqueParse(
-    OpKernelContext *ctx, const TInput &input, OpOutputList *fid_list_out_list,
-    OpOutputList *fid_list_row_splits_out_list,
-    OpOutputList *fid_list_row_splits_size_out_list) {
-  return FeatureParallelParseBase<TInput, absl::flat_hash_map<uint64_t, int>>(
-      ctx, input, fid_list_out_list, fid_list_row_splits_out_list,
-      fid_list_row_splits_size_out_list);
 }
 
 }  // namespace monolith_tf
