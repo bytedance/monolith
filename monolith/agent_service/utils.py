@@ -50,9 +50,9 @@ FeatureKeys = {
 }
 flags.DEFINE_string("conf", "", "agent conf file")
 
-TFS_HOME = ""
+TFS_HOME = "/opt/tiger/monolith_serving"
 DEFAULT_MODEL_CONFIG = None
-DEFAULT_PLATFORM_CONFIG_FILE = ""
+DEFAULT_PLATFORM_CONFIG_FILE = "{}/conf/platform_config_file.cfg".format(TFS_HOME)
 old_isabs = os.path.isabs
 
 

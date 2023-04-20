@@ -1,0 +1,7 @@
+[Unit]
+Description=Dump the Docker environment variables
+
+[Service]
+Type=oneshot
+ExecStart=/root/.system/configurator_dumpenv.sh
+TimeoutSec=0

@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# need env: TCE_PSM, TCE_INTERNAL_IDC, TCE_CLUSTER, SHARD_ID
+# need arg: --conf agent.conf
+python3 agent $@

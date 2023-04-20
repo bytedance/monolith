@@ -1,0 +1,20 @@
+# permissions for end users to view mlservices.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mlservice-viewer-role
+rules:
+- apiGroups:
+  - mlplatform.volcengine.com
+  resources:
+  - mlservices
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - mlplatform.volcengine.com
+  resources:
+  - mlservices/status
+  verbs:
+  - get

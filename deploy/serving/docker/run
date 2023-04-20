@@ -1,0 +1,3 @@
+#! /bin/bash
+
+docker build --force-rm -t bytedance.monolith_pro.release:v1.0.0 ./

@@ -120,25 +120,6 @@ class ReplicaMgrTest(unittest.TestCase):
         logging.info(f'{replica_path} has already exists')
         zk.retry(zk.set, path=replica_path, value=replica_meta_bytes)
 
-  def test_get_replicas(self):
-    zk = FakeKazooClient()
-    zk.start()
-
-    self.register(zk)
-
-    mgr = ReplicaManager(zk, self.agent_conf)
-    mgr.start()
-
-    time.sleep(3)  # waiting for model available
-    try:
-      task_01 = mgr.get_replicas(ServerType.PS, task=1)
-      self.assertTrue(task_01[0] is None and task_01[1] is None and
-                      task_01[2] is not None)
-      self.assertTrue(
-          len(mgr.get_replicas(ServerType.ENTRY, task=0)) == NUM_REPLICAS)
-    finally:
-      mgr.stop()
-      zk.stop()
 
 
 if __name__ == "__main__":

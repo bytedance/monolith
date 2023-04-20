@@ -1,0 +1,16 @@
+domain: volcengine.com
+layout:
+- go.kubebuilder.io/v3
+projectName: deploy
+repo: code.byted.org/data/monolith/deploy
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: volcengine.com
+  group: mlplatform
+  kind: MLService
+  path: code.byted.org/data/monolith/deploy/api/v1
+  version: v1
+version: "3"

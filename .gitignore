@@ -75,3 +75,6 @@ target/
 # Jupyter noteobok
 .ipynb_checkpoints
 
+# go
+vendor/
+

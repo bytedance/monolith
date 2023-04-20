@@ -37,8 +37,7 @@ from monolith.native_training.model_export import export_state_utils
 from monolith.native_training.net_utils import AddressFamily
 from monolith.native_training.zk_utils import MonolithKazooClient
 from monolith.native_training.metric import cli
-
-
+DEFAULT_USE_ARCHON = False
 class ReplicaWatcher(object):
 
   def __init__(self,
@@ -697,7 +696,7 @@ class ZKListener(object):
 class ReplicaManager:
 
   def __init__(self, zk_client: MonolithKazooClient, config: AgentConfig):
-    self._watcher = ReplicaWatcher(zk_client, config, True)
+    self._watcher = ReplicaWatcher(zk_client, config, DEFAULT_USE_ARCHON)
     self._updater = ReplicaUpdater(zk_client, config)
     self._conf = config
 

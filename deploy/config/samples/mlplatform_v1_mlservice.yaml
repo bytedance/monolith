@@ -1,0 +1,114 @@
+apiVersion: mlplatform.volcengine.com/v1
+kind: MLService
+metadata:
+  name: mlservice-demo
+  namespace: mlplatform-service
+spec:
+  selector:
+    matchLabels:
+      app: mlservice-demo
+  roles:
+  - name: "Entry"
+    shardNum: 1
+    serviceSpec:
+      serviceType: "ClusterIP"
+    template:
+      metadata:
+        labels:
+          app: mlservice-demo
+      spec:
+        progressDeadlineSeconds: 600
+        replicas: 1
+        selector:
+          matchLabels:
+            app: mlservice-demo
+        strategy:
+          rollingUpdate:
+            maxSurge: 25%
+            maxUnavailable: 25%
+          type: RollingUpdate
+        template:
+          metadata:
+            labels:
+              app: mlservice-demo
+          spec:
+            containers:
+            - command:
+              - sleep
+              - infinity
+              env:
+              - name: TEST
+                value: "1"
+              image: cr-cn-guilin-boe.volces.com/ml_platform/tfserving:8bf6def4f68f89fd07bce144723f7a97
+              imagePullPolicy: Always
+              name: mlservice-demo
+              ports:
+              - containerPort: 8500
+                protocol: TCP
+              - containerPort: 8501
+                protocol: TCP
+              resources:
+                limits:
+                  cpu: "500m"
+                  memory: 1Gi
+                requests:
+                  cpu: "500m"
+                  memory: 1Gi
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+            dnsPolicy: ClusterFirst
+            restartPolicy: Always
+            securityContext:
+              runAsNonRoot: false
+            terminationGracePeriodSeconds: 30
+  - name: "PS"
+    shardNum: 2
+    template:
+      metadata:
+        labels:
+          app: mlservice-demo
+      spec:
+        progressDeadlineSeconds: 600
+        replicas: 1
+        selector:
+          matchLabels:
+            app: mlservice-demo
+        strategy:
+          rollingUpdate:
+            maxSurge: 25%
+            maxUnavailable: 25%
+          type: RollingUpdate
+        template:
+          metadata:
+            labels:
+              app: mlservice-demo
+          spec:
+            containers:
+            - command:
+              - sleep
+              - infinity
+              env:
+              - name: TEST
+                value: "1"
+              image: cr-cn-guilin-boe.volces.com/ml_platform/tfserving:8bf6def4f68f89fd07bce144723f7a97
+              imagePullPolicy: Always
+              name: mlservice-demo
+              ports:
+              - containerPort: 8500
+                protocol: TCP
+              - containerPort: 8501
+                protocol: TCP
+              resources:
+                limits:
+                  cpu: "500m"
+                  memory: 1Gi
+                requests:
+                  cpu: "500m"
+                  memory: 1Gi
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+            dnsPolicy: ClusterFirst
+            restartPolicy: Always
+            securityContext:
+              runAsNonRoot: false
+            terminationGracePeriodSeconds: 30

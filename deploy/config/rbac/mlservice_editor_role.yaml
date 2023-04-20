@@ -1,0 +1,24 @@
+# permissions for end users to edit mlservices.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mlservice-editor-role
+rules:
+- apiGroups:
+  - mlplatform.volcengine.com
+  resources:
+  - mlservices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - mlplatform.volcengine.com
+  resources:
+  - mlservices/status
+  verbs:
+  - get
