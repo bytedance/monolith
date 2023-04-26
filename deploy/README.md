@@ -5,7 +5,7 @@
 kubebuilder使用文档：https://book.kubebuilder.io/cronjob-tutorial/cronjob-tutorial.html
 
 ```
-kubebuilder init --domain volcengine.com --repo code.byted.org/data/monolith/deploy --skip-go-version-check
+kubebuilder init --domain volcengine.com --repo https://github.com/bytedance/monolith/blob/master/deploy --skip-go-version-check
 
 kubebuilder create api --group mlplatform --version v1 --kind MLService --controller --resource
 ```
