@@ -10,12 +10,6 @@ kubebuilder init --domain volcengine.com --repo code.byted.org/data/monolith/dep
 kubebuilder create api --group mlplatform --version v1 --kind MLService --controller --resource
 ```
 
-# 编译&镜像构建
-
-SCM地址：https://cloud.bytedance.net/scm/detail/267470/versions
-
-ICM地址：https://cloud.bytedance.net/image/483812
-
 # 安装部署
 
 配置好集群kubeconfig后执行以下命令：
