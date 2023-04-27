@@ -298,6 +298,10 @@ class MonolithBaseModel(NativeTask, ABC):
     op_fields = [features[field] for field in self.p.output_fields.split(',')]
     if isinstance(pred, (tuple, list)):
       op_fields.extend(pred)
+    elif isinstance(pred, dict):
+      sorted_keys = list(sorted(pred.keys()))
+      logging.info('sorted_keys: %s', sorted_keys)
+      op_fields.extend([pred[k] for k in sorted_keys])
     else:
       op_fields.append(pred)
     fmt = self.p.delimiter.join(["{}"] * len(op_fields)) + "\n"

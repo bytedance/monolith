@@ -79,8 +79,8 @@ class CustomGlobalStepWaiterHook(tf.estimator.SessionRunHook):
     self._tide_end_hour = tide_end_hour
     self._tide_end_minute = tide_end_minute
     self._hook_start_time = None
-    self._non_tide_wait_second = random.randint(
-        int(max_non_tide_wait_minute * 6), max_non_tide_wait_minute * 60)
+    random_extra_seconds = random.randint(0, 600)
+    self._non_tide_wait_second = max_non_tide_wait_minute * 60 + random_extra_seconds
 
   def begin(self):
     self._worker_is_started = False
@@ -88,8 +88,6 @@ class CustomGlobalStepWaiterHook(tf.estimator.SessionRunHook):
     if self._global_step_tensor is None:
       raise RuntimeError(
           "Global step should be created to use _GlobalStepWaiterHook.")
-    if self._hook_start_time is None:
-      self._hook_start_time = time.time()
 
   def before_run(self, run_context):
     if self._worker_is_started:
@@ -99,8 +97,6 @@ class CustomGlobalStepWaiterHook(tf.estimator.SessionRunHook):
       self._worker_is_started = True
       return None
 
-    logging.info("Waiting for global step %d before starting training.",
-                 self._wait_until_step)
     while True:
       if self._tide_start_hour is not None and self._tide_end_hour is not None:
         if not tide_available_now(self._tide_start_hour,
@@ -114,17 +110,34 @@ class CustomGlobalStepWaiterHook(tf.estimator.SessionRunHook):
           return
 
       current_step = run_context.session.run(self._global_step_tensor)
+      if self._hook_start_time is None and current_step > 1:
+        # Wait for the chief node to start training for at least one step
+        # before starting the timer.
+        self._hook_start_time = time.time()
+
       if current_step >= self._wait_until_step:
         self._worker_is_started = True
+        logging.info(
+            "Start training after waiting for {} global steps. Current step is {}."
+            .format(self._wait_until_step, current_step))
         return None
 
-      if self._hook_start_time is not None and time.time(
-      ) - self._hook_start_time > self._non_tide_wait_second:
-        return None
+      has_been_waiting_seconds = None
+      if self._hook_start_time is not None:
+        has_been_waiting_seconds = time.time() - self._hook_start_time
+        if has_been_waiting_seconds > self._non_tide_wait_second:
+          self._worker_is_started = True
+          logging.info(
+              "Start training after waiting for {} seconds. Current step is {}."
+              .format(self._non_tide_wait_second, current_step))
+          return None
 
       logging.log_every_n_seconds(
-          logging.INFO, "Waiting for global step {} before starting training. "
-          "Current step is {}.".format(self._wait_until_step, current_step), 60)
+          logging.INFO,
+          "Waiting for global_step >= {} or waiting time > {} seconds before starting training. "
+          "Current step is {}, has been waiting for {} seconds already.".format(
+              self._wait_until_step, self._non_tide_wait_second, current_step,
+              has_been_waiting_seconds), 60)
       time.sleep(0.5)
 
 
