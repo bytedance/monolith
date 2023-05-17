@@ -517,6 +517,7 @@ py_library(
         ":estimator",
         ":feature",
         ":file_ops",
+        ":graph_utils",
         ":mlp_utils",
         ":monolith_export",
         ":native_task",
@@ -842,6 +843,11 @@ py_test(
 py_library(
     name = "graph_meta",
     srcs = ["graph_meta.py"],
+)
+
+py_library(
+    name = "graph_utils",
+    srcs = ["graph_utils.py"],
 )
 
 py_library(

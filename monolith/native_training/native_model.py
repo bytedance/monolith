@@ -44,6 +44,7 @@ from monolith.native_training.native_task_context import get
 import monolith.native_training.feature_utils as feature_utils
 from monolith.native_training.estimator import EstimatorSpec
 from monolith.native_training.embedding_combiners import FirstN
+from monolith.native_training.graph_utils import add_batch_norm_into_update_ops
 from monolith.native_training.layers import LogitCorrection
 from monolith.native_training.native_task import NativeTask, NativeContext
 from monolith.native_training.metric import utils as metric_utils
@@ -399,9 +400,11 @@ class MonolithBaseModel(NativeTask, ABC):
 
   def create_input_fn(self, mode):
     """生成input_fn"""
+
     def input_fn_internal():
       with MonolithDeviceCtx(ctx_type=DeviceCtxType.INPUT_FN):
         return self.input_fn(mode)
+
     return input_fn_internal
 
   def create_model_fn(self):
@@ -620,13 +623,13 @@ class MonolithBaseModel(NativeTask, ABC):
         elif self.metrics.enable_file_metrics:
           self.add_training_hook(
               FileMetricHook(deep_insight_op,
-                            worker_id=get().worker_index,
-                            parse_fn=self.metrics.parse_fn,
-                            key_fn=self.metrics.key_fn or vepfs_key_fn,
-                            layout_fn=self.metrics.layout_fn or
-                            vepfs_layout_fn,
-                            base_name=self.metrics.file_base_name,
-                            file_ext=self.metrics.file_ext))
+                             worker_id=get().worker_index,
+                             parse_fn=self.metrics.parse_fn,
+                             key_fn=self.metrics.key_fn or vepfs_key_fn,
+                             layout_fn=self.metrics.layout_fn or
+                             vepfs_layout_fn,
+                             base_name=self.metrics.file_base_name,
+                             file_ext=self.metrics.file_ext))
         logging.info("model_name: {}, target {}".format(model_name, head_name))
 
       if real_mode == tf.estimator.ModeKeys.EVAL:
@@ -675,19 +678,27 @@ class MonolithBaseModel(NativeTask, ABC):
                 sparse_norm_warmup_steps=self.sparse_norm_warmup_steps,
                 is_fused_layout=self.is_fused_layout(),
                 use_allreduce=self._use_dense_allreduce))
+        add_batch_norm_into_update_ops()
+        update_ops = tf.compat.v1.get_collection(
+            tf.compat.v1.GraphKeys.UPDATE_OPS)
+        logging.info('update_ops: %s', update_ops)
+        with tf.compat.v1.control_dependencies(update_ops):
+          train_op = tf.group(train_ops)
 
         return tf.estimator.EstimatorSpec(mode,
                                           loss=loss,
-                                          train_op=tf.group(train_ops),
+                                          train_op=train_op,
                                           training_hooks=self._training_hooks)
 
     return model_fn_internal
 
   def create_serving_input_receiver_fn(self):
     """生在Serving数据流, serving_input_receiver_fn"""
+
     def serving_input_receiver_fn_internal():
       with MonolithDeviceCtx(ctx_type=DeviceCtxType.INPUT_RECEIVER_FN):
         return self.serving_input_receiver_fn()
+
     return dump_utils.record_receiver(serving_input_receiver_fn_internal)
 
   @abstractmethod
