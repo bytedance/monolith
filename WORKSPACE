@@ -41,8 +41,8 @@ http_archive(
     name = "org_tensorflow_serving",
     patch_args = ["-p1"],
     patches = [
-      "//third_party:org_tensorflow_serving/public_tf_serving.patch",
-      "//third_party:org_tensorflow_serving/support_diff_dim_size_inputs.patch"
+        "//third_party:org_tensorflow_serving/public_tf_serving.patch",
+        "//third_party:org_tensorflow_serving/support_diff_dim_size_inputs.patch",
     ],
     sha256 = "8c1a4d31ec7ab041b9302348a01422e21349507c7a6f0974639386c8901b721b",
     strip_prefix = "serving-2.4.0",
@@ -163,28 +163,6 @@ load("@hedron_compile_commands//:workspace_setup.bzl", "hedron_compile_commands_
 
 hedron_compile_commands_setup()
 
-# Start: Copybara
-http_archive(
-    name = "com_github_google_copybara",
-    patch_args = ["-p1"],
-    patches = ["//third_party:copybara/copybara.patch"],
-    sha256 = "37f3923c46bd31f4907d2d8b65c5811a84fbcaeba83f76bbae3035289734f21d",
-    strip_prefix = "copybara-8d49f91c2a2341faf2e3f71ebf9d10c4dbc36888",
-    url = "https://github.com/google/copybara/archive/8d49f91c2a2341faf2e3f71ebf9d10c4dbc36888.tar.gz",
-)
-
-load("@com_github_google_copybara//:repositories.bzl", "copybara_repositories")
-
-copybara_repositories()
-
-load("@com_github_google_copybara//:repositories.maven.bzl", "copybara_maven_repositories")
-
-copybara_maven_repositories()
-
-load("@com_github_google_copybara//:repositories.go.bzl", "copybara_go_repositories")
-
-copybara_go_repositories()
-# End: Copybara
 
 http_archive(
     name = "zstd",
