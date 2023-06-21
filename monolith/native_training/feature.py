@@ -578,7 +578,7 @@ def create_embedding_slices(
 
   with device_utils.maybe_device_if_allowed('/device:GPU:0'):
     # In a long term, this optimization should be on graph-transform level at runtime.
-    if device_utils.within_placement_context_of("GPU"):
+    if not is_exporting() and device_utils.within_placement_context_of("GPU"):
       if int(os.getenv("MONOLITH_GPU_FEATURE_FACTORY_FUSION_LEVEL", '1')) == 1:
         feature_to_slices.update(helper.fused_reduce_then_split())
       else:

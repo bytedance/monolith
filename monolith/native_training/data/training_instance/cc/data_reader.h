@@ -39,12 +39,33 @@ enum FeaturePruningType {
   PRUNING_RAW_FEATURE = 2
 };
 
+namespace data_format {
+enum DataFormat {
+  UNKNOW = 0,
+  PLAINTEXT = 1,
+  INSTANCE = 2,
+  EXAMPLE = 3,
+  EXAMPLEBATCH = 4
+};
+
+DataFormat StringToDataFormat(const std::string &type);
+};  // namespace data_format
+
 void ExtendExample(::monolith::io::proto::Example *pb,
                    FeatureNameMapper *mapper = nullptr);
 Status ExampleToInstance(::monolith::io::proto::Example *example,
                          ::parser::proto::Instance *instance);
 Status InstanceToExample(::parser::proto::Instance *instance,
                          ::monolith::io::proto::Example *example);
+
+Status ExampleBatchToInstance(
+    ::monolith::io::proto::ExampleBatch *example_batch, int index,
+    ::parser::proto::Instance *instance);
+
+Status ExampleBatchToExample(::monolith::io::proto::ExampleBatch *example_batch,
+                             int index, ::monolith::io::proto::Example *example,
+                             FeaturePruningType feature_pruning_type,
+                             FeatureNameMapper *mapper);
 
 template <class T>
 class BaseStreamReaderTmpl {
@@ -211,9 +232,12 @@ class StringStreamReader : public BaseStreamReaderTmpl<T> {
         cur_(0) {}
   Status ReadNBytes(size_t n, T *result) override {
     if (cur_ + n > content_.size()) {
+      return errors::FailedPrecondition("request n error");
+    }
+    if (n > 0 && cur_ == content_.size()) {
       return errors::OutOfRange("Size exceeds he content size.");
     }
-    *result = content_.substr(cur_, n);
+    *result = T(content_.data() + cur_, n);
     cur_ += n;
     return Status::OK();
   }
@@ -278,6 +302,93 @@ class ExampleBatchIterator : public PBIterator {
   FeatureNameMapper *mapper_;
   TF_DISALLOW_COPY_AND_ASSIGN(ExampleBatchIterator);
 };
+
+/*
+class THanler {
+  struct CurOutput : public PBIteratorWithDataFormatTransBaseOutput {
+  };
+
+  template <class TResult>
+  Status HandleReaderNextStauts(const Status &s, const TResult &result) {
+    return errors::Unimplemented("not implement");
+  }
+
+  template <class TResult>
+  Status HandleResult(TResult &&result, CurOutput *output) { return
+errors::Unimplemented("not implement");
+  }
+
+};
+*/
+
+struct PBIteratorWithDataFormatTransBaseOutput {
+  Status reader_status;
+};
+
+template <class THanler>
+class PBIteratorWithDataFormatTrans : public THanler {
+ public:
+  PBIteratorWithDataFormatTrans(data_format::DataFormat input_pb_type,
+                                data_format::DataFormat output_pb_type)
+      : input_pb_type_(input_pb_type), output_pb_type_(output_pb_type) {}
+
+  Status GetNext(PBIterator *reader, typename THanler::CurOutput *output,
+                 uint64 *offset) {
+    Status s;
+    if (output_pb_type_ == data_format::PLAINTEXT) {
+      tstring serialized;
+      uint32_t data_source_key;
+      output->reader_status =
+          reader->next(offset, &data_source_key, &serialized);
+      s = THanler::HandleReaderNextStauts(output->reader_status, serialized);
+      if (!s.ok()) return s;
+      s = THanler::HandleResult(std::move(serialized), output);
+    } else if (input_pb_type_ == data_format::EXAMPLE &&
+               output_pb_type_ == data_format::INSTANCE) {
+      ::monolith::io::proto::Example exa_pb;
+      output->reader_status = reader->next(offset, &exa_pb);
+      s = THanler::HandleReaderNextStauts(output->reader_status, exa_pb);
+      if (!s.ok()) return s;
+      ::parser::proto::Instance ins_pb;
+      ExampleToInstance(&exa_pb, &ins_pb);
+      s = THanler::HandleResult(std::move(ins_pb), output);
+    } else if (input_pb_type_ == data_format::INSTANCE &&
+               output_pb_type_ == data_format::EXAMPLE) {
+      ::parser::proto::Instance ins_pb;
+      output->reader_status = reader->next(offset, &ins_pb);
+      s = THanler::HandleReaderNextStauts(output->reader_status, ins_pb);
+      if (!s.ok()) return s;
+      ::monolith::io::proto::Example exa_pb;
+      InstanceToExample(&ins_pb, &exa_pb);
+      s = THanler::HandleResult(std::move(exa_pb), output);
+    } else if (output_pb_type_ == data_format::EXAMPLE) {  // any ->
+                                                           // example
+      ::monolith::io::proto::Example exa_pb;
+      output->reader_status = reader->next(offset, &exa_pb);
+      s = THanler::HandleReaderNextStauts(output->reader_status, exa_pb);
+      if (!s.ok()) return s;
+      s = THanler::HandleResult(std::move(exa_pb), output);
+    } else if (output_pb_type_ == data_format::INSTANCE) {  // any ->
+                                                            // instance
+      ::parser::proto::Instance ins_pb;
+      output->reader_status = reader->next(offset, &ins_pb);
+      s = THanler::HandleReaderNextStauts(output->reader_status, ins_pb);
+      if (!s.ok()) return s;
+      s = THanler::HandleResult(std::move(ins_pb), output);
+    } else {  // any -> example_batch
+      ::monolith::io::proto::ExampleBatch eb_pb;
+      output->reader_status = reader->next(offset, &eb_pb);
+      s = THanler::HandleReaderNextStauts(output->reader_status, eb_pb);
+      if (!s.ok()) return s;
+      s = THanler::HandleResult(std::move(eb_pb), output);
+    }
+    return s;
+  }
+
+  data_format::DataFormat output_pb_type_;
+  data_format::DataFormat input_pb_type_;
+};
+
 }  // namespace monolith_tf
 }  // namespace tensorflow
 #endif  // MONOLITH_NATIVE_TRAINING_DATA_TRAINING_INSTANCE_CC_DATA_READER_H_

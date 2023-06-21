@@ -17,6 +17,7 @@
 
 #include "parquet/api/reader.h"
 #include "tensorflow/core/lib/core/errors.h"
+#include "tensorflow/core/profiler/lib/traceme.h"
 
 namespace tensorflow {
 namespace data {
@@ -134,7 +135,8 @@ class TypedColumnBuffer : public ColumnBuffer {
       }
       *def_level = def_levels_buffer_[levels_p_];
       *rep_level = rep_levels_buffer_[levels_p_];
-      if (*def_level == 0 && *rep_level == 0) {
+      if ((*def_level != max_definition_level_) ||
+          (*def_level == 0 && *rep_level == 0)) {
         *is_null = true;
       } else {
         *is_null = false;
@@ -149,6 +151,7 @@ class TypedColumnBuffer : public ColumnBuffer {
   }
 
   Status ReadBuffer() {
+    profiler::TraceMe activity([]() { return "ParquetDatasetOp::ReadBuffer"; });
     if (!typed_col_reader_->HasNext()) {
       return errors::OutOfRange("Column values all consumed, out of range");
     }

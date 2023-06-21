@@ -28,3 +28,4 @@ kafka-python==2.0.2
 numpy==1.19.4
 pyarrow==9.0.0
 pandas==1.4.4
+#mpi4py==3.0.3

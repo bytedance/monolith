@@ -18,6 +18,7 @@
 #include "tensorflow/core/framework/dataset.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/shape_inference.h"
+#include "tensorflow/core/profiler/lib/traceme.h"
 #include "third_party/nlohmann/json.hpp"
 
 namespace tensorflow {
@@ -103,8 +104,8 @@ class ParquetDatasetOp : public DatasetOpKernel {
     }
 
     const std::vector<PartialTensorShape>& output_shapes() const override {
-      static std::vector<PartialTensorShape>* shapes =
-          new std::vector<PartialTensorShape>({{1}});
+      static auto* shapes =
+          new std::vector<PartialTensorShape>{TensorShape({})};
       return *shapes;
     }
 
@@ -236,6 +237,8 @@ class ParquetDatasetOp : public DatasetOpKernel {
 
       Status GetNextExampleBatch(ExampleBatch& example_batch,
                                  bool* end_of_sequence) {
+        profiler::TraceMe activity(
+            []() { return "ParquetDatasetOp::GetNextExampleBatch"; });
         if (parquet_reader_->IsEOF()) {
           *end_of_sequence = true;
         } else {

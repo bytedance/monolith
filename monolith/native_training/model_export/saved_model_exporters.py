@@ -34,6 +34,7 @@ from monolith.native_training import device_utils
 from monolith.native_training import hash_table_ops
 from monolith.native_training import multi_hash_table_ops
 from monolith.native_training import save_utils
+from monolith.native_training.distribution_utils import update_session_config_for_gpu
 from monolith.native_training.model_export import export_context
 from monolith.native_training.monolith_checkpoint_state_pb2 import MonolithCheckpointState
 from monolith.native_training.monolith_export import monolith_export
@@ -219,8 +220,9 @@ class BaseExporter(abc.ABC):
       So we use the soft placement here, to avoid raising runtime exceptions,
       but still successfully record the correct GPU placements to the saved_model.
       '''
-      with tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(
-          allow_soft_placement=True)) as session:
+      session_config = tf.compat.v1.ConfigProto(allow_soft_placement=True)
+      update_session_config_for_gpu(session_config)
+      with tf.compat.v1.Session(config=session_config) as session:
 
         graph_saver = tf.compat.v1.train.Saver(sharded=True)
         if restore_vars:
@@ -302,8 +304,9 @@ class BaseExporter(abc.ABC):
         signature_def_map[signature.name] = BaseExporter.build_signature(
             signature.inputs, signature.outputs)
 
-      with tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(
-          allow_soft_placement=True)) as session:
+      session_config = tf.compat.v1.ConfigProto(allow_soft_placement=True)
+      update_session_config_for_gpu(session_config)
+      with tf.compat.v1.Session(config=session_config) as session:
         graph_saver = tf.compat.v1.train.Saver(sharded=True)
         if restore_vars:
           try:
@@ -325,8 +328,9 @@ class BaseExporter(abc.ABC):
       tf.graph_util.import_graph_def(frozen_graph_def, name='')
       tf.compat.v1.train.get_or_create_global_step(final_graph)
 
-      with tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(
-          allow_soft_placement=True)) as session:
+      session_config = tf.compat.v1.ConfigProto(allow_soft_placement=True)
+      update_session_config_for_gpu(session_config)
+      with tf.compat.v1.Session(config=session_config) as session:
 
         graph_saver = tf.compat.v1.train.Saver(sharded=True)
         if restore_vars:

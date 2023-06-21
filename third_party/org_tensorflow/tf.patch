@@ -1,5 +1,5 @@
 diff --git a/tensorflow/BUILD b/tensorflow/BUILD
-index 56b33a4..c14d267 100644
+index 56b33a493fc..c14d267a353 100644
 --- a/tensorflow/BUILD
 +++ b/tensorflow/BUILD
 @@ -34,7 +34,7 @@ load(
@@ -11,9 +11,66 @@ index 56b33a4..c14d267 100644
      licenses = ["notice"],  # Apache 2.0
  )
  
-
+diff --git a/tensorflow/core/BUILD b/tensorflow/core/BUILD
+index 5f307a62f62..198b211d35d 100644
+--- a/tensorflow/core/BUILD
++++ b/tensorflow/core/BUILD
+@@ -572,7 +572,7 @@ cc_library(
+     ]) + if_libtpu(
+         if_false = ["//tensorflow/compiler/mlir/tensorflow:mlir_passthrough_op"],
+         if_true = [],
+-    ),
++    ) + ["@//monolith/native_training/runtime/ops:monolith_ops_for_tf"],
+ )
+ 
+ alias(
+diff --git a/tensorflow/core/data/compression_utils.cc b/tensorflow/core/data/compression_utils.cc
+index bbff3a96667..ea0683cb236 100644
+--- a/tensorflow/core/data/compression_utils.cc
++++ b/tensorflow/core/data/compression_utils.cc
+@@ -31,7 +31,10 @@ Status CompressElement(const std::vector<Tensor>& element,
+     if (DataTypeCanUseMemcpy(component.dtype())) {
+       // Some datatypes can be memcopied, allowing us to save two copies
+       // (AsProtoTensorContent and SerializeToArray).
+-      total_size += DMAHelper::buffer(&component)->size();
++      auto buffer = DMAHelper::buffer(&component);
++      if (buffer) {
++        total_size += buffer->size();
++      }
+     } else {
+       non_memcpy_components.emplace_back();
+       component.AsProtoTensorContent(&non_memcpy_components.back());
+@@ -53,8 +56,10 @@ Status CompressElement(const std::vector<Tensor>& element,
+     component.shape().AsProto(metadata->mutable_tensor_shape());
+     if (DataTypeCanUseMemcpy(component.dtype())) {
+       const TensorBuffer* buffer = DMAHelper::buffer(&component);
+-      memcpy(position, buffer->data(), buffer->size());
+-      metadata->set_tensor_size_bytes(buffer->size());
++      if (buffer) {
++        memcpy(position, buffer->data(), buffer->size());
++        metadata->set_tensor_size_bytes(buffer->size());
++      }
+     } else {
+       TensorProto& proto = non_memcpy_components[non_memcpy_component_index++];
+       proto.SerializeToArray(position, proto.ByteSizeLong());
+@@ -94,8 +99,13 @@ Status UncompressElement(const CompressedElement& compressed,
+     if (DataTypeCanUseMemcpy(metadata.dtype())) {
+       out->emplace_back(metadata.dtype(), metadata.tensor_shape());
+       TensorBuffer* buffer = DMAHelper::buffer(&out->back());
+-      iov[i].iov_base = buffer->data();
+-      iov[i].iov_len = buffer->size();
++      if (buffer) {
++        iov[i].iov_base = buffer->data();
++        iov[i].iov_len = buffer->size();
++      } else {
++        iov[i].iov_base = nullptr;
++        iov[i].iov_len = 0;
++      }
+     } else {
+       // Allocate an empty Tensor. We will fill it out later after
+       // uncompressing into the tensor_proto_str.
 diff --git a/tensorflow/core/distributed_runtime/master.cc b/tensorflow/core/distributed_runtime/master.cc
-index 64031a3..0782597 100644
+index adaecf861e6..979fcff54a9 100644
 --- a/tensorflow/core/distributed_runtime/master.cc
 +++ b/tensorflow/core/distributed_runtime/master.cc
 @@ -260,6 +260,7 @@ class DeviceFinder {
@@ -42,7 +99,7 @@ index 64031a3..0782597 100644
      return status_;
    }
 diff --git a/tensorflow/core/distributed_runtime/rpc/grpc_channel.cc b/tensorflow/core/distributed_runtime/rpc/grpc_channel.cc
-index 985b045..e4b6c48 100644
+index 985b0454837..e4b6c48e80e 100644
 --- a/tensorflow/core/distributed_runtime/rpc/grpc_channel.cc
 +++ b/tensorflow/core/distributed_runtime/rpc/grpc_channel.cc
 @@ -20,9 +20,9 @@ limitations under the License.
@@ -65,8 +122,21 @@ index 985b045..e4b6c48 100644
    }
    ~SparseGrpcChannelCache() override {}
  
+diff --git a/tensorflow/core/distributed_runtime/rpc/grpc_state.h b/tensorflow/core/distributed_runtime/rpc/grpc_state.h
+index d0e67cdcd57..6528ad1d455 100644
+--- a/tensorflow/core/distributed_runtime/rpc/grpc_state.h
++++ b/tensorflow/core/distributed_runtime/rpc/grpc_state.h
+@@ -84,7 +84,7 @@ class RPCState : public GrpcClientCQTag {
+                 return false;
+               }
+             }(),
+-            (call_opts != nullptr ? call_opts->GetTimeout() : 0), max_retries,
++            (call_opts != nullptr ? call_opts->GetTimeout() : 600000), max_retries,
+             target) {
+   }
+ 
 diff --git a/tensorflow/core/distributed_runtime/rpc/grpc_worker_service.cc b/tensorflow/core/distributed_runtime/rpc/grpc_worker_service.cc
-index 723a513..1d8ad6a 100644
+index 723a5130161..9ef663f1711 100644
 --- a/tensorflow/core/distributed_runtime/rpc/grpc_worker_service.cc
 +++ b/tensorflow/core/distributed_runtime/rpc/grpc_worker_service.cc
 @@ -55,6 +55,7 @@ limitations under the License.
@@ -116,17 +186,149 @@ index 723a513..1d8ad6a 100644
           ++i) {
        EnqueueRecvTensorRequestRaw();
      }
-
+diff --git a/tensorflow/core/kernels/BUILD b/tensorflow/core/kernels/BUILD
+index 53c53ac3ff6..b1ae727ffbe 100644
+--- a/tensorflow/core/kernels/BUILD
++++ b/tensorflow/core/kernels/BUILD
+@@ -730,6 +730,18 @@ cc_library(
+     ],
+ )
+ 
++
++cc_library(
++    name = "gpu_device_array_for_custom_op",
++    hdrs = [
++        "gpu_device_array.h",
++        "gpu_device_array_gpu.h",
++    ],
++    deps = [
++        "//tensorflow/core:gpu_headers_lib",
++    ],
++)
++
+ # Depending on a build configuration this target provides custom kernel for Eigen
+ # tensor contractions (small matrix multiplication kernel used to multiple together
+ # blocks of the original tensors).
+diff --git a/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc b/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
+index 2bcc2b6ec65..9062b568aeb 100644
+--- a/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
++++ b/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
+@@ -479,6 +479,8 @@ class DynamicPartitionOpGPU : public AsyncOpKernel {
+ 
+ TF_CALL_GPU_NUMBER_TYPES(REGISTER_DYNAMIC_PARTITION_GPU);
+ TF_CALL_COMPLEX_TYPES(REGISTER_DYNAMIC_PARTITION_GPU);
++TF_CALL_int32(REGISTER_DYNAMIC_PARTITION_GPU);
++TF_CALL_int64(REGISTER_DYNAMIC_PARTITION_GPU);
+ #undef REGISTER_DYNAMIC_PARTITION_GPU
+ 
+ }  // namespace tensorflow
+diff --git a/tensorflow/core/kernels/padding_fifo_queue_op.cc b/tensorflow/core/kernels/padding_fifo_queue_op.cc
+index c92cd732d5b..d574f6a02d8 100644
+--- a/tensorflow/core/kernels/padding_fifo_queue_op.cc
++++ b/tensorflow/core/kernels/padding_fifo_queue_op.cc
+@@ -70,4 +70,9 @@ REGISTER_KERNEL_BUILDER(Name("PaddingFIFOQueue").Device(DEVICE_CPU),
+ REGISTER_KERNEL_BUILDER(Name("PaddingFIFOQueueV2").Device(DEVICE_CPU),
+                         PaddingFIFOQueueOp);
+ 
++REGISTER_KERNEL_BUILDER(
++    Name("PaddingFIFOQueueV2").Device(DEVICE_DEFAULT).HostMemory("handle"),
++    PaddingFIFOQueueOp);
++
++
+ }  // namespace tensorflow
+diff --git a/tensorflow/core/kernels/split_lib_gpu.cu.cc b/tensorflow/core/kernels/split_lib_gpu.cu.cc
+index b4379a01ce1..99cdfa79fa1 100644
+--- a/tensorflow/core/kernels/split_lib_gpu.cu.cc
++++ b/tensorflow/core/kernels/split_lib_gpu.cu.cc
+@@ -55,6 +55,7 @@ TF_CALL_int64(DEFINE_GPU_KERNELS);
+ TF_CALL_bfloat16(DEFINE_GPU_KERNELS);
+ TF_CALL_uint8(DEFINE_GPU_KERNELS);
+ TF_CALL_GPU_ALL_TYPES(DEFINE_GPU_KERNELS);
++TF_CALL_int32(DEFINE_GPU_KERNELS);
+ 
+ #undef DEFINE_GPU_KERNELS
+ #define DEFINE_GPU_KERNELS(T) template struct SplitCustom<Eigen::GpuDevice, T>;
+@@ -62,6 +63,7 @@ TF_CALL_GPU_ALL_TYPES(DEFINE_GPU_KERNELS);
+ TF_CALL_GPU_NUMBER_TYPES(DEFINE_GPU_KERNELS);
+ TF_CALL_COMPLEX_TYPES(DEFINE_GPU_KERNELS);
+ TF_CALL_bfloat16(DEFINE_GPU_KERNELS);
++TF_CALL_int32(DEFINE_GPU_KERNELS);
+ 
+ #undef DEFINE_GPU_KERNELS
+ 
+@@ -246,6 +248,7 @@ void SplitVOpGPULaunch<T, IntType>::Run(
+ TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU_KERNEL);
+ TF_CALL_COMPLEX_TYPES(REGISTER_GPU_KERNEL);
+ TF_CALL_bfloat16(REGISTER_GPU_KERNEL);
++TF_CALL_int32(REGISTER_GPU_KERNEL);
+ #undef REGISTER_GPU_KERNEL
+ #define REGISTER_GPU_KERNEL(T)                 \
+   template struct SplitVOpGPULaunch<T, int32>; \
+@@ -254,6 +257,7 @@ TF_CALL_bfloat16(REGISTER_GPU_KERNEL);
+ TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU_KERNEL);
+ TF_CALL_COMPLEX_TYPES(REGISTER_GPU_KERNEL);
+ TF_CALL_bfloat16(REGISTER_GPU_KERNEL);
++TF_CALL_int32(REGISTER_GPU_KERNEL);
+ #undef REGISTER_GPU_KERNEL
+ 
+ }  // namespace tensorflow
+diff --git a/tensorflow/core/kernels/split_op.cc b/tensorflow/core/kernels/split_op.cc
+index 6f2cd965e7a..641ee45e537 100644
+--- a/tensorflow/core/kernels/split_op.cc
++++ b/tensorflow/core/kernels/split_op.cc
+@@ -347,6 +347,7 @@ REGISTER_SPLIT(quint8);
+ TF_CALL_bfloat16(REGISTER_GPU);
+ TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU);
+ TF_CALL_COMPLEX_TYPES(REGISTER_GPU);
++TF_CALL_int32(REGISTER_GPU);
+ #undef REGISTER_GPU
+ 
+ #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+diff --git a/tensorflow/core/kernels/split_v_op.cc b/tensorflow/core/kernels/split_v_op.cc
+index fc070610877..24a5f869d19 100644
+--- a/tensorflow/core/kernels/split_v_op.cc
++++ b/tensorflow/core/kernels/split_v_op.cc
+@@ -474,27 +474,12 @@ TF_CALL_ALL_TYPES(REGISTER_SPLIT_LEN);
+ TF_CALL_bfloat16(REGISTER_GPU_LEN);
+ TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU_LEN);
+ TF_CALL_COMPLEX_TYPES(REGISTER_GPU_LEN);
++// see https://github.com/tensorflow/tensorflow/pull/28051
++TF_CALL_int32(REGISTER_GPU_LEN);
++
+ #undef REGISTER_GPU_LEN
+ #undef REGISTER_GPU
+ 
+-// special GPU kernel for int32
+-
+-#define REGISTER_GPU_int32(len_type)                            \
+-  REGISTER_KERNEL_BUILDER(Name("SplitV")                        \
+-                              .Device(DEVICE_GPU)               \
+-                              .TypeConstraint<int32>("T")       \
+-                              .TypeConstraint<len_type>("Tlen") \
+-                              .HostMemory("size_splits")        \
+-                              .HostMemory("split_dim")          \
+-                              .HostMemory("value")              \
+-                              .HostMemory("output"),            \
+-                          SplitVOpCPU<int32, len_type>);
+-
+-REGISTER_GPU_int32(int32);
+-REGISTER_GPU_int32(int64);
+-
+-#undef REGISTER_GPU_int32
+-
+ #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+ 
+ }  // end namespace tensorflow
 diff --git a/tensorflow/core/platform/hadoop/hadoop_file_system.cc b/tensorflow/core/platform/hadoop/hadoop_file_system.cc
-index 74195db7730..ffb7d1d8c83 100644
+index 74195db7730..edea461813f 100644
 --- a/tensorflow/core/platform/hadoop/hadoop_file_system.cc
 +++ b/tensorflow/core/platform/hadoop/hadoop_file_system.cc
 @@ -16,6 +16,7 @@ limitations under the License.
  #include "tensorflow/core/platform/hadoop/hadoop_file_system.h"
-
+ 
  #include <errno.h>
 +#include <sys/time.h>
-
+ 
  #include "tensorflow/core/platform/env.h"
  #include "tensorflow/core/platform/error.h"
 @@ -52,6 +53,7 @@ class LibHDFS {
@@ -157,7 +359,7 @@ index 74195db7730..ffb7d1d8c83 100644
 +      optimize_read_ = false;
 +    }
    }
-
+ 
    ~HDFSRandomAccessFile() override {
 @@ -256,8 +266,17 @@ class HDFSRandomAccessFile : public RandomAccessFile {
        // of int32. -2 offset can avoid JVM OutOfMemoryError.
@@ -204,7 +406,7 @@ index 74195db7730..ffb7d1d8c83 100644
    hdfsFS fs_;
    bool disable_eof_retried_;
 +  bool optimize_read_;
-
+ 
    mutable mutex mu_;
    mutable hdfsFile file_ TF_GUARDED_BY(mu_);
 @@ -304,13 +330,24 @@ Status HadoopFileSystem::NewRandomAccessFile(
@@ -233,64 +435,8 @@ index 74195db7730..ffb7d1d8c83 100644
    result->reset(
        new HDFSRandomAccessFile(fname, TranslateName(fname), fs, file));
    return Status::OK();
-
-diff --git a/tensorflow/core/kernels/BUILD b/tensorflow/core/kernels/BUILD
-index e73316c0622..1ceff654763 100644
---- a/tensorflow/core/kernels/BUILD
-+++ b/tensorflow/core/kernels/BUILD
-@@ -780,6 +780,18 @@ cc_library(
-     ],
- )
- 
-+
-+cc_library(
-+    name = "gpu_device_array_for_custom_op",
-+    hdrs = [
-+        "gpu_device_array.h",
-+        "gpu_device_array_gpu.h",
-+    ],
-+    deps = [
-+        "//tensorflow/core:gpu_headers_lib",
-+    ],
-+)
-+
- # Depending on a build configuration this target provides custom kernel for Eigen
- # tensor contractions (small matrix multiplication kernel used to multiple together
- # blocks of the original tensors).
-
-
-
-diff --git a/tensorflow/core/kernels/padding_fifo_queue_op.cc b/tensorflow/core/kernels/padding_fifo_queue_op.cc
-index c92cd732d5b..d574f6a02d8 100644
---- a/tensorflow/core/kernels/padding_fifo_queue_op.cc
-+++ b/tensorflow/core/kernels/padding_fifo_queue_op.cc
-@@ -70,4 +70,9 @@ REGISTER_KERNEL_BUILDER(Name("PaddingFIFOQueue").Device(DEVICE_CPU),
- REGISTER_KERNEL_BUILDER(Name("PaddingFIFOQueueV2").Device(DEVICE_CPU),
-                         PaddingFIFOQueueOp);
- 
-+REGISTER_KERNEL_BUILDER(
-+    Name("PaddingFIFOQueueV2").Device(DEVICE_DEFAULT).HostMemory("handle"),
-+    PaddingFIFOQueueOp);
-+
-+
- }  // namespace tensorflow
-
-diff --git a/tensorflow/core/distributed_runtime/rpc/grpc_state.h b/tensorflow/core/distributed_runtime/rpc/grpc_state.h
-index d0e67cd..6528ad1 100644
---- a/tensorflow/core/distributed_runtime/rpc/grpc_state.h
-+++ b/tensorflow/core/distributed_runtime/rpc/grpc_state.h
-@@ -84,7 +84,7 @@ class RPCState : public GrpcClientCQTag {
-                 return false;
-               }
-             }(),
--            (call_opts != nullptr ? call_opts->GetTimeout() : 0), max_retries,
-+            (call_opts != nullptr ? call_opts->GetTimeout() : 600000), max_retries,
-             target) {
-   }
- 
-
 diff --git a/tensorflow/tensorflow.bzl b/tensorflow/tensorflow.bzl
-index 096cdd17dcb..06f4b8bde42 100644
+index 096cdd17dcb..71b03b159fe 100644
 --- a/tensorflow/tensorflow.bzl
 +++ b/tensorflow/tensorflow.bzl
 @@ -1343,6 +1343,7 @@ def _cuda_copts(opts = []):
@@ -304,7 +450,7 @@ index 096cdd17dcb..06f4b8bde42 100644
 @@ -1383,6 +1384,42 @@ def tf_gpu_kernel_library(
          **kwargs
      )
-
+ 
 +def tf_gpu_kernel_library_allow_except(
 +        srcs,
 +        copts = [],
@@ -343,133 +489,9 @@ index 096cdd17dcb..06f4b8bde42 100644
 +
  def tf_gpu_library(deps = None, cuda_deps = None, copts = tf_copts(), **kwargs):
      """Generate a cc_library with a conditional set of CUDA dependencies.
-
-diff --git a/tensorflow/core/BUILD b/tensorflow/core/BUILD
-index 5f307a6..198b211 100644
---- a/tensorflow/core/BUILD
-+++ b/tensorflow/core/BUILD
-@@ -572,7 +572,7 @@ cc_library(
-     ]) + if_libtpu(
-         if_false = ["//tensorflow/compiler/mlir/tensorflow:mlir_passthrough_op"],
-         if_true = [],
--    ),
-+    ) + ["@//monolith/native_training/runtime/ops:monolith_ops_for_tf"],
- )
  
- alias(
-
-diff --git a/third_party/snappy.BUILD b/third_party/snappy.BUILD
-index a2ab4924f29..77cb7ea0dff 100644
---- a/third_party/snappy.BUILD
-+++ b/third_party/snappy.BUILD
-@@ -27,6 +27,7 @@ cc_library(
-             "-Wno-implicit-function-declaration",
-         ],
-     }),
-+    includes = ["."],
-     defines = select({
-         "@org_tensorflow//tensorflow:windows": [],
-         "//conditions:default": ["HAVE_SYS_UIO_H"],
-
-diff --git a/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc b/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
-index 2bcc2b6e..9062b568 100644
---- a/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
-+++ b/tensorflow/core/kernels/dynamic_partition_op_gpu.cu.cc
-@@ -479,6 +479,8 @@ class DynamicPartitionOpGPU : public AsyncOpKernel {
- 
- TF_CALL_GPU_NUMBER_TYPES(REGISTER_DYNAMIC_PARTITION_GPU);
- TF_CALL_COMPLEX_TYPES(REGISTER_DYNAMIC_PARTITION_GPU);
-+TF_CALL_int32(REGISTER_DYNAMIC_PARTITION_GPU);
-+TF_CALL_int64(REGISTER_DYNAMIC_PARTITION_GPU);
- #undef REGISTER_DYNAMIC_PARTITION_GPU
- 
- }  // namespace tensorflow
-diff --git a/tensorflow/core/kernels/split_lib_gpu.cu.cc b/tensorflow/core/kernels/split_lib_gpu.cu.cc
-index b4379a01..99cdfa79 100644
---- a/tensorflow/core/kernels/split_lib_gpu.cu.cc
-+++ b/tensorflow/core/kernels/split_lib_gpu.cu.cc
-@@ -55,6 +55,7 @@ TF_CALL_int64(DEFINE_GPU_KERNELS);
- TF_CALL_bfloat16(DEFINE_GPU_KERNELS);
- TF_CALL_uint8(DEFINE_GPU_KERNELS);
- TF_CALL_GPU_ALL_TYPES(DEFINE_GPU_KERNELS);
-+TF_CALL_int32(DEFINE_GPU_KERNELS);
- 
- #undef DEFINE_GPU_KERNELS
- #define DEFINE_GPU_KERNELS(T) template struct SplitCustom<Eigen::GpuDevice, T>;
-@@ -62,6 +63,7 @@ TF_CALL_GPU_ALL_TYPES(DEFINE_GPU_KERNELS);
- TF_CALL_GPU_NUMBER_TYPES(DEFINE_GPU_KERNELS);
- TF_CALL_COMPLEX_TYPES(DEFINE_GPU_KERNELS);
- TF_CALL_bfloat16(DEFINE_GPU_KERNELS);
-+TF_CALL_int32(DEFINE_GPU_KERNELS);
- 
- #undef DEFINE_GPU_KERNELS
- 
-@@ -246,6 +248,7 @@ void SplitVOpGPULaunch<T, IntType>::Run(
- TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU_KERNEL);
- TF_CALL_COMPLEX_TYPES(REGISTER_GPU_KERNEL);
- TF_CALL_bfloat16(REGISTER_GPU_KERNEL);
-+TF_CALL_int32(REGISTER_GPU_KERNEL);
- #undef REGISTER_GPU_KERNEL
- #define REGISTER_GPU_KERNEL(T)                 \
-   template struct SplitVOpGPULaunch<T, int32>; \
-@@ -254,6 +257,7 @@ TF_CALL_bfloat16(REGISTER_GPU_KERNEL);
- TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU_KERNEL);
- TF_CALL_COMPLEX_TYPES(REGISTER_GPU_KERNEL);
- TF_CALL_bfloat16(REGISTER_GPU_KERNEL);
-+TF_CALL_int32(REGISTER_GPU_KERNEL);
- #undef REGISTER_GPU_KERNEL
- 
- }  // namespace tensorflow
-diff --git a/tensorflow/core/kernels/split_op.cc b/tensorflow/core/kernels/split_op.cc
-index 6f2cd965..641ee45e 100644
---- a/tensorflow/core/kernels/split_op.cc
-+++ b/tensorflow/core/kernels/split_op.cc
-@@ -347,6 +347,7 @@ REGISTER_SPLIT(quint8);
- TF_CALL_bfloat16(REGISTER_GPU);
- TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU);
- TF_CALL_COMPLEX_TYPES(REGISTER_GPU);
-+TF_CALL_int32(REGISTER_GPU);
- #undef REGISTER_GPU
- 
- #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
-diff --git a/tensorflow/core/kernels/split_v_op.cc b/tensorflow/core/kernels/split_v_op.cc
-index fc070610..24a5f869 100644
---- a/tensorflow/core/kernels/split_v_op.cc
-+++ b/tensorflow/core/kernels/split_v_op.cc
-@@ -474,27 +474,12 @@ TF_CALL_ALL_TYPES(REGISTER_SPLIT_LEN);
- TF_CALL_bfloat16(REGISTER_GPU_LEN);
- TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU_LEN);
- TF_CALL_COMPLEX_TYPES(REGISTER_GPU_LEN);
-+// see https://github.com/tensorflow/tensorflow/pull/28051
-+TF_CALL_int32(REGISTER_GPU_LEN);
-+
- #undef REGISTER_GPU_LEN
- #undef REGISTER_GPU
- 
--// special GPU kernel for int32
--
--#define REGISTER_GPU_int32(len_type)                            \
--  REGISTER_KERNEL_BUILDER(Name("SplitV")                        \
--                              .Device(DEVICE_GPU)               \
--                              .TypeConstraint<int32>("T")       \
--                              .TypeConstraint<len_type>("Tlen") \
--                              .HostMemory("size_splits")        \
--                              .HostMemory("split_dim")          \
--                              .HostMemory("value")              \
--                              .HostMemory("output"),            \
--                          SplitVOpCPU<int32, len_type>);
--
--REGISTER_GPU_int32(int32);
--REGISTER_GPU_int32(int64);
--
--#undef REGISTER_GPU_int32
--
- #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
- 
- }  // end namespace tensorflow
-
 diff --git a/third_party/com_google_absl_fix_mac_and_nvcc_build.patch b/third_party/com_google_absl_fix_mac_and_nvcc_build.patch
-index 6301119a..f915a950 100644
+index 6301119ab2c..f915a950b97 100644
 --- a/third_party/com_google_absl_fix_mac_and_nvcc_build.patch
 +++ b/third_party/com_google_absl_fix_mac_and_nvcc_build.patch
 @@ -308,3 +308,23 @@ index 7a53c81..159b0f0 100644
@@ -496,3 +518,15 @@ index 6301119a..f915a950 100644
 +     ]
 +     for cpu in cpu_configs:
 +         native.config_setting(
+diff --git a/third_party/snappy.BUILD b/third_party/snappy.BUILD
+index a2ab4924f29..77cb7ea0dff 100644
+--- a/third_party/snappy.BUILD
++++ b/third_party/snappy.BUILD
+@@ -27,6 +27,7 @@ cc_library(
+             "-Wno-implicit-function-declaration",
+         ],
+     }),
++    includes = ["."],
+     defines = select({
+         "@org_tensorflow//tensorflow:windows": [],
+         "//conditions:default": ["HAVE_SYS_UIO_H"],

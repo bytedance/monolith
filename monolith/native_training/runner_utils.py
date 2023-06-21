@@ -36,7 +36,7 @@ from monolith.native_training import gflags_utils
 from monolith.native_training.monolith_checkpoint_state_pb2 import MonolithCheckpointState
 from monolith.native_training.net_utils import AddressFamily
 from monolith.native_training import save_utils
-from monolith.native_training.mlp_utils import mlp_pass
+from monolith.native_training.mlp_utils import mlp_pass, add_mpi_exception_hook
 
 FLAGS = flags.FLAGS
 old_isabs = os.path.isabs
@@ -233,6 +233,7 @@ class RunnerConfig(DistributedCpuTrainingConfig):
 
   def __post_init__(self):
     mlp_pass()
+    add_mpi_exception_hook()
     try:
       gflags_utils.update(self)
     except:

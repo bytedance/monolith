@@ -47,7 +47,7 @@ from monolith.native_training.hooks import ckpt_hooks
 from monolith.utils import get_libops_path
 from monolith.native_training.monolith_export import monolith_export
 from monolith.native_training.data.feature_utils import create_item_pool, string_to_variant, \
-  has_variant, kafka_resource_init, kafka_read_next
+  has_variant, kafka_resource_init, kafka_read_next, kafka_read_next_v2, string_to_variant_with_transform
 from monolith.native_training.data.feature_list import FeatureList
 from monolith.native_training.data.parsers import get_default_parser_ctx
 from monolith.native_training import native_task_context
@@ -79,6 +79,8 @@ flags.DEFINE_bool('dataset_input_use_parquet', None,
                   'bool dataset_input_use_parquet')
 flags.DEFINE_integer('dataset_worker_idx', None, 'int dataset_worker_idx')
 flags.DEFINE_integer('dataset_num_workers', None, 'int dataset_num_workers')
+flags.DEFINE_string('kafka_other_metadata', None,
+                    'string, kafka_other_metadata')
 POOL_KEY = "TF_ITEMPOOL"
 
 
@@ -190,7 +192,15 @@ class DatasetMetaclass(type):
 
       def pattern_recurse(pattern_format_list, *args):
         if len(pattern_format_list) == 0:
-          all_input_files.append(input_pattern.format(*args))
+          one_pattern = input_pattern.format(*args)
+          try:
+            if len(tf.io.gfile.glob(one_pattern)) > 0:
+              all_input_files.append(one_pattern)
+            else:
+              logging.warning(f"pattern not match any files: {one_pattern}")
+          except Exception as e:
+            logging.warning(
+                f"pattern not match any files: {one_pattern} with error: {e}")
         else:
           for pattern in pattern_format_list[0]:
             pattern_recurse(pattern_format_list[1:], *args, pattern)
@@ -198,6 +208,7 @@ class DatasetMetaclass(type):
       pattern_recurse(all_pattern_format)
 
       logging.info(f"all_input_files {all_input_files}")
+      assert len(all_input_files) > 0, "no match files"
       kwargs['patterns'] = all_input_files
 
       # dataset_input_patterns will use DistributedFilePBDataset, "file_name" param will cause conflict
@@ -208,7 +219,9 @@ class DatasetMetaclass(type):
 
     if FLAGS.dataset_input_use_parquet is not None:
       kwargs['use_parquet'] = FLAGS.dataset_input_use_parquet
-
+    if kwargs.get('kafka_other_metadata',
+                  None) is None and FLAGS.kafka_other_metadata is not None:
+      kwargs['kafka_other_metadata'] = FLAGS.kafka_other_metadata
     try:
       # the first param is str, batch to streaming, use kafka params for cmd
       args = [
@@ -275,7 +288,7 @@ class PBDataset(metaclass=DatasetMetaclass):
       variant_type: str = None,
       stream_timeout=-1,
       message_poll_timeout=10000,
-      poll_batch_size: int = 1024,
+      poll_batch_size: int = None,
       filter_empty: bool = False,
       configuration=None,
       container: str = '',
@@ -1084,17 +1097,16 @@ class PyKafkaDataset(dataset_ops.DatasetSource):
     return self._dataset.element_spec
 
 
-def create_plain_kafka_dataset(
-    topics: List[str],
-    group_id: str,
-    servers: str,
-    stream_timeout=-1,
-    message_poll_timeout=10000,
-    poll_batch_size: int = 1024,
-    configuration=None,
-    container: str = '',
-    shared_name: str = '',
-):
+def create_plain_kafka_dataset(topics: List[str],
+                               group_id: str,
+                               servers: str,
+                               stream_timeout=-1,
+                               message_poll_timeout=10000,
+                               poll_batch_size: int = 1024,
+                               configuration=None,
+                               container: str = '',
+                               shared_name: str = '',
+                               kafka_other_metadata: str = None):
   metadata = list(configuration or [])
   if group_id is not None:
     metadata.append(f"group.id={group_id}")
@@ -1104,6 +1116,10 @@ def create_plain_kafka_dataset(
     assert isinstance(poll_batch_size, int) and poll_batch_size > 0
     metadata.append(f"batch.num.messages={poll_batch_size}")
 
+  if kafka_other_metadata:
+    kafka_other_metadata_list = kafka_other_metadata.split(',')
+    for meta in kafka_other_metadata_list:
+      metadata.append(meta)
   resource = kafka_resource_init(topics=topics,
                                  metadata=metadata,
                                  container=container,
@@ -1130,17 +1146,25 @@ class KafkaDataset(dataset_ops.DatasetSource):
                servers: str,
                *,
                has_header=True,
-               variant_type: str = None,
+               variant_type: PbType = None,
+               output_pb_type: PbType = None,
                stream_timeout=-1,
                message_poll_timeout=10000,
-               poll_batch_size: int = 1024,
+               poll_batch_size: int = None,
                filter_empty: bool = False,
                configuration=None,
                container: str = '',
                shared_name: str = '',
+               kafka_other_metadata: str = None,
                **kwargs):
-    variant_type = variant_type or _get_params('data_type',
-                                               PbType.INSTANCE).to_name()
+    variant_type = (variant_type or
+                    _get_params('data_type', PbType.INSTANCE)).to_name()
+    if output_pb_type is None:
+      output_pb_type = variant_type
+    else:
+      output_pb_type = output_pb_type.to_name()
+    self._out_type = tf.string if output_pb_type == PbType.PLAINTEXT else tf.variant
+
     self._has_sort_id = kwargs.get('has_sort_id', _get_params('sort_id', False))
     self._kafka_dump = kwargs.get('kafka_dump',
                                   _get_params('kafka_dump', False))
@@ -1172,27 +1196,44 @@ class KafkaDataset(dataset_ops.DatasetSource):
         metadata.append(f"group.id={group_id}")
       if servers is not None:
         metadata.append(f"bootstrap.servers={servers}")
+      if poll_batch_size is None:
+        if variant_type == "examplebatch":
+          poll_batch_size = 16
+        else:
+          poll_batch_size = 128
       if poll_batch_size is not None:
         assert isinstance(poll_batch_size, int) and poll_batch_size > 0
         metadata.append(f"batch.num.messages={poll_batch_size}")
+      if kafka_other_metadata:
+        kafka_other_metadata_list = kafka_other_metadata.split(',')
+        for meta in kafka_other_metadata_list:
+          metadata.append(meta)
 
-      resource = kafka_resource_init(topics=topics,
-                                     metadata=metadata,
-                                     container=container,
-                                     shared_name=shared_name)
+      resource = kafka_resource_init(
+          topics=topics,
+          metadata=metadata,
+          input_pb_type=variant_type,  #"", step 1
+          output_pb_type=output_pb_type,  #"", step 2
+          has_sort_id=self._has_sort_id,
+          kafka_dump=self._kafka_dump,
+          kafka_dump_prefix=self._kafka_dump_prefix,
+          lagrangex_header=self._lagrangex_header,
+          container=container,
+          shared_name=shared_name)
       self._resource = resource
 
       dataset = tf.data.experimental.Counter()
-      dataset = dataset.map(lambda i: kafka_read_next(
-          input=self._resource,
-          index=i,
-          message_poll_timeout=message_poll_timeout,
-          stream_timeout=stream_timeout,
-      ))
+      dataset = dataset.map(
+          lambda i: kafka_read_next_v2(  #kafka_read_next step 3
+              input=self._resource,
+              index=i,
+              message_poll_timeout=message_poll_timeout,
+              stream_timeout=stream_timeout,
+          ))
       dataset = dataset.apply(
           tf.data.experimental.take_while(
               lambda v: tf.greater(v.continue_fetch, 0)))
-
+      '''
       dataset = dataset.map(lambda v: string_to_variant(
           v.message,
           variant_type=variant_type.lower(),
@@ -1205,6 +1246,24 @@ class KafkaDataset(dataset_ops.DatasetSource):
           datasources=self._datasources,
           default_datasource=self._default_datasource),
                             num_parallel_calls=tf.data.AUTOTUNE)
+      '''
+      '''
+      # step 4 
+      dataset = dataset.flat_map(lambda v: tf.data.Dataset.from_tensors(
+          string_to_variant_with_transform(
+              v.message,
+              input_type=variant_type.lower(),
+              output_type=output_pb_type,
+              has_header=has_header,
+              lagrangex_header=self._lagrangex_header,
+              has_sort_id=self._has_sort_id,
+              kafka_dump=self._kafka_dump,
+              kafka_dump_prefix=self._kafka_dump_prefix,
+              chnids=self._chnids,
+              datasources=self._datasources,
+              default_datasource=self._default_datasource)))
+      '''
+      dataset = dataset.map(lambda v: v.message)
       dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE).unbatch()
       if filter_empty:
         dataset = dataset.filter(predicate=lambda x: has_variant(
@@ -1215,7 +1274,7 @@ class KafkaDataset(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
-    return self._dataset.element_spec
+    return tensor_spec.TensorSpec([], self._out_type)
 
 
 def register_dataset(service, dataset, buffer_size=32):

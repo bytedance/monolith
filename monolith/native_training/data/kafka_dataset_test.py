@@ -18,12 +18,14 @@ import getpass
 from absl import flags, app
 from random import choice
 from struct import pack
+from absl.testing import parameterized
 from kafka import KafkaProducer
+import random
 
 import tensorflow as tf
-from monolith.native_training.data.parsers import parse_instances
-from monolith.native_training.model_export.data_gen_utils import gen_instance, FeatureMeta
-from monolith.native_training.data.datasets import KafkaDataset
+from monolith.native_training.data.parsers import parse_instances, parse_examples
+from monolith.native_training.model_export.data_gen_utils import gen_example, gen_instance, gen_example_batch, FeatureMeta
+from monolith.native_training.data.datasets import KafkaDataset, PbType
 from monolith.native_training.data.feature_utils import add_label, filter_by_label
 
 # flags.DEFINE_string('feature_list', None, 'string, feature_list')
@@ -32,14 +34,19 @@ flags.DEFINE_bool('sort_id', False, 'bool, sort_id')
 flags.DEFINE_bool('kafka_dump', False, 'bool, kafka_dump')
 flags.DEFINE_bool('kafka_dump_prefix', False, 'bool, kafka_dump_prefix')
 
-flags.DEFINE_string('topic', 'foobar', 'string, topic')
-flags.DEFINE_string('group_id', 'my_favorite_group', 'string, group_id')
-flags.DEFINE_string('kafka_servers', 'localhost:9092', 'string, kafka_servers')
-flags.DEFINE_bool('data_gen', False, 'bool, data_gen')
-flags.DEFINE_integer('num_batch', 2, 'bool, num_batch')
+flags.DEFINE_string('topic', 'test1', 'string, topic')
+flags.DEFINE_string('group_id', None, 'string, group_id')
+flags.DEFINE_string(
+    'kafka_servers',
+    'kafka-cnaittauujjoe7a9.kafka.volces.com:9492,kafka-cnaittauujjoe7a9.kafka.volces.com:9493,kafka-cnaittauujjoe7a9.kafka.volces.com:9494',
+    'string, kafka_servers')
+flags.DEFINE_bool('data_gen', True, 'bool, data_gen')
+flags.DEFINE_integer('num_batch', 3, 'bool, num_batch')
+
+other_meta = "security.protocol=sasl_ssl,enable.ssl.certificate.verification=0,sasl.mechanisms=SCRAM-SHA-256,sasl.username=hupu_stream_test1_user1,sasl.password=hupu_stream_test1_user1"
 
 FLAGS = flags.FLAGS
-BATCH_SIZE = 128
+BATCH_SIZE = 8
 USE_CLICK_HEAD = False
 VALID_FNAMES = [
     1, 2, 3, 4, 5, 6, 7, 8, 81, 82, 83, 84, 86, 87, 88, 89, 92, 93, 110, 115,
@@ -62,41 +69,94 @@ VALID_FNAMES = [
     980, 981, 982, 983, 984, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1022
 ]
 
+FNAME_TO_SLOT = {
+    f"fc_slot_{slot}": slot for i, slot in enumerate(range(10000, 10002))
+}
 
-class KafkaDatasetTest(tf.test.TestCase):
+VALID_SLOTS_V2_NAMES = list(sorted(set(FNAME_TO_SLOT)))
+
+
+def start_producer(input_type):
+  FLAGS.lagrangex_header = False
+  FLAGS.sort_id = False
+  FLAGS.kafka_dump = False
+  if True or FLAGS.data_gen:
+    producer = KafkaProducer(bootstrap_servers=FLAGS.kafka_servers,
+                             security_protocol="SASL_SSL",
+                             sasl_mechanism="SCRAM-SHA-256",
+                             sasl_plain_username="hupu_stream_test1_user1",
+                             sasl_plain_password="hupu_stream_test1_user1")
+    dense_features = [FeatureMeta(name='label', shape=4, dtype=tf.float32)]
+    extra_features = [
+        FeatureMeta(name='req_time', shape=1),
+        FeatureMeta(name='uid', shape=1),
+        FeatureMeta(name='sample_rate', shape=1)
+    ]
+    actions = [-7, -9, 75, -103, 74, 101, 102, -41]
+    time.sleep(10)
+    for i in range(FLAGS.num_batch):
+      all_len = 0
+      if input_type == PbType.EXAMPLEBATCH:
+        inst = gen_example_batch(sparse_features=VALID_SLOTS_V2_NAMES,
+                                 dense_features=dense_features,
+                                 extra_features=extra_features,
+                                 actions=actions,
+                                 batch_size=BATCH_SIZE)
+        inst_str = inst.SerializeToString()
+        fmt = f'<Q{len(inst_str)}s'
+        producer.send(topic=FLAGS.topic,
+                      value=pack(fmt, len(inst_str), inst_str))
+        all_len += len(inst_str)
+      else:
+        for j in range(BATCH_SIZE):
+          if input_type == PbType.INSTANCE:
+            inst = gen_instance(fidv1_features=VALID_FNAMES,
+                                dense_features=dense_features,
+                                extra_features=extra_features,
+                                actions=actions)
+          elif input_type == PbType.EXAMPLE:
+            inst = gen_example(sparse_features=VALID_SLOTS_V2_NAMES,
+                               dense_features=dense_features,
+                               extra_features=extra_features,
+                               actions=actions)
+          else:
+            assert False, "not support"
+          inst_str = inst.SerializeToString()
+          fmt = f'<Q{len(inst_str)}s'
+          val = pack(fmt, len(inst_str), inst_str)
+          print(f"produce {i} {j} {len(inst_str)} {len(val)}", flush=True)
+          producer.send(topic=FLAGS.topic, value=val)
+          all_len += len(inst_str)
+      print(f"produce {i} {all_len}")
+      time.sleep(1)
+    producer.close()
+  #start_producer()
+
+
+class KafkaDatasetTest(tf.test.TestCase, parameterized.TestCase):
 
   @classmethod
   def setUpClass(cls):
-    FLAGS.lagrangex_header = False
-    FLAGS.sort_id = False
-    FLAGS.kafka_dump = False
+    pass
 
-    if FLAGS.data_gen:
-      producer = KafkaProducer(bootstrap_servers=FLAGS.kafka_servers)
-      dense_features = [FeatureMeta(name='label', shape=4, dtype=tf.float32)]
-      extra_features = [
-          FeatureMeta(name='req_time', shape=1),
-          FeatureMeta(name='uid', shape=1),
-          FeatureMeta(name='sample_rate', shape=1)
-      ]
-      actions = [-7, -9, 75, -103, 74, 101, 102, -41]
-      for i in range(FLAGS.num_batch):
-        for j in range(BATCH_SIZE):
-          inst = gen_instance(fidv1_features=VALID_FNAMES,
-                              dense_features=dense_features,
-                              extra_features=extra_features,
-                              actions=actions)
-          inst_str = inst.SerializeToString()
-          fmt = f'<Q{len(inst_str)}s'
-          producer.send(topic=FLAGS.topic,
-                        value=pack(fmt, len(inst_str), inst_str))
-      producer.close()
-
-  def test_kafka_dataset(self):
+  @parameterized.parameters([
+      (PbType.EXAMPLE, PbType.EXAMPLE),
+      (PbType.EXAMPLEBATCH, PbType.EXAMPLE),
+      (PbType.INSTANCE, PbType.INSTANCE),
+  ])
+  def test_kafka_dataset(self, input_type, output_type):
+    import threading
+    td = threading.Thread(target=start_producer, args=(input_type,))
+    td.start()
     dataset = KafkaDataset(topics=FLAGS.topic,
-                           group_id=FLAGS.group_id,
+                           group_id=FLAGS.group_id if FLAGS.group_id else
+                           f"monolith_base_test_{random.randint(0,10000000)}",
                            servers=FLAGS.kafka_servers,
-                           message_poll_timeout=30000)
+                           variant_type=input_type,
+                           output_pb_type=output_type,
+                           message_poll_timeout=30000,
+                           poll_batch_size=2,
+                           kafka_other_metadata=other_meta)
     # label(0): staytime, not used
     label_vec_size = 4
 
@@ -106,24 +166,37 @@ class KafkaDatasetTest(tf.test.TestCase):
       add_label_config = '-7,-9:-41:0.3;75,-103,74:-41:0.3;101,102:-41:0.3;-41::0.1'
     else:
       add_label_config = '-7,-9:-41:0.3;75,-103,74:-41:0.3;101,102:-41:0.3'
-    dataset = dataset.map(lambda variant: add_label(variant,
-                                                    config=add_label_config,
-                                                    negative_value=0,
-                                                    new_sample_rate=1.0,
-                                                    variant_type='instance'))
+    dataset = dataset.map(
+        lambda variant: add_label(variant,
+                                  config=add_label_config,
+                                  negative_value=0,
+                                  new_sample_rate=1.0,
+                                  variant_type=output_type.to_name()))
 
-    dataset = dataset.shuffle(256)
+    #dataset = dataset.shuffle(BATCH_SIZE * 2)
     dataset = dataset.batch(batch_size=BATCH_SIZE, drop_remainder=False)
 
     def map_fn(tensor):
-      features = parse_instances(
-          tensor,
-          fidv1_features=VALID_FNAMES,
-          fidv2_features=None,
-          dense_features=['label'],
-          dense_feature_shapes=[label_vec_size],
-          extra_features=['req_time', 'uid', 'sample_rate'],
-          extra_feature_shapes=[1, 1, 1])
+      if output_type == PbType.EXAMPLE:
+        features = parse_examples(
+            tensor,
+            #fidv1_features=VALID_FNAMES,
+            sparse_features=VALID_SLOTS_V2_NAMES,
+            dense_features=['label'],
+            dense_feature_shapes=[label_vec_size],
+            extra_features=['req_time', 'uid', 'sample_rate'],
+            extra_feature_shapes=[1, 1, 1])
+      elif output_type == PbType.INSTANCE:
+        features = parse_instances(
+            tensor,
+            fidv1_features=VALID_FNAMES,
+            fidv2_features=None,
+            dense_features=['label'],
+            dense_feature_shapes=[label_vec_size],
+            extra_features=['req_time', 'uid', 'sample_rate'],
+            extra_feature_shapes=[1, 1, 1])
+      else:
+        assert False, "not support"
 
       if USE_CLICK_HEAD:
         (_, interact_label, convert_label, vr_label,
@@ -151,8 +224,14 @@ class KafkaDatasetTest(tf.test.TestCase):
       it = tf.compat.v1.data.make_initializable_iterator(dataset)
       element = it.get_next()
       sess.run(it.initializer)
-      for x in range(FLAGS.num_batch + 1):
-        print(sess.run(fetches=element))
+      for x in range(FLAGS.num_batch):
+        res = sess.run(fetches=element)
+        print(
+            f"print result get one {input_type.to_name()} {output_type.to_name()} {x} {res}"
+        )
+    print(f" exit ")
+    td.join()
+    print(f"finish exit ")
 
 
 if __name__ == "__main__":

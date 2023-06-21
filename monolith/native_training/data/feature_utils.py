@@ -744,18 +744,74 @@ def string_to_variant(tensor: tf.Tensor,
       default_datasource=default_datasource)
 
 
+#string_to_variant_with_transform example
+'''
+dataset = dataset.flat_map(lambda v: tf.data.Dataset.from_tensors(
+    string_to_variant_with_transform(
+        v.message,
+        input_type=variant_type.lower(),
+        output_type=output_pb_type,
+        has_header=has_header,
+        lagrangex_header=self._lagrangex_header,
+        has_sort_id=self._has_sort_id,
+        kafka_dump=self._kafka_dump,
+        kafka_dump_prefix=self._kafka_dump_prefix,
+        chnids=self._chnids,
+        datasources=self._datasources,
+        default_datasource=self._default_datasource)))
+'''
+def string_to_variant_with_transform(tensor: tf.Tensor,
+                                     input_type: str = 'example',
+                                     output_type: str = 'example',
+                                     has_header: bool = False,
+                                     has_sort_id: bool = False,
+                                     lagrangex_header: bool = False,
+                                     kafka_dump_prefix: bool = False,
+                                     kafka_dump: bool = False,
+                                     chnids: List[int] = None,
+                                     datasources: List[str] = None,
+                                     default_datasource: str = ''):
+  assert input_type in {'instance', 'example', 'examplebatch', 'example_batch'}
+  assert output_type in {'instance', 'example', 'examplebatch', 'example_batch'}
+  return ragged_data_ops.string_to_variant_with_transform(
+      input=tensor,
+      has_header=has_header,
+      has_sort_id=has_sort_id,
+      lagrangex_header=lagrangex_header,
+      kafka_dump_prefix=kafka_dump_prefix,
+      kafka_dump=kafka_dump,
+      input_type=input_type,
+      output_type=output_type,
+      chnids=chnids or [],
+      datasources=datasources or [],
+      default_datasource=default_datasource)
+
+
 def variant_to_zeros(tensor: tf.Tensor):
   return ragged_data_ops.variant_to_zeros(tensor)
 
 
 def kafka_resource_init(topics: List[str],
                         metadata: List[str],
+                        input_pb_type: str = "",
+                        output_pb_type: str = "",
+                        has_sort_id: bool = False,
+                        lagrangex_header: bool = False,
+                        kafka_dump_prefix: bool = False,
+                        kafka_dump: bool = False,
                         container: str = '',
                         shared_name: str = ''):
-  return ragged_data_ops.KafkaGroupReadableInit(topics=topics,
-                                                metadata=metadata,
-                                                container=container,
-                                                shared_name=shared_name)
+  return ragged_data_ops.KafkaGroupReadableInit(
+      topics=topics,
+      metadata=metadata,
+      has_sort_id=has_sort_id,
+      lagrangex_header=lagrangex_header,
+      kafka_dump_prefix=kafka_dump_prefix,
+      kafka_dump=kafka_dump,
+      input_pb_type=input_pb_type,
+      output_pb_type=output_pb_type,
+      container=container,
+      shared_name=shared_name)
 
 
 def kafka_read_next(input, index: int, message_poll_timeout: int,
@@ -766,6 +822,13 @@ def kafka_read_next(input, index: int, message_poll_timeout: int,
       message_poll_timeout=message_poll_timeout,
       stream_timeout=stream_timeout)
 
+def kafka_read_next_v2(input, index: int, message_poll_timeout: int,
+                    stream_timeout: int):
+  return ragged_data_ops.KafkaGroupReadableNextV2(
+      input=input,
+      index=index,
+      message_poll_timeout=message_poll_timeout,
+      stream_timeout=stream_timeout)
 
 def has_variant(input, variant_type: str = 'example'):
   return ragged_data_ops.HasVariant(input=input, variant_type=variant_type)

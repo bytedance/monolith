@@ -28,8 +28,28 @@ limitations under the License.
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_op_kernel.h"
 
+#include "monolith/native_training/data/kernels/feature_name_mapper_tf_bridge.h"
+#include "monolith/native_training/data/training_instance/cc/data_reader.h"
+
 namespace tensorflow {
 namespace monolith_tf {
+namespace {
+using Example = ::monolith::io::proto::Example;
+using ExampleBatch = ::monolith::io::proto::ExampleBatch;
+using Instance = ::parser::proto::Instance;
+using ::tensorflow::monolith_tf::BaseStreamReader;
+using ::tensorflow::monolith_tf::DataFormatOptions;
+using ::tensorflow::monolith_tf::ExampleBatchIterator;
+using ::tensorflow::monolith_tf::ExampleToInstance;
+using ::tensorflow::monolith_tf::FeatureNameMapper;
+using ::tensorflow::monolith_tf::FeatureNameMapperTfBridge;
+using ::tensorflow::monolith_tf::FeaturePruningType;
+using ::tensorflow::monolith_tf::FileStreamReader;
+using ::tensorflow::monolith_tf::InstanceToExample;
+using ::tensorflow::monolith_tf::PBIterator;
+using ::tensorflow::monolith_tf::StdinStreamReader;
+
+}  // namespace
 
 class KafkaEventCb : public RdKafka::EventCb {
  public:
@@ -135,7 +155,10 @@ class KafkaGroupReadableResource : public ResourceBase {
   }
 
   virtual Status Init(const std::vector<std::string>& topics,
-                      const std::vector<std::string>& metadata) {
+                      const std::vector<std::string>& metadata,
+                      const DataFormatOptions& options,
+                      const std::string& input_pb_type,
+                      const std::string& output_pb_type) {
     mutex_lock l(mu_);
 
     std::unique_ptr<RdKafka::Conf> conf(
@@ -207,8 +230,8 @@ class KafkaGroupReadableResource : public ResourceBase {
       group_id = "test-consumer-group";
       if ((result = conf->set("group.id", group_id, errstr)) !=
           RdKafka::Conf::CONF_OK) {
-        return errors::Internal("failed to set group.id [", group_id, "]:",
-                                errstr);
+        return errors::Internal("failed to set group.id [", group_id,
+                                "]:", errstr);
       }
     }
 
@@ -258,8 +281,88 @@ class KafkaGroupReadableResource : public ResourceBase {
                               RdKafka::err2str(err));
     }
 
+    if (input_pb_type == "" && output_pb_type == "") {
+      version_ = 1;
+    } else {
+      input_pb_type_ = data_format::StringToDataFormat(input_pb_type);
+      output_pb_type_ = data_format::StringToDataFormat(output_pb_type);
+      if (input_pb_type_ == data_format::UNKNOW ||
+          output_pb_type_ == data_format::UNKNOW) {
+        return errors::Internal("input_pb_type or output_pb_type err:",
+                                input_pb_type, output_pb_type);
+      }
+      version_ = 2;
+    }
+
+    options_ = options;
     return Status::OK();
   }
+
+  class CurPBIteratorHandler {
+   public:
+    struct CurOutput : public PBIteratorWithDataFormatTransBaseOutput {
+      std::vector<Example> exa_pb_list;
+      std::vector<Instance> ins_pb_list;
+      std::vector<ExampleBatch> eb_pb_list;
+      std::vector<tstring> string_list;
+    };
+
+    Status HandleReaderNextStauts(const Status& s, const tstring& result) {
+      if (s != Status::OK()) {
+        if (s.code() != error::OUT_OF_RANGE) {
+          LOG(ERROR) << "pb parse error:" << s;
+        }
+        return s;
+      }
+      if (result.size() == 0) {
+        LOG(ERROR) << "tstring size can not be 0";
+        return errors::FailedPrecondition("tstring size=0");
+      }
+      return Status::OK();
+    }
+
+    template <class TResult>
+    Status HandleReaderNextStauts(const Status& s, const TResult& result) {
+      if (s != Status::OK()) {
+        if (s.code() != error::OUT_OF_RANGE) {
+          LOG(ERROR) << "pb parse error:" << s;
+        }
+        return s;
+      }
+
+      if (result.ByteSize() == 0) {
+        LOG(ERROR) << "pb struct size can not be 0";
+        return errors::FailedPrecondition("pb size=0");
+      }
+
+      return Status::OK();
+    }
+
+    template <class TResult>
+    Status HandleResult(TResult&& result, CurOutput* output) {
+      return errors::Unimplemented("not implement");
+    }
+
+    Status HandleResult(tstring&& serialized, CurOutput* output) {
+      output->string_list.emplace_back(std::move(serialized));
+      return Status::OK();
+    }
+
+    virtual Status HandleResult(Example&& exa_pb, CurOutput* output) {
+      output->exa_pb_list.emplace_back(std::move(exa_pb));
+      return Status::OK();
+    }
+
+    virtual Status HandleResult(Instance&& ins_pb, CurOutput* output) {
+      output->ins_pb_list.emplace_back(std::move(ins_pb));
+      return Status::OK();
+    }
+
+    virtual Status HandleResult(ExampleBatch&& eb_pb, CurOutput* output) {
+      output->eb_pb_list.emplace_back(std::move(eb_pb));
+      return Status::OK();
+    }
+  };
 
   Status Next(const int64 index, const int64 message_poll_timeout,
               const int64 stream_timeout,
@@ -273,9 +376,9 @@ class KafkaGroupReadableResource : public ResourceBase {
     max_stream_timeout_polls_ = stream_timeout / message_poll_timeout;
 
     // Allocate memory for message_value and key_value vectors
-    std::vector<string> message_value, key_value;
+    std::vector<tstring> message_value, key_value;
     message_value.reserve(batch_num_messages_);
-    key_value.reserve(batch_num_messages_);
+    // key_value.reserve(batch_num_messages_);
 
     std::unique_ptr<RdKafka::Message> message;
     while (consumer_.get() != nullptr && num_messages < batch_num_messages_) {
@@ -286,10 +389,10 @@ class KafkaGroupReadableResource : public ResourceBase {
       message.reset(consumer_->consume(message_poll_timeout));
       if (message->err() == RdKafka::ERR_NO_ERROR) {
         // Produce the line as output.
-        message_value.emplace_back(string(
+        message_value.emplace_back(tstring(
             static_cast<const char*>(message->payload()), message->len()));
-        key_value.emplace_back(
-            (message->key() != nullptr) ? string(*message->key()) : "");
+        // key_value.emplace_back(
+        //     (message->key() != nullptr) ? tstring(*message->key()) : "");
         num_messages++;
         // Once a message has been successfully retrieved, the
         // `stream_timeout_polls_` is reset to 0. This allows the dataset
@@ -317,23 +420,79 @@ class KafkaGroupReadableResource : public ResourceBase {
     }
 
     // Prepare the outputs
-    TensorShape shape({static_cast<int64>(message_value.size())});
+
+    PBIteratorWithDataFormatTrans<CurPBIteratorHandler> cur_iter(
+        input_pb_type_, output_pb_type_);
+    CurPBIteratorHandler::CurOutput output;
+    if (version_ == 1) {
+      output.string_list.swap(message_value);
+    } else {
+      // std::ostringstream imploded;
+      // std::copy(message_value.begin(), message_value.end(),
+      //           std::ostream_iterator<std::string>(imploded, ""));
+      //  std::string msg;
+      std::unique_ptr<PBIterator> reader;
+      for (auto& mesg : message_value) {
+        auto stream_reader =
+            std::make_unique<StringStreamReader<tstring> >(options_, mesg);
+        if (input_pb_type_ == data_format::INSTANCE ||
+            input_pb_type_ == data_format::EXAMPLE) {
+          reader = absl::make_unique<PBIterator>(
+              std::move(stream_reader),
+              FeaturePruningType::PRUNING_RAW_FEATURE);
+        } else {
+          reader = absl::make_unique<ExampleBatchIterator>(
+              std::move(stream_reader), FeaturePruningType::PRUNING_RAW_FEATURE,
+              &fake_mapper_);
+        }
+
+        uint64 offset_ = 0;
+        while (true) {
+          Status s = cur_iter.GetNext(reader.get(), &output, &offset_);
+          if (!s.ok()) break;
+          offset_ = reader->GetOffset();
+        }
+      }
+    }
+    size_t all_size = 0;
+    if (output_pb_type_ == data_format::EXAMPLE) {
+      all_size = output.exa_pb_list.size();
+    } else if (output_pb_type_ == data_format::EXAMPLEBATCH) {
+      all_size = output.eb_pb_list.size();
+    } else if (output_pb_type_ == data_format::INSTANCE) {
+      all_size = output.ins_pb_list.size();
+    } else {
+      all_size = output.string_list.size();
+    }
+    if (all_size < message_value.size()) {
+      LOG(ERROR) << "get not enough pb:" << all_size << ","
+                 << message_value.size();
+    }
+    TensorShape shape({static_cast<int64>(all_size)});
     Tensor* message_tensor;
     Tensor* key_tensor;
     Tensor* continue_fetch_tensor;
     TF_RETURN_IF_ERROR(allocate_func(shape, &message_tensor, &key_tensor,
                                      &continue_fetch_tensor));
 
+    for (int i = 0; i < all_size; ++i) {
+      if (output_pb_type_ == data_format::EXAMPLE) {
+        message_tensor->flat<Variant>()(i) = std::move(output.exa_pb_list[i]);
+      } else if (output_pb_type_ == data_format::INSTANCE) {
+        message_tensor->flat<Variant>()(i) = std::move(output.ins_pb_list[i]);
+      } else if (output_pb_type_ == data_format::EXAMPLEBATCH) {
+        message_tensor->flat<Variant>()(i) = std::move(output.eb_pb_list[i]);
+      } else {
+        message_tensor->flat<tstring>()(i) = std::move(output.string_list[i]);
+      }
+    }
     if (stream_timeout_polls_ < max_stream_timeout_polls_) {
       continue_fetch_tensor->scalar<int64>()() = 1;
     } else {
       continue_fetch_tensor->scalar<int64>()() = 0;
     }
-    for (size_t i = 0; i < message_value.size(); i++) {
-      message_tensor->flat<tstring>()(i) = message_value[i];
-      key_tensor->flat<tstring>()(i) = key_value[i];
-    }
-
+    LOG_EVERY_N_SEC(INFO, 60)
+        << "consumer pb:" << all_size << "," << message_value.size();
     return Status::OK();
   }
 
@@ -347,6 +506,13 @@ class KafkaGroupReadableResource : public ResourceBase {
   int64 max_stream_timeout_polls_ = -1;
   int64 stream_timeout_polls_ = -1;
   int batch_num_messages_ = 1024;
+  // std::unique_ptr<PBIterator> reader_;
+  // std::unique_ptr<BaseStreamReader> stream_reader_;
+  data_format::DataFormat output_pb_type_;
+  data_format::DataFormat input_pb_type_;
+  DataFormatOptions options_;
+  FeatureNameMapper fake_mapper_;
+  int version_ = 1;
 };
 
 class KafkaGroupReadableInitOp
@@ -355,6 +521,19 @@ class KafkaGroupReadableInitOp
   explicit KafkaGroupReadableInitOp(OpKernelConstruction* context)
       : ResourceOpKernel<KafkaGroupReadableResource>(context) {
     env_ = context->env();
+
+    OP_REQUIRES_OK(context, context->GetAttr("lagrangex_header",
+                                             &options_.lagrangex_header));
+    OP_REQUIRES_OK(context, context->GetAttr("kafka_dump_prefix",
+                                             &options_.kafka_dump_prefix));
+    OP_REQUIRES_OK(context,
+                   context->GetAttr("has_sort_id", &options_.has_sort_id));
+    OP_REQUIRES_OK(context,
+                   context->GetAttr("kafka_dump", &options_.kafka_dump));
+    std::string input_pb_type, output_pb_type;
+    OP_REQUIRES_OK(context, context->GetAttr("input_pb_type", &input_pb_type_));
+    OP_REQUIRES_OK(context,
+                   context->GetAttr("output_pb_type", &output_pb_type_));
   }
 
  private:
@@ -375,7 +554,8 @@ class KafkaGroupReadableInitOp
       metadata.push_back(metadata_tensor->flat<tstring>()(i));
     }
 
-    OP_REQUIRES_OK(context, resource_->Init(topics, metadata));
+    OP_REQUIRES_OK(context, resource_->Init(topics, metadata, options_,
+                                            input_pb_type_, output_pb_type_));
   }
 
   Status CreateResource(KafkaGroupReadableResource** resource)
@@ -387,12 +567,16 @@ class KafkaGroupReadableInitOp
  private:
   mutable mutex mu_;
   Env* env_ TF_GUARDED_BY(mu_);
+  DataFormatOptions options_;
+  std::string output_pb_type_;
+  std::string input_pb_type_;
 };
 
 class KafkaGroupReadableNextOp : public OpKernel {
  public:
-  explicit KafkaGroupReadableNextOp(OpKernelConstruction* context)
-      : OpKernel(context) {
+  explicit KafkaGroupReadableNextOp(OpKernelConstruction* context,
+                                    int version = 1)
+      : OpKernel(context), version_(version) {
     env_ = context->env();
   }
 
@@ -424,23 +608,38 @@ class KafkaGroupReadableNextOp : public OpKernel {
             [&](const TensorShape& shape, Tensor** message, Tensor** key,
                 Tensor** continue_fetch) -> Status {
               TF_RETURN_IF_ERROR(context->allocate_output(0, shape, message));
-              TF_RETURN_IF_ERROR(context->allocate_output(1, shape, key));
-              TF_RETURN_IF_ERROR(
-                  context->allocate_output(2, TensorShape({}), continue_fetch));
+              if (version_ == 2) {
+                TF_RETURN_IF_ERROR(context->allocate_output(1, TensorShape({}),
+                                                            continue_fetch));
+              } else {
+                TF_RETURN_IF_ERROR(context->allocate_output(1, shape, key));
+                TF_RETURN_IF_ERROR(context->allocate_output(2, TensorShape({}),
+                                                            continue_fetch));
+              }
               return Status::OK();
             }));
   }
 
  private:
+  int version_ = 1;
   mutable mutex mu_;
   Env* env_ TF_GUARDED_BY(mu_);
+};
+
+class KafkaGroupReadableNextOpV2 : public KafkaGroupReadableNextOp {
+ public:
+  explicit KafkaGroupReadableNextOpV2(OpKernelConstruction* context)
+      : KafkaGroupReadableNextOp(context, 2) {}
 };
 
 namespace {
 REGISTER_KERNEL_BUILDER(Name("KafkaGroupReadableInit").Device(DEVICE_CPU),
                         KafkaGroupReadableInitOp);
+
 REGISTER_KERNEL_BUILDER(Name("KafkaGroupReadableNext").Device(DEVICE_CPU),
                         KafkaGroupReadableNextOp);
+REGISTER_KERNEL_BUILDER(Name("KafkaGroupReadableNextV2").Device(DEVICE_CPU),
+                        KafkaGroupReadableNextOpV2);
 }  // namespace
 }  // namespace monolith_tf
 }  // namespace tensorflow

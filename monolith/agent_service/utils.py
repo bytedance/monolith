@@ -784,7 +784,7 @@ class AgentConfig(TfServingConfig):
 
 class ZKPath(object):
   PAT = re.compile(
-      r'^/(?P<bzid>[-_0-9A-Za-z]+)/service/(?P<base_name>[-_0-9A-Za-z]+)(/(?P<idc>\w+):(?P<cluster>\w+))?/(?P<server_type>\w+):(?P<index>\d+)(/(?P<replica_id>\d+))?$'
+      r'^/(?P<bzid>[-_0-9A-Za-z]+)/service/(?P<base_name>[-_0-9A-Za-z]+)(/(?P<idc>[-_0-9A-Za-z]+):(?P<cluster>[-_0-9A-Za-z]+))?/(?P<server_type>\w+):(?P<index>\d+)(/(?P<replica_id>\d+))?$'
   )
 
   def __init__(self, path: str):

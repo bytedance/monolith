@@ -71,16 +71,20 @@ class DistributedTrainTest(tf.test.TestCase):
                 worker_args: List = [],
                 use_mpi_run=False):
     cur_modir = "{}/{}/ckpt".format(get_test_tmp_dir(), task_name)
+    if tf.io.gfile.exists(cur_modir):
+      tf.io.gfile.rmtree(cur_modir)
     os.makedirs(cur_modir)
     logging.info(f"show cur_modir: {cur_modir}")
     args_tmpl = [
         self._DISTRIBUTED_TRAIN_BINARY,
+        "--mode=train",
         f"--model_dir={cur_modir}",
         f"--num_ps={num_ps}",
         f"--num_workers={num_workers}",
         f"--uuid={self._testMethodName}",
         f"--dataset_input_patterns={FLAGS.dataset_input_patterns}",
         f"--dataset_input_use_snappy=False",
+        #f"--dataset_input_use_parquet=True",
         "--lagrangex_header=True",
         "--sort_id=False",
         "--kafka_dump=False",
@@ -89,6 +93,9 @@ class DistributedTrainTest(tf.test.TestCase):
         "--discovery_type=mlp",
         "--operation_timeout_in_ms=10000",
         "--disable_native_metrics=True",
+        "--dataset_use_dataservice=True"
+        if num_dsworkers else "--dataset_use_dataservice=False",
+        "--cluster_type=stable",
     ] + other_args
     my_env = os.environ.copy()
     my_env.update(other_env)
@@ -194,6 +201,18 @@ class DistributedTrainTest(tf.test.TestCase):
           cur_env["MLP_SSH_PORT"] = f"{worker_port[0]}"
           #if i == 0 and role_name == "worker":
           #  time.sleep(5)
+          '''
+          shell_commond = ""
+          for k, v in cur_env.items():
+            if "BASH_FUNC_" in k:
+              continue
+            shell_commond += f"{k}={v} "
+          shell_commond += f" bazel-bin/{args[0]} "
+          for arg in args[1:]:
+            shell_commond += f"{arg} "
+          logging.info(
+              f"start a shell for {role_name}:{i} \n {shell_commond}")
+          '''
           process = subprocess.Popen(args, env=cur_env)
           logging.info(f"start a process for {role_name}:{i}")
           processes[f"{role_name}:{i}"] = process

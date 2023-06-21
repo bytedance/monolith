@@ -267,6 +267,39 @@ class MLPEnv(object):
     )
 
 
+def add_mpi_exception_hook():
+  if 'OMPI_COMM_WORLD_RANK' not in os.environ:
+    return
+  logging.info("add_mpi_exception_hook")
+  # Global error handler
+  def global_except_hook(exctype, value, traceback):
+    try:
+      sys.stderr.write(
+          "\n*****************************************************\n")
+      sys.stderr.write("Uncaught exception was detected on rank {}. \n".format(
+          int(os.environ.get('OMPI_COMM_WORLD_RANK', -1))))
+      from traceback import print_exception
+      print_exception(exctype, value, traceback)
+      sys.stderr.write(
+          "*****************************************************\n\n\n")
+      sys.stderr.write("\n")
+      sys.stderr.write("Calling MPI_Abort() to shut down MPI processes...\n")
+      sys.stderr.flush()
+    finally:
+      try:
+        import mpi4py.MPI
+        mpi4py.MPI.COMM_WORLD.Abort(1)
+      except Exception as e:
+        sys.stderr.write(
+            "*****************************************************\n")
+        sys.stderr.write(
+            "Sorry, we failed to stop MPI, this process will hang.\n")
+        sys.stderr.write(
+            "*****************************************************\n")
+        sys.stderr.flush()
+        raise e
+  sys.excepthook = global_except_hook
+
 def mlp_pass(dispatcher_role: str = 'dispatcher',
              dsworker_role: str = 'dsworker',
              worker_role: str = 'worker',

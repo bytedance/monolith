@@ -38,6 +38,28 @@ using IFeature = ::idl::matrix::proto::Feature;
 using Instance = ::parser::proto::Instance;
 using LineId = ::idl::matrix::proto::LineId;
 
+data_format::DataFormat data_format::StringToDataFormat(
+    const std::string &type) {
+  static const std::string EXAMPLEBATCH_STR = "examplebatch";
+  static const std::string EXAMPLE_STR = "example";
+  static const std::string INSTANCE_STR = "instance";
+  static const std::string PLAINTEXT_STR = "plaintext";
+
+  if (type == PLAINTEXT_STR) {
+    return data_format::PLAINTEXT;
+  } else if (type == EXAMPLEBATCH_STR) {
+    return data_format::EXAMPLEBATCH;
+  } else if (type == EXAMPLE_STR) {
+    return data_format::EXAMPLE;
+  } else if (type == INSTANCE_STR) {
+    return data_format::INSTANCE;
+  } else {
+    LOG(WARNING) << "unknow input:" << type;
+    return data_format::UNKNOW;
+  }
+  return data_format::UNKNOW;
+}
+
 static const size_t kLengthSize = 8;
 const int kDEFAULT_SNAPPY_BUFFER_SIZE = 64 * 1024 * 1024;  // 64MB
 

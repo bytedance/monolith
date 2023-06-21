@@ -286,6 +286,25 @@ REGISTER_OP("StringToVariant")
       return Status::OK();
     });
 
+REGISTER_OP("StringToVariantWithTransform")
+    .Input("input: string")
+    .Attr("input_type: string")
+    .Attr("output_type: string")
+    .Attr("has_header: bool")
+    .Attr("has_sort_id: bool")
+    .Attr("lagrangex_header: bool")
+    .Attr("kafka_dump_prefix: bool")
+    .Attr("kafka_dump: bool")
+    .Attr("chnids: list(int)")
+    .Attr("datasources: list(string)")
+    .Attr("default_datasource: string")
+    .Output("output: variant")
+    .SetDoNotOptimize()
+    .SetShapeFn([](shape_inference::InferenceContext *ctx) {
+      ctx->set_output(0, ctx->MakeShape({ctx->UnknownDim()}));
+      return Status::OK();
+    });
+
 REGISTER_OP("VariantToZeros")
     .Input("input: variant")
     .Output("output: int64")
@@ -308,6 +327,12 @@ REGISTER_OP("KafkaGroupReadableInit")
     .Input("topics: string")
     .Input("metadata: string")
     .Output("resource: resource")
+    .Attr("input_pb_type: string = ''")
+    .Attr("output_pb_type: string = ''")
+    .Attr("has_sort_id: bool = false")
+    .Attr("lagrangex_header: bool = false")
+    .Attr("kafka_dump_prefix: bool = false")
+    .Attr("kafka_dump: bool = false")
     .Attr("container: string = ''")
     .Attr("shared_name: string = ''")
     .SetShapeFn([](shape_inference::InferenceContext *c) {
@@ -327,6 +352,19 @@ REGISTER_OP("KafkaGroupReadableNext")
       c->set_output(0, c->MakeShape({c->UnknownDim()}));
       c->set_output(1, c->MakeShape({c->UnknownDim()}));
       c->set_output(2, c->Scalar());
+      return Status::OK();
+    });
+
+REGISTER_OP("KafkaGroupReadableNextV2")
+    .Input("input: resource")
+    .Input("index: int64")
+    .Input("message_poll_timeout: int64")
+    .Input("stream_timeout: int64")
+    .Output("message: variant")
+    .Output("continue_fetch: int64")
+    .SetShapeFn([](shape_inference::InferenceContext *c) {
+      c->set_output(0, c->MakeShape({c->UnknownDim()}));
+      c->set_output(1, c->Scalar());
       return Status::OK();
     });
 }  // namespace tensorflow

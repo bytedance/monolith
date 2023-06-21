@@ -171,6 +171,214 @@ class StringToVariantOp : public OpKernel {
   }
 };
 
+class StringToVariantWithTransform : public OpKernel {
+ public:
+  explicit StringToVariantWithTransform(OpKernelConstruction* ctx)
+      : OpKernel(ctx) {
+    std::string variant_type;
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("input_type", &variant_type));
+    input_type_ = data_format::StringToDataFormat(variant_type);
+    LOG(INFO) << "input_type_:" << variant_type << "," << input_type_;
+    std::string output_type;
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("output_type", &output_type));
+    output_type_ = data_format::StringToDataFormat(output_type);
+    LOG(INFO) << "output_type_:" << output_type << "," << output_type_;
+
+    OP_REQUIRES(
+        ctx,
+        (input_type_ == data_format::INSTANCE ||
+         input_type_ == data_format::EXAMPLE ||
+         input_type_ == data_format::EXAMPLEBATCH) &&
+            (output_type_ == data_format::INSTANCE ||
+             output_type_ == data_format::EXAMPLE ||
+             output_type_ == data_format::EXAMPLEBATCH),
+        errors::InvalidArgument("variant_type can only be instance, example "
+                                "and examplebatch/example_batch"));
+    OP_REQUIRES(ctx,
+                !(input_type_ != data_format::EXAMPLEBATCH &&
+                  output_type_ == data_format::EXAMPLEBATCH),
+                errors::InvalidArgument(
+                    "not support output examplebatch input not examplebatch"));
+
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("has_header", &has_header_));
+    if (has_header_) {
+      OP_REQUIRES_OK(ctx, ctx->GetAttr("has_sort_id", &options_.has_sort_id));
+      OP_REQUIRES_OK(
+          ctx, ctx->GetAttr("lagrangex_header", &options_.lagrangex_header));
+      OP_REQUIRES_OK(
+          ctx, ctx->GetAttr("kafka_dump_prefix", &options_.kafka_dump_prefix));
+      OP_REQUIRES_OK(ctx, ctx->GetAttr("kafka_dump", &options_.kafka_dump));
+    }
+
+    std::vector<int64> chnid_list;
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("chnids", &chnid_list));
+    std::vector<std::string> datasource_list;
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("datasources", &datasource_list));
+    CHECK_EQ(chnid_list.size(), datasource_list.size());
+
+    if (!chnid_list.empty()) {
+      int i = 0;
+      for (const std::string& sv : datasource_list) {
+        uint32 code = internal::java_hash_code(sv);
+        code = code << 8;
+        chnid_to_code_.emplace(chnid_list.at(i), code);
+        LOG(INFO) << "chnid: " << chnid_list.at(i) << ", code: " << code;
+        i++;
+      }
+    }
+
+    std::string default_datasource;
+    OP_REQUIRES_OK(ctx,
+                   ctx->GetAttr("default_datasource", &default_datasource));
+    uint32 default_code = internal::java_hash_code(default_datasource);
+    default_code_ = (default_code << 8);
+    LOG(INFO) << "default_code: " << default_code_;
+  }
+
+  void Compute(OpKernelContext* context) override {
+    // Grab the input tensor
+    const Tensor& input_tensor = context->input(0);
+    auto input = input_tensor.flat<tstring>();
+
+    uint8_t pb_type;
+    uint32_t data_source_key;
+    ReadHelper reader(options_, has_header_);
+    Status s;
+
+    std::unique_ptr<google::protobuf::Arena> arena =
+        std::make_unique<google::protobuf::Arena>();
+
+    if (input_type_ == data_format::EXAMPLEBATCH &&
+        output_type_ != data_format::EXAMPLEBATCH) {
+      std::vector<ExampleBatch*> eb_list;
+      eb_list.reserve(input.size());
+      int total_size = 0;
+      for (size_t i = 0; i < input.size(); ++i) {
+        const tstring& buf = input(i);
+        absl::string_view res;
+        OP_REQUIRES_OK(context,
+                       reader.GetData(buf, &pb_type, &data_source_key, &res));
+        auto pb =
+            google::protobuf::Arena::CreateMessage<ExampleBatch>(arena.get());
+        if (res.size() > 0) {
+          CHECK(pb->ParseFromArray(res.data(), res.size()));
+          pb->set_data_source_key(data_source_key);
+        }
+        eb_list.push_back(pb);
+        total_size += pb->batch_size();
+      }
+      // Create an output tensor
+      Tensor* output_tensor = nullptr;
+      OP_REQUIRES_OK(context,
+                     context->allocate_output(0, {total_size}, &output_tensor));
+      auto output_flat = output_tensor->flat<Variant>();
+
+      LOG_EVERY_N_SEC(INFO, 60)
+          << "trans pb size:" << input.size() << "->" << total_size;
+      total_size = -1;
+
+      for (auto pb : eb_list) {
+        for (int index = 0; index < pb->batch_size(); ++index) {
+          if (input_type_ == data_format::INSTANCE) {
+            Instance inst;
+            s = ExampleBatchToInstance(pb, index, &inst);
+            output_flat(++total_size) = std::move(inst);
+          } else {
+            Example ep;
+            s = ExampleBatchToExample(pb, index, &ep,
+                                      FeaturePruningType::PRUNING_RAW_FEATURE,
+                                      &fake_mapper_);
+            output_flat(++total_size) = std::move(ep);
+          }
+          if (s != Status::OK()) {
+            LOG(WARNING) << "Trans error:" << s;
+          }
+        }
+      }
+    } else {
+      // Create an output tensor
+      Tensor* output_tensor = nullptr;
+      OP_REQUIRES_OK(context, context->allocate_output(0, input_tensor.shape(),
+                                                       &output_tensor));
+      auto output_flat = output_tensor->flat<Variant>();
+
+      for (size_t i = 0; i < input.size(); ++i) {
+        const tstring& buf = input(i);
+
+        absl::string_view res;
+        OP_REQUIRES_OK(context,
+                       reader.GetData(buf, &pb_type, &data_source_key, &res));
+        // LOG(ERROR) << "xxx " << buf.size() << "," << res.size();
+        if (input_type_ == data_format::INSTANCE) {
+          Instance pb;
+          if (res.size() > 0) {
+            CHECK(pb.ParseFromArray(res.data(), res.size()));
+            UpdateDatasourceKey(pb.line_id().chnid(), &data_source_key);
+            pb.set_data_source_key(data_source_key);
+          }
+          if (output_type_ == data_format::INSTANCE) {
+            output_flat(i) = std::move(pb);
+          } else {
+            Example eb_pb;
+            s = InstanceToExample(&pb, &eb_pb);
+            if (s != Status::OK()) {
+              LOG(WARNING) << "Trans error:" << s;
+            }
+            output_flat(i) = std::move(eb_pb);
+          }
+        } else if (input_type_ == data_format::EXAMPLE) {
+          Example pb;
+          if (res.size() > 0) {
+            CHECK(pb.ParseFromArray(res.data(), res.size()));
+            UpdateDatasourceKey(pb.line_id().chnid(), &data_source_key);
+            pb.set_data_source_key(data_source_key);
+          }
+          if (output_type_ == data_format::EXAMPLE) {
+            output_flat(i) = std::move(pb);
+          } else {
+            Instance inst;
+            s = ExampleToInstance(&pb, &inst);
+            if (s != Status::OK()) {
+              LOG(WARNING) << "Trans error:" << s;
+            }
+            output_flat(i) = std::move(inst);
+          }
+        } else {
+          auto pb =
+              google::protobuf::Arena::CreateMessage<ExampleBatch>(arena.get());
+          if (res.size() > 0) {
+            CHECK(pb->ParseFromArray(res.data(), res.size()));
+            pb->set_data_source_key(data_source_key);
+          }
+          output_flat(i) = std::move(*pb);
+        }
+      }
+    }
+  }
+
+ private:
+  data_format::DataFormat input_type_, output_type_;
+  bool has_header_ = false;
+  DataFormatOptions options_;
+  std::unordered_map<int64, uint32> chnid_to_code_;
+  uint32 default_code_;
+  FeatureNameMapper fake_mapper_;
+
+  void UpdateDatasourceKey(const int64& chnid, uint32_t* data_source_key) {
+    if (has_header_ && options_.lagrangex_header) {
+      return;
+    } else if (!chnid_to_code_.empty()) {
+      if (chnid_to_code_.count(chnid) != 0) {
+        *data_source_key = chnid_to_code_[chnid];
+      } else {
+        *data_source_key = default_code_;
+      }
+    } else {
+      *data_source_key = default_code_;
+    }
+  }
+};
+
 class VariantToZerosOp : public OpKernel {
  public:
   explicit VariantToZerosOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
@@ -232,6 +440,9 @@ class HasVariantOp : public OpKernel {
 
 REGISTER_KERNEL_BUILDER(Name("StringToVariant").Device(DEVICE_CPU),
                         StringToVariantOp);
+REGISTER_KERNEL_BUILDER(Name("StringToVariantWithTransform").Device(DEVICE_CPU),
+                        StringToVariantWithTransform);
+
 REGISTER_KERNEL_BUILDER(Name("VariantToZeros").Device(DEVICE_CPU),
                         VariantToZerosOp);
 REGISTER_KERNEL_BUILDER(Name("HasVariant").Device(DEVICE_CPU), HasVariantOp);

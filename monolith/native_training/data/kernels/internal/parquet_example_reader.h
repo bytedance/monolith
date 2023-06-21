@@ -15,6 +15,9 @@
 #ifndef PARQUET_EXAMPLE_READER_H_
 #define PARQUET_EXAMPLE_READER_H_
 
+#include <regex>
+#include <string>
+#include "absl/strings/ascii.h"
 #include "absl/strings/str_split.h"
 #include "idl/matrix/proto/example.pb.h"
 #include "monolith/native_training/data/kernels/internal/arrow_random_access_file.h"
@@ -22,6 +25,8 @@
 #include "monolith/native_training/data/kernels/internal/sized_random_access_file.h"
 #include "parquet/api/reader.h"
 #include "tensorflow/core/framework/resource_mgr.h"
+#include "tensorflow/core/platform/stacktrace.h"
+#include "tensorflow/core/profiler/lib/traceme.h"
 
 namespace tensorflow {
 namespace data {
@@ -60,13 +65,19 @@ class ParquetExampleReader {
     // register columns names
     columns_.clear();
     for (int i = 0; i < parquet_metadata_->num_columns(); i++) {
-      const std::string& col_name =
+      const std::string& full_col_name =
           parquet_metadata_->schema()->Column(i)->path().get()->ToDotString();
+      std::vector<absl::string_view> split_result =
+          absl::StrSplit(full_col_name, ".");
+      if (split_result.empty()) {
+        LOG(WARNING) << "Split column full name " << full_col_name
+                     << ", get empty result, will skip this column.";
+        continue;
+      }
+      std::string col_name = {split_result[0].data(), split_result[0].size()};
       columns_.push_back(col_name);
       columns_index_map_[col_name] = i;
-      std::vector<absl::string_view> split_result =
-          absl::StrSplit(col_name, ".");
-      col_pure_name_map_[i] = {split_result[0].data(), split_result[0].size()};
+      col_pure_name_map_[i] = col_name;
     }
     // LOG(INFO) << "parquet file schema: ";
     // for (int i = 0; i < parquet_metadata_->num_columns(); i++) {
@@ -90,6 +101,17 @@ class ParquetExampleReader {
     row_group_id_ = -1;
     row_group_reader_.reset();
     TF_RETURN_IF_ERROR(NextRowGroup());
+
+    // init line_id descriptor
+    descriptor_ = ::idl::matrix::proto::LineId::GetDescriptor();
+    reflection_ = ::idl::matrix::proto::LineId::GetReflection();
+    for (size_t i = 0; i < selected_col_ids_.size(); i++) {
+      int64_t col_id = selected_col_ids_[i];
+      std::string col_name = col_pure_name_map_[col_id];
+      const google::protobuf::FieldDescriptor* field_descriptor =
+          GetLineIdFieldByName(col_name);
+      line_id_discriptor_map_[col_id] = field_descriptor;
+    }
 
     LOG(INFO) << "Init of ParquetReader Success. file_name = " << file_name;
     return Status::OK();
@@ -128,14 +150,13 @@ class ParquetExampleReader {
     // check column names valid, and not duplicated
     std::unordered_set<uint64_t> selected_col_id_set;
     for (const std::string& col_name : selected_col_names) {
-      std::string real_col_name = col_name + ".list.element";
-      auto it = columns_index_map_.find(real_col_name);
+      auto it = columns_index_map_.find(col_name);
       if (it == columns_index_map_.end()) {
-        return errors::InvalidArgument("column name: ", real_col_name,
+        return errors::InvalidArgument("column name: ", col_name,
                                        " not in paruquet schema");
       }
       selected_col_ids_.push_back(it->second);
-      selected_col_id_set.insert(columns_index_map_[real_col_name]);
+      selected_col_id_set.insert(it->second);
     }
     if (selected_col_ids_.size() != selected_col_id_set.size()) {
       return errors::InvalidArgument(
@@ -201,6 +222,18 @@ class ParquetExampleReader {
     return Status::OK();
   }
 
+  const google::protobuf::FieldDescriptor* GetLineIdFieldByName(
+      std::string name) {
+    static std::regex reg("__[A-Z_]+__");
+    bool is_match = std::regex_match(name, reg);
+    if (!is_match) {
+      return nullptr;
+    }
+    std::string subname = name.substr(2, name.length() - 4);
+    std::string lower_subname = absl::AsciiStrToLower(subname);
+    return descriptor_->FindFieldByName(lower_subname);
+  }
+
   Status GetNextExample(Example& example) {
     if (IsEOF()) {
       return errors::OutOfRange("GetNextExample out of range, iter = ", iter_);
@@ -216,37 +249,128 @@ class ParquetExampleReader {
           parquet_metadata_->schema()->Column(col_id)->physical_type();
       std::string col_name = col_pure_name_map_[col_id];
 
+      // if column is __LABEL__
+      if (col_name == "__LABEL__") {
+        if (col_type == parquet::Type::INT32) {
+          TF_RETURN_IF_ERROR(FillLabel<parquet::Int32Type>(i, example));
+        } else if (col_type == parquet::Type::INT64) {
+          TF_RETURN_IF_ERROR(FillLabel<parquet::Int64Type>(i, example));
+        } else if (col_type == parquet::Type::FLOAT) {
+          TF_RETURN_IF_ERROR(FillLabel<parquet::FloatType>(i, example));
+        } else if (col_type == parquet::Type::DOUBLE) {
+          TF_RETURN_IF_ERROR(FillLabel<parquet::DoubleType>(i, example));
+        } else {
+          LOG(FATAL)
+              << "In parquet: __LABEL__ column has wrong type, pls check";
+        }
+        continue;
+      }
+
+      // if column in line_id
+      auto it = line_id_discriptor_map_.find(col_id);
+      const google::protobuf::FieldDescriptor* line_field =
+          (it != line_id_discriptor_map_.end()) ? it->second : nullptr;
+      if (line_field != nullptr) {
+        if (line_field->is_repeated()) {
+          // TODO(libo.bob): will support it later
+          LOG(FATAL) << "Not support repeated line_id field now.";
+        }
+        switch (line_field->cpp_type()) {
+          case google::protobuf::FieldDescriptor::CppType::CPPTYPE_INT32: {
+            CHECK(col_type == parquet::Type::INT32)
+                << "column: " << col_name
+                << " should have the same type as line_id field";
+            reflection_->SetInt32(example.mutable_line_id(), line_field,
+                                  GetSingleValue<parquet::Int32Type>(i));
+            break;
+          }
+          case google::protobuf::FieldDescriptor::CppType::CPPTYPE_INT64: {
+            CHECK(col_type == parquet::Type::INT64)
+                << "column: " << col_name
+                << " should have the same type as line_id field";
+            reflection_->SetInt64(example.mutable_line_id(), line_field,
+                                  GetSingleValue<parquet::Int64Type>(i));
+            break;
+          }
+          case google::protobuf::FieldDescriptor::CppType::CPPTYPE_UINT32: {
+            CHECK(col_type == parquet::Type::INT32)
+                << "column: " << col_name
+                << " should have the same type as line_id field";
+            reflection_->SetUInt32(example.mutable_line_id(), line_field,
+                                   GetSingleValue<parquet::Int32Type>(i));
+            break;
+          }
+          case google::protobuf::FieldDescriptor::CppType::CPPTYPE_UINT64: {
+            CHECK(col_type == parquet::Type::INT64)
+                << "column: " << col_name
+                << " should have the same type as line_id field";
+            reflection_->SetUInt64(example.mutable_line_id(), line_field,
+                                   GetSingleValue<parquet::Int64Type>(i));
+            break;
+          }
+          case google::protobuf::FieldDescriptor::CppType::CPPTYPE_FLOAT: {
+            CHECK(col_type == parquet::Type::FLOAT)
+                << "column: " << col_name
+                << " should have the same type as line_id field";
+            reflection_->SetFloat(example.mutable_line_id(), line_field,
+                                  GetSingleValue<parquet::FloatType>(i));
+            break;
+          }
+          case google::protobuf::FieldDescriptor::CppType::CPPTYPE_DOUBLE: {
+            CHECK(col_type == parquet::Type::DOUBLE)
+                << "column: " << col_name
+                << " should have the same type as line_id field";
+            reflection_->SetDouble(example.mutable_line_id(), line_field,
+                                   GetSingleValue<parquet::DoubleType>(i));
+            break;
+          }
+          case google::protobuf::FieldDescriptor::CppType::CPPTYPE_STRING: {
+            CHECK(col_type == parquet::Type::BYTE_ARRAY)
+                << "column: " << col_name
+                << " should have the same type as line_id field";
+            std::string value =
+                ByteArrayToString(GetSingleValue<parquet::ByteArrayType>(i));
+            reflection_->SetString(example.mutable_line_id(), line_field,
+                                   value);
+            break;
+          }
+          default:
+            LOG(FATAL) << "not support line_id type for column " << col_name;
+        }
+        continue;
+      }
+
       NamedFeature* named_feature = example.add_named_feature();
       named_feature->set_id(col_id + 10000);
       named_feature->set_name(col_name);
       Feature* feature = named_feature->mutable_feature();
       switch (col_type) {
         case parquet::Type::INT32: {
-          FillValueList<parquet::Int32Type, Int64List>(
-              i, feature->mutable_int64_list());
+          TF_RETURN_IF_ERROR(FillValueList<parquet::Int32Type, Int64List>(
+              i, feature->mutable_int64_list()));
           break;
         }
         case parquet::Type::INT64: {
           if (selected_col_feature_type_[i] == ParsedDataType::INT) {
-            FillValueList<parquet::Int64Type, Int64List>(
-                i, feature->mutable_int64_list());
+            TF_RETURN_IF_ERROR(FillValueList<parquet::Int64Type, Int64List>(
+                i, feature->mutable_int64_list()));
           } else if (selected_col_feature_type_[i] == ParsedDataType::FIDV1) {
-            FillValueList<parquet::Int64Type, FidList>(
-                i, feature->mutable_fid_v1_list());
+            TF_RETURN_IF_ERROR(FillValueList<parquet::Int64Type, FidList>(
+                i, feature->mutable_fid_v1_list()));
           } else {
-            FillValueList<parquet::Int64Type, FidList>(
-                i, feature->mutable_fid_v2_list());
+            TF_RETURN_IF_ERROR(FillValueList<parquet::Int64Type, FidList>(
+                i, feature->mutable_fid_v2_list()));
           }
           break;
         }
         case parquet::Type::FLOAT: {
-          FillValueList<parquet::FloatType, FloatList>(
-              i, feature->mutable_float_list());
+          TF_RETURN_IF_ERROR(FillValueList<parquet::FloatType, FloatList>(
+              i, feature->mutable_float_list()));
           break;
         }
         case parquet::Type::DOUBLE: {
-          FillValueList<parquet::DoubleType, FloatList>(
-              i, feature->mutable_float_list());
+          TF_RETURN_IF_ERROR(FillValueList<parquet::DoubleType, FloatList>(
+              i, feature->mutable_float_list()));
           break;
         }
         case parquet::Type::BYTE_ARRAY: {
@@ -275,13 +399,17 @@ class ParquetExampleReader {
                                 iter_);
     }
     // cread namedfeaturelist(s)
-    for (size_t i = 0; i < selected_col_ids_.size(); i++) {
-      int64_t col_id = selected_col_ids_[i];
-      const std::string& col_name = col_pure_name_map_[col_id];
-      NamedFeatureList* named_feature_list =
-          example_batch.add_named_feature_list();
-      named_feature_list->set_id(col_id);
-      named_feature_list->set_name(col_name);
+    {
+      profiler::TraceMe activity(
+          []() { return "ParquetDataset::CreateNamedFeatureLists"; });
+      for (size_t i = 0; i < selected_col_ids_.size(); i++) {
+        int64_t col_id = selected_col_ids_[i];
+        const std::string& col_name = col_pure_name_map_[col_id];
+        NamedFeatureList* named_feature_list =
+            example_batch.add_named_feature_list();
+        named_feature_list->set_id(col_id);
+        named_feature_list->set_name(col_name);
+      }
     }
 
     // calculate batch_size
@@ -308,6 +436,8 @@ class ParquetExampleReader {
       rows_to_read_left -= rows_in_row_group;
       // read from current row group
       for (size_t i = 0; i < selected_col_ids_.size(); i++) {
+        profiler::TraceMe activity(
+            []() { return "ParquetDataset::ReadOneColumnWithBatchSize"; });
         int64_t col_id = selected_col_ids_[i];
         parquet::Type::type col_type =
             parquet_metadata_->schema()->Column(col_id)->physical_type();
@@ -317,32 +447,32 @@ class ParquetExampleReader {
           Feature* feature = named_feature_list->add_feature();
           switch (col_type) {
             case parquet::Type::INT32: {
-              FillValueList<parquet::Int32Type, Int64List>(
-                  i, feature->mutable_int64_list());
+              TF_RETURN_IF_ERROR(FillValueList<parquet::Int32Type, Int64List>(
+                  i, feature->mutable_int64_list()));
               break;
             }
             case parquet::Type::INT64: {
               if (selected_col_feature_type_[i] == ParsedDataType::INT) {
-                FillValueList<parquet::Int64Type, Int64List>(
-                    i, feature->mutable_int64_list());
+                TF_RETURN_IF_ERROR(FillValueList<parquet::Int64Type, Int64List>(
+                    i, feature->mutable_int64_list()));
               } else if (selected_col_feature_type_[i] ==
                          ParsedDataType::FIDV1) {
-                FillValueList<parquet::Int64Type, FidList>(
-                    i, feature->mutable_fid_v1_list());
+                TF_RETURN_IF_ERROR(FillValueList<parquet::Int64Type, FidList>(
+                    i, feature->mutable_fid_v1_list()));
               } else {
-                FillValueList<parquet::Int64Type, FidList>(
-                    i, feature->mutable_fid_v2_list());
+                TF_RETURN_IF_ERROR(FillValueList<parquet::Int64Type, FidList>(
+                    i, feature->mutable_fid_v2_list()));
               }
               break;
             }
             case parquet::Type::FLOAT: {
-              FillValueList<parquet::FloatType, FloatList>(
-                  i, feature->mutable_float_list());
+              TF_RETURN_IF_ERROR(FillValueList<parquet::FloatType, FloatList>(
+                  i, feature->mutable_float_list()));
               break;
             }
             case parquet::Type::DOUBLE: {
-              FillValueList<parquet::DoubleType, FloatList>(
-                  i, feature->mutable_float_list());
+              TF_RETURN_IF_ERROR(FillValueList<parquet::DoubleType, FloatList>(
+                  i, feature->mutable_float_list()));
               break;
             }
             case parquet::Type::BYTE_ARRAY: {
@@ -374,14 +504,57 @@ class ParquetExampleReader {
         dynamic_cast<TypedColumnBuffer<PARQUET_TYPE>*>(
             col_buffers_[col_buffer_id].get());
     std::vector<typename PARQUET_TYPE::c_type> values;
-    TF_RETURN_IF_ERROR(typed_col_buf->GetNextValues(values));
+    Status status = typed_col_buf->GetNextValues(values);
+    if (!status.ok()) {
+      std::string stack_trace = CurrentStackTrace();
+      LOG(INFO) << stack_trace;
+      return status;
+    }
     for (const typename PARQUET_TYPE::c_type& value : values) {
       value_list->add_value(value);
     }
     return Status::OK();
   }
 
+  template <typename PARQUET_TYPE>
+  Status FillLabel(int64_t col_buffer_id, Example& example) {
+    TypedColumnBuffer<PARQUET_TYPE>* typed_col_buf =
+        dynamic_cast<TypedColumnBuffer<PARQUET_TYPE>*>(
+            col_buffers_[col_buffer_id].get());
+    std::vector<typename PARQUET_TYPE::c_type> values;
+    Status status = typed_col_buf->GetNextValues(values);
+    if (!status.ok()) {
+      std::string stack_trace = CurrentStackTrace();
+      LOG(INFO) << stack_trace;
+      return status;
+    }
+    for (const typename PARQUET_TYPE::c_type& value : values) {
+      example.mutable_label()->Add(static_cast<float>(value));
+    }
+    return Status::OK();
+  }
+
+  template <typename PARQUET_TYPE>
+  typename PARQUET_TYPE::c_type GetSingleValue(int64_t col_buffer_id) {
+    TypedColumnBuffer<PARQUET_TYPE>* typed_col_buf =
+        dynamic_cast<TypedColumnBuffer<PARQUET_TYPE>*>(
+            col_buffers_[col_buffer_id].get());
+    std::vector<typename PARQUET_TYPE::c_type> values;
+    Status status = typed_col_buf->GetNextValues(values);
+    if (!status.ok()) {
+      std::string stack_trace = CurrentStackTrace();
+      LOG(FATAL) << stack_trace;
+    }
+    if (values.size() != 1) {
+      LOG(FATAL) << "Parquet column id = " << col_buffer_id
+                 << ", should have single value for one row, but got "
+                 << values.size();
+    }
+    return values[0];
+  }
+
   Status NextRowGroup() {
+    profiler::TraceMe activity([]() { return "ParquetDataset::NextRowGroup"; });
     if (row_group_id_ + 1 >= parquet_metadata_->num_row_groups()) {
       return errors::OutOfRange("row group out of range");
     }
@@ -458,6 +631,12 @@ class ParquetExampleReader {
   int64_t row_group_offset_;
 
   std::vector<std::shared_ptr<ColumnBuffer>> col_buffers_;
+
+  // line_id related
+  const google::protobuf::Descriptor* descriptor_;
+  const google::protobuf::Reflection* reflection_;
+  std::unordered_map<int64_t, const google::protobuf::FieldDescriptor*>
+      line_id_discriptor_map_;
 };
 
 }  // namespace data

@@ -1035,10 +1035,10 @@ class CpuTraining:
                                  include_graphs=include_graphs,
                                  export_context_list=self._export_context_list)
       barrier_listeners = []
-      if self.config.enable_sync_training and not dense_only:
+      if self.config.enable_sync_training and not dense_only and not self.config.enable_partial_sync_training:
         barrier_listeners.append(
             sync_training_hooks.SyncTrainingBarrierSaverListener())
-      return [
+      return barrier_listeners + [
           export_hooks.ExportSaverListener(
               save_path,
               serving_input_receiver_fn,
@@ -1971,8 +1971,9 @@ def distributed_train(config: DistributedCpuTrainingConfig,
       _join_ps(server.target, config.index, sync_backend)
   elif config.server_type == "worker":
     num_retries, worker_failover_cnt = 0, 0
-    max_retries = config.max_retry_times or (6
-                                             if config.partial_recovery else 0)
+    max_retries = config.max_retry_times or (
+        6 if config.partial_recovery and not config.enable_sync_training
+        else 0)
     cluster, task = {}, {}
 
     num_required_ps = config.num_ps + config.num_extra_ps

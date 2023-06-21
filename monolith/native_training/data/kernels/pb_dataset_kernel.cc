@@ -51,12 +51,9 @@ using ::tensorflow::monolith_tf::FileStreamReader;
 using ::tensorflow::monolith_tf::InputCompressType;
 using ::tensorflow::monolith_tf::InstanceToExample;
 using ::tensorflow::monolith_tf::PBIterator;
+using ::tensorflow::monolith_tf::PBIteratorWithDataFormatTrans;
+using ::tensorflow::monolith_tf::PBIteratorWithDataFormatTransBaseOutput;
 using ::tensorflow::monolith_tf::StdinStreamReader;
-
-const std::string EXAMPLEBATCH = "examplebatch";
-const std::string EXAMPLE = "example";
-const std::string INSTANCE = "instance";
-const std::string PLAINTEXT = "plaintext";
 
 struct DsOptions : DataFormatOptions {
   bool use_snappy = false;
@@ -216,7 +213,7 @@ class PBDatasetOp : public DatasetOpKernel {
         const string &prefix) const override {
       return absl::make_unique<Iterator>(
           Iterator::Params{this, strings::StrCat(prefix, "::", kDatasetType)},
-          mapper_);
+          mapper_, input_pb_type_, output_pb_type_);
     }
 
     const DataTypeVector &output_dtypes() const override {
@@ -284,11 +281,49 @@ class PBDatasetOp : public DatasetOpKernel {
 
     class Iterator : public DatasetIterator<Dataset> {
      public:
-      explicit Iterator(const Params &params, FeatureNameMapper *mapper)
+      explicit Iterator(const Params &params, FeatureNameMapper *mapper,
+                        const tstring &input_pb_type,
+                        const tstring &output_pb_type)
           : DatasetIterator<Dataset>(params), mapper_(mapper) {
         mutex_lock l(mu_);
         offset_ = 0;
+        input_pb_type_ =
+            ::tensorflow::monolith_tf::data_format::StringToDataFormat(
+                input_pb_type);
+        output_pb_type_ =
+            ::tensorflow::monolith_tf::data_format::StringToDataFormat(
+                output_pb_type);
+        if (input_pb_type_ == ::tensorflow::monolith_tf::data_format::UNKNOW ||
+            output_pb_type_ == ::tensorflow::monolith_tf::data_format::UNKNOW) {
+          LOG(FATAL) << "dataformat error:" << input_pb_type << " or "
+                     << output_pb_type;
+        }
       }
+
+      class CurPBIteratorHandler {
+       public:
+        struct CurOutput : public PBIteratorWithDataFormatTransBaseOutput {
+          std::vector<Tensor> *out_tensors;
+          size_t size = 0;
+        };
+
+        template <class TResult>
+        Status HandleReaderNextStauts(const Status &s, const TResult &result) {
+          return Status::OK();
+        }
+
+        template <class TResult>
+        Status HandleResult(TResult &&result, CurOutput *output) {
+          output->size = result.ByteSize();
+          output->out_tensors->back().scalar<Variant>()() = std::move(result);
+          return Status::OK();
+        }
+        Status HandleResult(tstring &&serialized, CurOutput *output) {
+          output->out_tensors->back().scalar<tstring>()() =
+              std::move(serialized);
+          return Status::OK();
+        }
+      };
 
       Status GetNextInternal(IteratorContext *ctx,
                              std::vector<Tensor> *out_tensors,
@@ -300,50 +335,18 @@ class PBDatasetOp : public DatasetOpKernel {
         }
         out_tensors->emplace_back(ctx->allocator({}), dataset()->out_type_,
                                   TensorShape({}));
-        Status s;
-        size_t size;
-        if (dataset()->output_pb_type_ == PLAINTEXT) {
-          tstring serialized;
-          uint32_t data_source_key;
-          s = reader_->next(&offset_, &data_source_key, &serialized);
-          out_tensors->back().scalar<tstring>()() = std::move(serialized);
-        } else if (dataset()->input_pb_type_ == EXAMPLE &&
-                   dataset()->output_pb_type_ == INSTANCE) {
-          Example exa_pb;
-          s = reader_->next(&offset_, &exa_pb);
-          Instance ins_pb;
-          ExampleToInstance(&exa_pb, &ins_pb);
-          size = ins_pb.ByteSize();
-          out_tensors->back().scalar<Variant>()() = std::move(ins_pb);
-        } else if (dataset()->input_pb_type_ == INSTANCE &&
-                   dataset()->output_pb_type_ == EXAMPLE) {
-          Instance ins_pb;
-          s = reader_->next(&offset_, &ins_pb);
-          Example exa_pb;
-          InstanceToExample(&ins_pb, &exa_pb);
-          size = exa_pb.ByteSize();
-          out_tensors->back().scalar<Variant>()() = std::move(exa_pb);
-        } else if (dataset()->output_pb_type_ == EXAMPLE) {  // any -> example
-          Example exa_pb;
-          s = reader_->next(&offset_, &exa_pb);
-          size = exa_pb.ByteSize();
-          out_tensors->back().scalar<Variant>()() = std::move(exa_pb);
-        } else if (dataset()->output_pb_type_ == INSTANCE) {  // any -> instance
-          Instance ins_pb;
-          s = reader_->next(&offset_, &ins_pb);
-          size = ins_pb.ByteSize();
-          out_tensors->back().scalar<Variant>()() = std::move(ins_pb);
-        } else {  // any -> example_batch
-          ExampleBatch eb_pb;
-          s = reader_->next(&offset_, &eb_pb);
-          size = eb_pb.ByteSize();
-          out_tensors->back().scalar<Variant>()() = std::move(eb_pb);
-        }
+        PBIteratorWithDataFormatTrans<CurPBIteratorHandler> cur_iter(
+            input_pb_type_, output_pb_type_);
+        CurPBIteratorHandler::CurOutput output;
+        output.out_tensors = out_tensors;
+
+        cur_iter.GetNext(reader_.get(), &output, &offset_);
+        Status s = output.reader_status;
 
         if (s.ok()) {
           static monitoring::CounterCell *bytes_counter =
               metrics::GetTFDataBytesReadCounter(kDatasetType);
-          bytes_counter->IncrementBy(size);
+          bytes_counter->IncrementBy(output.size);
           *end_of_sequence = false;
           num_random_samples_++;
           offset_ = reader_->GetOffset();
@@ -445,6 +448,8 @@ class PBDatasetOp : public DatasetOpKernel {
         reader_.reset();
       }
 
+      ::tensorflow::monolith_tf::data_format::DataFormat input_pb_type_;
+      ::tensorflow::monolith_tf::data_format::DataFormat output_pb_type_;
       mutex mu_;
       std::unique_ptr<PBIterator> reader_ TF_GUARDED_BY(mu_);
       int64 num_random_samples_ TF_GUARDED_BY(mu_) = 0;
