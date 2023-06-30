@@ -33,6 +33,7 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/platform/env.h"
+#include "tensorflow/core/platform/threadpool.h"
 #include "tensorflow/core/profiler/lib/traceme.h"
 
 #include "absl/strings/str_format.h"
@@ -233,23 +234,43 @@ class ParseStringInstancesOp : public OpKernel {
     const int batch_size = serialized_flat.size();
     std::vector<Instance> instances(batch_size);  // has alocated memory
 
-    for (int i = 0; i < batch_size; ++i) {
-      const auto &serialized = serialized_flat(i);
-      OP_REQUIRES(ctx, instances[i].ParseFromArray(serialized.data(),
-                                                   serialized.size()),
-                  errors::FailedPrecondition("Failed to parse the Instance."));
+    {
+      profiler::TraceMe activity([]() { return "Deserialize"; });
+      auto deserialize_fn = [&](int64 begin, int64 end) {
+        for (int64 i = begin; i < end; ++i) {
+          const auto &serialized = serialized_flat(i);
+          OP_REQUIRES(
+              ctx,
+              instances[i].ParseFromArray(serialized.data(), serialized.size()),
+              errors::FailedPrecondition("Failed to parse the Instance."));
+        }
+      };
+      auto workers = ctx->device()->tensorflow_cpu_worker_threads()->workers;
+      workers->ParallelFor(batch_size,
+                           tensorflow::thread::ThreadPool::SchedulingParams(
+                               tensorflow::thread::ThreadPool::
+                                   SchedulingStrategy::kFixedBlockSize,
+                               absl::nullopt, 1),
+                           deserialize_fn);
     }
 
     InstanceParser::Output output;
-    OP_REQUIRES_OK(ctx, parser_->Parse(ctx, instances, &output));
+    {
+      profiler::TraceMe activity([]() { return "Parse"; });
+      OP_REQUIRES_OK(ctx, parser_->Parse(ctx, instances, &output));
+    }
 
     OpOutputList out_list;
-    OP_REQUIRES_OK(ctx, ctx->output_list("tensors", &out_list));
+    {
+      profiler::TraceMe activity([]() { return "PrepareOutput"; });
+      OP_REQUIRES_OK(ctx, ctx->output_list("tensors", &out_list));
 
-    OP_REQUIRES(ctx, output.tensors.size() == out_list.size(),
-                errors::FailedPrecondition("output tensor size doesn't match"));
-    for (size_t i = 0; i < output.tensors.size(); ++i) {
-      out_list.set(index_[i], output.tensors[i]);
+      OP_REQUIRES(
+          ctx, output.tensors.size() == out_list.size(),
+          errors::FailedPrecondition("output tensor size doesn't match"));
+      for (size_t i = 0; i < output.tensors.size(); ++i) {
+        out_list.set(index_[i], output.tensors[i]);
+      }
     }
 
     counter_->EmitDataConsumeNumCounter(batch_size);
@@ -281,9 +302,10 @@ class ParseStringInstancesV2Op : public ParseStringInstancesOp {
 
     for (int i = 0; i < batch_size; ++i) {
       const auto &serialized = serialized_flat(i);
-      OP_REQUIRES(ctx, instances[i].ParseFromArray(serialized.data(),
-                                                   serialized.size()),
-                  errors::FailedPrecondition("Failed to parse the Instance."));
+      OP_REQUIRES(
+          ctx,
+          instances[i].ParseFromArray(serialized.data(), serialized.size()),
+          errors::FailedPrecondition("Failed to parse the Instance."));
     }
 
     InstanceParser::Output output;
@@ -300,9 +322,10 @@ class ParseStringInstancesV2Op : public ParseStringInstancesOp {
     }
 
     Tensor *instance_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output("sparse_features", TensorShape({
-                                                                    batch_size,
-                                                                }),
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("sparse_features",
+                                             TensorShape({
+                                                 batch_size,
+                                             }),
                                              &instance_tensor));
     for (size_t i = 0; i < batch_size; ++i) {
       instance_tensor->flat<Variant>()(i) = std::move(instances[i]);
@@ -449,9 +472,10 @@ class ParseStringExamplesV2Op : public ParseStringExamplesOp {
     int batch_size = serialized_flat.size();
 
     Tensor *example_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output("sparse_features", TensorShape({
-                                                                    batch_size,
-                                                                }),
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("sparse_features",
+                                             TensorShape({
+                                                 batch_size,
+                                             }),
                                              &example_tensor));
     google::protobuf::Arena arena;
     std::vector<const Example *> example_ptrs;
@@ -575,9 +599,10 @@ class ParseStringExampleBatchOp : public OpKernel {
     google::protobuf::Arena arena;
     auto *example_batch =
         google::protobuf::Arena::CreateMessage<ExampleBatch>(&arena);
-    OP_REQUIRES(ctx, example_batch->ParseFromArray(serialized.data(),
-                                                   serialized.size()),
-                errors::FailedPrecondition("Failed to parse the Instance."));
+    OP_REQUIRES(
+        ctx,
+        example_batch->ParseFromArray(serialized.data(), serialized.size()),
+        errors::FailedPrecondition("Failed to parse the Instance."));
 
     OpOutputList out_list;
     OP_REQUIRES_OK(ctx, ctx->output_list("tensors", &out_list));
@@ -609,16 +634,18 @@ class ParseStringExampleBatchV2Op : public ParseStringExampleBatchOp {
     auto *example_batch_ptr =
         google::protobuf::Arena::CreateMessage<ExampleBatch>(&arena);
     Tensor *example_batch_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output("sparse_features", TensorShape({
-                                                                    1,
-                                                                }),
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("sparse_features",
+                                             TensorShape({
+                                                 1,
+                                             }),
                                              &example_batch_tensor));
     example_batch_tensor->scalar<Variant>()() = std::move(*example_batch_ptr);
     auto example_batch =
         example_batch_tensor->scalar<Variant>()().get<ExampleBatch>();
-    OP_REQUIRES(ctx, example_batch->ParseFromArray(serialized.data(),
-                                                   serialized.size()),
-                errors::FailedPrecondition("Failed to parse the Instance."));
+    OP_REQUIRES(
+        ctx,
+        example_batch->ParseFromArray(serialized.data(), serialized.size()),
+        errors::FailedPrecondition("Failed to parse the Instance."));
 
     OpOutputList out_list;
     OP_REQUIRES_OK(ctx, ctx->output_list("tensors", &out_list));
