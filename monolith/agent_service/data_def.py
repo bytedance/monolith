@@ -135,10 +135,17 @@ class ReplicaMeta:
                   use_archon: bool = False,
                   address_family: str = AddressFamily.IPV4) -> str:
     assert address_family in [AddressFamily.IPV4, AddressFamily.IPV6]
+    ipv4_address = self.archon_address if use_archon else self.address
+    if ipv4_address is not None and ipv4_address.startswith('0.0.0.0'):
+      ipv4_address = None
+    ipv6_address = self.archon_address_ipv6 if use_archon else self.address_ipv6
+    if ipv6_address is not None and ipv6_address.startswith('[::]'):
+      ipv6_address = None
     if address_family == AddressFamily.IPV4:
-      return self.archon_address if use_archon else self.address
+      address = ipv4_address or ipv6_address
     else:
-      return self.archon_address_ipv6 if use_archon else self.address_ipv6
+      address = ipv6_address or ipv4_address
+    return address
 
 
 class EventType(Enum):

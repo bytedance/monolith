@@ -35,7 +35,7 @@ from monolith.agent_service.data_def import ReplicaMeta
 from monolith.agent_service.backends import SyncBackend
 from monolith.native_training.model_export import export_state_utils
 from monolith.native_training.net_utils import AddressFamily
-from monolith.native_training.zk_utils import MonolithKazooClient
+from monolith.native_training.zk_utils import MonolithKazooClient, is_ipv6_only
 from monolith.native_training.metric import cli
 DEFAULT_USE_ARCHON = False
 class ReplicaWatcher(object):
@@ -50,7 +50,11 @@ class ReplicaWatcher(object):
     self._conf: AgentConfig = config
 
     self._use_archon = use_archon
-    self._zk_watch_address_family = zk_watch_address_family
+    if zk_watch_address_family == AddressFamily.IPV4 and is_ipv6_only():
+      logging.warning("zk_watch_address_family change to IPV6")
+      self._zk_watch_address_family = AddressFamily.IPV6
+    else:
+      self._zk_watch_address_family = zk_watch_address_family
 
     self.path_prefix = os.path.join('/', config.bzid, 'service',
                                     config.base_name)
@@ -420,8 +424,11 @@ class ReplicaUpdater(object):
                         str(self._conf.replica_id))
 
   def _do_register(self, replica_path: str, grpc_port: int, archon_port: int):
-    host = os.environ.get("MY_HOST_IP",
-                          socket.gethostbyname(socket.gethostname()))
+    try:
+      host = os.environ.get("MY_HOST_IP",
+                            socket.gethostbyname(socket.gethostname()))
+    except:
+      host = '0.0.0.0'
     try:
       defalut_host_ipv6 = socket.getaddrinfo(socket.gethostname(), None,
                                              socket.AF_INET6)[0][4][0]

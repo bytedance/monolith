@@ -12,15 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from datetime import datetime, timedelta
 from kazoo.client import KazooClient
 from monolith.native_training.env_utils import get_zk_auth_data
 
 _PORT = 2181
+
+
+_HOSTS = ['10.226.91.73', '10.226.86.70', '10.224.126.131', '10.224.109.135']
+_HOSTS_IPV6 = [
+    'fdbd:dc02:ff:2:1:226:91:73', 'fdbd:dc02:ff:2:1:226:86:70',
+    'fdbd:dc01:ff:1:1:224:126:131', 'fdbd:dc01:ff:1:1:224:109:135'
+]
+
+
+def is_ipv6_only():
+  _ipv4 = os.environ.get('MY_HOST_IP', os.environ.get('MY_POD_IP', None))
+  return _ipv4 is None or len(_ipv4.strip()) == 0
 _HOSTS = []
 _HOSTS_IPV6 = []
 def default_zk_servers(use_ipv6: bool = False):
-  if use_ipv6:
+  if use_ipv6 or is_ipv6_only():
     return ','.join(
         ['[{ip}]:{port}'.format(ip=ip, port=_PORT) for ip in _HOSTS_IPV6])
   return ','.join(['{ip}:{port}'.format(ip=ip, port=_PORT) for ip in _HOSTS])

@@ -1,5 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@org_tensorflow//tensorflow:tensorflow.bzl", "tf_cc_binary", "tf_cc_test", "tf_kernel_library")
+load("@pip_deps//:requirements.bzl", "requirement")
 
 package(
     default_visibility = ["//visibility:public"],
@@ -9,6 +10,7 @@ py_library(
     name = "utils",
     srcs = ["utils.py"],
     srcs_version = "PY3",
+    deps = [requirement('tensorboard')],
 )
 
 

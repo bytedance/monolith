@@ -94,7 +94,7 @@ class EmbeddingUpdateTask(MonolithModel):
   def model_fn(self, features, mode):
     with tf.device("/device:GPU:0"):
       for f_name in feature_names:
-        self.create_embedding_feature_column(f_name)
+        self.create_embedding_feature_column(f_name, occurrence_threshold=1)
 
       tf_embeddings = [lookup_tf_embedding(features, f_name, emb_dim) for f_name in feature_names]
       embeddings = self.lookup_embedding_slice(features=feature_names,

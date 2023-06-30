@@ -31,6 +31,7 @@ class AgentV3Test(unittest.TestCase):
   @classmethod
   def setUpClass(cls) -> None:
     cls.bzid = 'gip'
+    os.environ['MY_HOST_IP'] = '127.0.0.1'
     agent_conf = utils.AgentConfig(bzid='gip',
                                    deploy_type='unified',
                                    agent_version=3,

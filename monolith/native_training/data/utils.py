@@ -14,6 +14,7 @@
 
 TOBENV = False
 
+USED_FREATUE_NAMES = {}
 
 def enable_to_env():
   global TOBENV
@@ -32,4 +33,9 @@ def get_slot_from_feature_name(feature_name: str):
     slot = feature_name.split('_')[-1]
     return int(slot) if slot.isdigit() else None
   else:
-    return None
+    if feature_name in USED_FREATUE_NAMES:
+      return USED_FREATUE_NAMES[feature_name]
+    else:
+      USED_FREATUE_NAMES[feature_name] = len(USED_FREATUE_NAMES) + 1
+      return len(USED_FREATUE_NAMES)
+

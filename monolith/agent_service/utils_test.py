@@ -12,12 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 from monolith.agent_service import utils
 
 
 class ServingUtilsTest(unittest.TestCase):
+  @classmethod
+  def setUpClass(cls) -> None:
+    os.environ['MY_HOST_IP'] = '127.0.0.1'
 
   def test_gen_model_spec(self):
     name, version, signature_name = 'model', 1, 'predict'

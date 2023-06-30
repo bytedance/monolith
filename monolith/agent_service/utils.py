@@ -40,6 +40,7 @@ from tensorflow_serving.servables.tensorflow import saved_model_bundle_source_ad
 from tensorflow.core.protobuf.config_pb2 import ConfigProto
 
 from monolith.agent_service import constants
+from monolith.native_training.zk_utils import default_zk_servers, _HOSTS, _PORT, is_ipv6_only
 
 ModelState = ModelVersionStatus.State
 SEQ = re.compile(r"[ =\t]+")
@@ -368,6 +369,9 @@ class AgentConfig(TfServingConfig):
   use_metrics: bool = True
 
   def __post_init__(self):
+    self.zk_servers = self._update_zk_servers(
+      self.zk_servers, is_ipv6_only())
+
     if self.stand_alone_serving:
       self.deploy_type = DeployType(DeployType.MIXED)
     else:
@@ -780,6 +784,25 @@ class AgentConfig(TfServingConfig):
       args['deploy_type'] = kwarg.pop('server_type', None)
 
     return cls(**args)
+
+  @classmethod
+  def _update_zk_servers(cls, zk_servers, use_ipv6: bool = False):
+    if zk_servers and use_ipv6:
+      ipv4s = [] 
+      for addr in zk_servers.split(','):
+        ip_port = addr.rsplit(':', 1)
+        if len(ip_port) == 2:
+          items = ip_port[0].split('.')
+          if len(items) == 4 and all([item.isnumeric() for item in items]):
+            ipv4s.append(ip_port[0])
+      if len(ipv4s) > 0:
+        default_zk_servers_ipv4 = ','.join(['{ip}:{port}'.format(ip=ip, port=_PORT) for ip in _HOSTS])
+        if zk_servers == default_zk_servers_ipv4:
+          logging.warning('the host is is ipv6 only, but zk_servers specified is ipv4')
+          return default_zk_servers(True)
+        else:
+          raise Exception('the host is is ipv6 only, but zk_servers specified is ipv4')
+    return zk_servers
 
 
 class ZKPath(object):
