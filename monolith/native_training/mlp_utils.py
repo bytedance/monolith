@@ -18,6 +18,8 @@ import time
 import socket
 from typing import List
 from absl import logging, flags
+import signal
+from subprocess import Popen, PIPE
 
 import tensorflow as tf
 import tensorflow.python.data.experimental.service as dsvc
@@ -29,6 +31,24 @@ FLAGS = flags.FLAGS
 
 
 from monolith.native_training import yarn_runtime
+
+
+def kill_by_port(port: int):
+  process = Popen(["lsof", "-i", ":{0}".format(port)], stdout=PIPE, stderr=PIPE)
+  stdout, stderr = process.communicate()
+  try:
+    pid = None
+    for process in str(stdout.decode("utf-8")).split("\n")[1:]:       
+      data = [x for x in process.split(" ") if x]
+      if data and len(data) > 1:
+        pid = int(data[1])
+        break
+    print('pid is', pid)
+  except:
+    pass
+  if pid is not None:
+    os.kill(pid, signal.SIGKILL)
+
 
 def check_port(host: str, port: int, timeout: float = 1) -> bool:
   is_ipv6 = ':' in host.strip('[]')
