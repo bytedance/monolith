@@ -341,6 +341,39 @@ class _FusedCpuFeatureFactory(feature.FeatureFactoryFromEmbeddings):
     return apply_op.as_op()
 
 
+class _MetricsHeartBeatThread():
+
+  def __init__(self, interval=30):
+    self._interval = interval
+    self._thread = None
+    self._stopped = True
+    self._mcli = cli.get_cli(utils.get_metric_prefix())
+
+  def _heart_beat(self):
+    while not self._stopped:
+      time.sleep(self._interval)
+      self._mcli.emit_store("training_heart_beat", 
+                            int(time.time()),
+                            {"type": "running"})
+      self._mcli.flush()
+    self._mcli.emit_store("training_heart_beat", 
+                          int(time.time()), 
+                          {"type": "stopped"})
+    self._mcli.flush()
+
+  def start(self):
+    logging.info("start MetricsHeartBeat thread")
+    self._stopped = False
+    self._thread = threading.Thread(target=self._heart_beat)
+    self._thread.start()
+
+  def stop(self):
+    self._stopped = True
+    if self._thread:
+      self._thread.join(timeout=10*self._interval)
+    logging.info("MetricsHeartBeat thread stopped")
+
+
 def get_req_time(features):
   if "req_time" in features:
     return features["req_time"][0]
@@ -1958,6 +1991,7 @@ def distributed_train(config: DistributedCpuTrainingConfig,
   logging.info("Started %s %d at %s.", config.server_type, config.index, addr)
 
   estimator = None
+  metric_heart_beat_thread = None
 
   if config.server_type == "ps":
     if not config.model_name:
@@ -2003,6 +2037,9 @@ def distributed_train(config: DistributedCpuTrainingConfig,
       return filtered_cluster, task
 
     cluster, task = _get_cluster_and_task()
+    if is_chief(config):
+      metric_heart_beat_thread = _MetricsHeartBeatThread()
+      metric_heart_beat_thread.start()
     captured_exception = None
     start_ts = datetime.timestamp(datetime.now())
     logging.info("Worker Start %s", str(start_ts))
@@ -2050,6 +2087,8 @@ def distributed_train(config: DistributedCpuTrainingConfig,
     finally:
       if is_chief(config):
         try:
+          if metric_heart_beat_thread:
+            metric_heart_beat_thread.stop()
           if config.num_redundant_ps or config.num_extra_ps:
             num_required_ps += config.num_redundant_ps
             # Query the total ps cluster for shutdown.

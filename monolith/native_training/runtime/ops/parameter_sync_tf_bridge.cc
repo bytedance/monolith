@@ -20,6 +20,7 @@ namespace tensorflow {
 namespace monolith_tf {
 namespace {
 
+using ::monolith::parameter_sync::ClientConfig_TargetExtraInfo;
 using ::monolith::parameter_sync::PushRequest;
 using ::monolith::parameter_sync::PushResult;
 
@@ -101,9 +102,11 @@ Status ParameterSyncClientTfBridge::Push(const std::string& model_name,
 }
 
 Status ParameterSyncClientTfBridge::TryReplace(
-    const google::protobuf::RepeatedPtrField<std::string>& targets) {
+    const google::protobuf::RepeatedPtrField<std::string>& targets,
+    const google::protobuf::RepeatedPtrField<ClientConfig_TargetExtraInfo>&
+        targets_extra_info) {
   try {
-    sync_client_manager_->TryReplace(targets);
+    sync_client_manager_->TryReplace(targets, targets_extra_info);
     return Status::OK();
   } catch (const std::exception& e) {
     return errors::InvalidArgument(e.what());

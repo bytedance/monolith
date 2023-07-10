@@ -19,8 +19,11 @@ from pathlib import Path
 from typing import List
 from absl import logging
 import tensorflow as tf
+import traceback
 
+from monolith.native_training import utils
 from monolith.native_training import save_utils
+from monolith.native_training.metric import cli
 from monolith.native_training.model_export import saved_model_exporters
 from monolith.native_training.model_export import export_pb2
 from monolith.native_training.model_export import export_state_utils
@@ -50,6 +53,7 @@ class ExportSaverListener(tf.estimator.CheckpointSaverListener):
         get_global_step(p) for p in exempt_checkpoint_paths
     ]) if exempt_checkpoint_paths else set()
     self._dense_only = dense_only
+    self._mcli = cli.get_cli(utils.get_metric_prefix())
     logging.info('Exempt global steps={}'.format(self._exempt_checkpoint_steps))
 
   def after_save(self, session, global_step_value):
@@ -69,6 +73,7 @@ class ExportSaverListener(tf.estimator.CheckpointSaverListener):
   def _add_entry_to_state(self, export_dir: bytes, global_step_value: int):
     export_dir = export_dir.decode()
     export_dir_base = os.path.dirname(export_dir)
+    export_version = os.path.basename(export_dir)
     state = export_state_utils.get_export_saver_listener_state(export_dir_base)
 
     entry = export_pb2.ServingEntry()
@@ -78,6 +83,8 @@ class ExportSaverListener(tf.estimator.CheckpointSaverListener):
 
     export_state_utils.overwrite_export_saver_listener_state(
         export_dir_base, state)
+
+    self._update_metrics(export_dir_base, export_version)
 
   def _maybe_delete_old_entries(self, export_dir: bytes):
     export_dir = export_dir.decode()
@@ -112,3 +119,18 @@ class ExportSaverListener(tf.estimator.CheckpointSaverListener):
 
     export_state_utils.overwrite_export_saver_listener_state(
         export_dir_base, new_state)
+
+  def _update_metrics(self, export_dir_base: str, version: str):
+    try:
+      model_name = os.path.basename(export_dir_base)
+      tags = {
+        "model_name": model_name,
+      }
+      version = version.split(".")[0] # In case version is float
+      self._mcli.emit_store("export_models.latest_version",
+                            int(version), tags)
+      self._mcli.flush()
+    except Exception as e:
+      err_mesg = f"meet error when trying to emit metric: export_models.latest_version, stack trace: {traceback.format_exc()}"
+      logging.log_every_n_seconds(logging.WARNING, err_mesg, 1200)
+    

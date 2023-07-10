@@ -81,7 +81,10 @@ class ParameterSyncClientTfBridge : public ResourceBase {
               int64_t timeout_in_ms, PushResult* result) const;
 
   Status TryReplace(
-      const google::protobuf::RepeatedPtrField<std::string>& targets);
+      const google::protobuf::RepeatedPtrField<std::string>& targets,
+      const google::protobuf::RepeatedPtrField<
+          monolith::parameter_sync::ClientConfig_TargetExtraInfo>&
+          targets_extra_info);
 
   Status AddHashTableResource(const std::string& name,
                               EmbeddingHashTableTfBridge* hash_table)

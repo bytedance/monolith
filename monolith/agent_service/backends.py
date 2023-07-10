@@ -20,7 +20,7 @@ from threading import RLock, Event
 
 from absl import logging
 from dataclasses_json import dataclass_json
-from typing import Callable, Dict, List, Tuple, Any, Set
+from typing import Callable, Dict, List, Tuple, Any, Set, Union
 
 from kazoo.client import KazooState
 from kazoo.recipe.watchers import ChildrenWatch
@@ -196,7 +196,8 @@ class SyncBackend(abc.ABC):
     pass
 
   @abc.abstractmethod
-  def get_sync_targets(self, sub_graph: str) -> Tuple[str, List[str]]:
+  def get_sync_targets(
+      self, sub_graph: str) -> Tuple[str, Union[List[str], Dict]]:
     pass
 
   @abc.abstractmethod

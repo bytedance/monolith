@@ -34,8 +34,10 @@ class SyncClientManager {
       ABSL_SHARED_LOCKS_REQUIRED(mu_);
 
   bool TryReplace(
-      const google::protobuf::RepeatedPtrField<std::string>& targets)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+      const google::protobuf::RepeatedPtrField<std::string>& targets,
+      const google::protobuf::RepeatedPtrField<
+          monolith::parameter_sync::ClientConfig_TargetExtraInfo>&
+          targets_extra_info) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
  private:
   std::string PushRequestDebugString(const PushRequest& request, int index,
@@ -49,6 +51,9 @@ class SyncClientManager {
   // tables like hash_tables_.
   std::map<std::string, std::unique_ptr<SyncClientInterface>> clients_
       ABSL_GUARDED_BY(mu_);
+
+  std::map<std::string, monolith::parameter_sync::ClientConfig_TargetExtraInfo>
+      caddr_to_extra_info_map_ ABSL_GUARDED_BY(mu_);
 
   std::function<std::unique_ptr<SyncClientInterface>(const std::string&)>
       client_factory_;

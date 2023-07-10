@@ -67,4 +67,11 @@ message ClientConfig {
   repeated string targets = 3;
 
   optional int64 timeout_in_ms = 4 [default = 1000];
+
+  message TargetExtraInfo {
+    optional string idc = 1;
+    optional string cluster = 2;
+    optional int32 replica_id = 3 [default = -1];
+  }
+  repeated TargetExtraInfo targets_extra_info = 5;
 }

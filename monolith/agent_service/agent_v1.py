@@ -137,7 +137,6 @@ class ProcessNode(object):
 
   def run(self):
     waiting_sec, max_waiting_sec = 0, 3600
-    ps_set_found, dense_set_found = False, False
     if self.proc_type == ProcessType.ENTRY:
       # waiting for PS status change
       time.sleep(self._config.update_model_status_interval * 2)
@@ -148,7 +147,10 @@ class ProcessNode(object):
       ) and waiting_sec < max_waiting_sec:
         time.sleep(self._config.update_model_status_interval * 2)
         waiting_sec += self._config.update_model_status_interval * 2
-      ps_set_found = True
+      
+      if waiting_sec >= max_waiting_sec:
+        logging.error("found PS timeout")
+        return False
 
       # check at least one replica of Dense are stared
       if self._config.dense_alone:
@@ -156,14 +158,10 @@ class ProcessNode(object):
         ) and waiting_sec < max_waiting_sec:
           time.sleep(self._config.update_model_status_interval * 2)
           waiting_sec += self._config.update_model_status_interval * 2
-      dense_set_found = True
 
-    if waiting_sec >= max_waiting_sec:
-      if not ps_set_found:
-        logging.error("found PS timeout")
-      if not dense_set_found:
+      if waiting_sec >= max_waiting_sec:
         logging.error("found Dense timeout")
-      return False
+        return False
 
     # strat self
     with ServingLog(self.proc_type.name.lower(), self._tfs_log) as log_stdout:

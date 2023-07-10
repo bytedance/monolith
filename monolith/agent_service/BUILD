@@ -99,6 +99,7 @@ py_library(
         ":utils",
         "//monolith/native_training/metric:cli",
         "//monolith/native_training/model_export:export_state_utils",
+        "//monolith/native_training/runtime/parameter_sync:parameter_sync_py_proto",
         requirement("dataclasses_json"),
     ],
 )

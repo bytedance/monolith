@@ -37,6 +37,7 @@ from monolith.native_training.model_export import export_state_utils
 from monolith.native_training.net_utils import AddressFamily
 from monolith.native_training.zk_utils import MonolithKazooClient, is_ipv6_only
 from monolith.native_training.metric import cli
+from monolith.native_training.runtime.parameter_sync.parameter_sync_pb2 import ClientConfig
 DEFAULT_USE_ARCHON = False
 class ReplicaWatcher(object):
 
@@ -235,7 +236,7 @@ class ReplicaWatcher(object):
             port_grpc, port_archon = self._conf.tfs_dense_port, self._conf.tfs_dense_archon_port
           else:
             server_type = None
-          
+
           need_register_replicas: Dict[str, ReplicaMeta] = {}
           if server_type and to_removed_replicas:
             for i in self._conf.get_server_schedule_iter(server_type):
@@ -247,7 +248,7 @@ class ReplicaWatcher(object):
                   meta.archon_address = f"{meta.archon_address.split(':')[0]}:{port_archon}"
                   meta.archon_address_ipv6 = f"{meta.archon_address_ipv6.split(':')[0]}:{port_archon}"
                   need_register_replicas[replica] = meta
-          
+
           # update self.replicas
           self.replicas = replicas_tmp
 
@@ -295,7 +296,9 @@ class ReplicaWatcher(object):
           else:
             result[key] = addrs
 
-    if len(result) == 0:
+    if (server_type == ServerType.PS and
+        len(result) == 0) or (server_type == ServerType.DENSE and
+                              self._conf.dense_alone and len(result) == 0):
       logging.error(f'empty replicas {self.path_prefix}-{st}')
       logging.info('all replicas is ' + str(self.replicas))
     return result
@@ -350,6 +353,30 @@ class ReplicaWatcher(object):
     else:
       return None
 
+  def get_replicas_with_extra_info(self,
+                                   server_type: ServerType,
+                                   task: int,
+                                   idc: str = None,
+                                   cluster: str = None) -> List[str]:
+    st = ServerType.Name(server_type).lower()
+    with self._lock:
+      addr_dict = {}
+      for path, replicas in self.replicas.items():
+        zk_path = ZKPath(path)
+        dc_flag = zk_path.ship_in(idc, cluster) if self._conf.dc_aware else True
+        if zk_path.server_type == st and int(zk_path.index) == task and dc_flag:
+          if replicas:
+            addr_dict.update({
+                meta.get_address(use_archon=self._use_archon,
+                                 address_family=self._zk_watch_address_family):
+                ClientConfig.TargetExtraInfo(idc=zk_path.idc,
+                                             cluster=zk_path.cluster,
+                                             replica_id=int(replica_id))
+                for replica_id, meta in replicas.items()
+                if meta.stat == ModelState.AVAILABLE
+            })
+      return addr_dict
+
   def to_sync_wrapper(self) -> SyncBackend:
     return SyncBackendWrapper(self)
 
@@ -374,6 +401,7 @@ class ReplicaUpdater(object):
     self._entry_last_update_version = None
     self._metrics_cli = None
     self._tagkv = {'status': 'OK'}
+    self._model_latest_version = {}
     if self._conf.use_metrics:
       try:
         self.init_metrics()
@@ -383,11 +411,14 @@ class ReplicaUpdater(object):
         logging.error(f"exc_type: {exc_type}")
         logging.error(f"exc_value: {exc_value}")
         traceback.print_tb(exc_traceback_obj, limit=10)
+    else:
+      logging.info("conf.use_metrics is false")
 
   def init_metrics(self):
     default_psm = 'data.monolith_serving.' + self._conf.base_name
-    self._metrics_cli = cli.get_cli(
-        prefix=os.environ.get('TCE_PSM', default_psm))
+    prefix = os.environ.get('TCE_PSM', default_psm)
+    self._metrics_cli = cli.get_cli(prefix=prefix)
+    logging.info(f"after init_metrics, prefix is {prefix}")
 
   @property
   def zk(self):
@@ -572,41 +603,33 @@ class ReplicaUpdater(object):
     if not self._metrics_cli:
       return
 
+    # metrics_v2
     for name in self.model_names:
-      if name.startswith(TFSServerType.ENTRY):
-        model_status = self.model_monitor.get_model_status(name)
-        if model_status is not None and len(model_status) > 0:
-          model_version_status = None
-          model_status.sort(key=lambda mvs: mvs.version, reverse=True)
-          model_version_status = model_status[0]
+      model_status = self.model_monitor.get_model_status(name)
+      req_ts = int(time.time())
+      if model_status is None or len(model_status) == 0:
+        continue
+      model_status.sort(key=lambda x: x.version, reverse=True)
+      latest_model_status = model_status[0]
 
-          now_version = model_version_status.version
-          status = model_version_status.status
-          if status.error_code != ErrorCode.OK:
-            raise Exception(status.error_message)
+      latest_version = latest_model_status.version
+      if latest_model_status.status.error_code != ErrorCode.OK:
+        raise Exception(latest_model_status.status.error_message)
 
-          if (now_version != self._entry_last_update_version):
-            need_version = None
-            if self._conf.version_policy == 'latest':
-              need_version = self._get_latest_version_in_fs(name)
-            elif self._conf.version_policy == 'specific':
-              need_version = self._conf.version_data
-            self._entry_last_update_version = now_version
-            if need_version is not None and need_version != now_version:
-              self._tagkv['status'] = 'KO'
-              self._metrics_cli.emit_counter('entry_version_update',
-                                             1,
-                                             tags=self._tagkv)
-              self._metrics_cli.flush()
-              logging.info(
-                  f'need_version is {need_version}, now_version is {now_version}'
-              )
-            else:
-              self._tagkv['status'] = 'OK'
-              self._metrics_cli.emit_counter("entry_version_update",
-                                             1,
-                                             tags=self._tagkv)
-              self._metrics_cli.flush()
+      tags = {
+          "model_name": name,
+          # It's safe when clueter or idc is None
+          "idc": f"{self._conf.idc}:{self._conf.cluster}",
+          "replica_id": str(self._conf.replica_id),
+          "shard_id": str(self._conf.shard_id),
+      }
+      self._metrics_cli.emit_store("serving_model.latest_version",
+                                   latest_version, tags)
+      if name not in self._model_latest_version or self._model_latest_version[
+          name] < latest_version:
+        self._metrics_cli.emit_store("serving_model.update_ts", req_ts, tags)
+        self._model_latest_version[name] = latest_version
+      self._metrics_cli.flush()
 
     return
 
@@ -621,6 +644,8 @@ class ReplicaUpdater(object):
       except:
         exc_type, exc_value, exc_traceback_obj = sys.exc_info()
         logging.error(f"exc_type: {exc_type}")
+        logging.log_every_n_seconds(logging.WARNING, traceback.format_exc(),
+                                    600)
 
   def _reregister(self):
     while not self._has_stop:
@@ -776,10 +801,11 @@ class SyncBackendWrapper(SyncBackend):
   def subscribe_model(self, model_name: str):
     self._model_name = model_name
 
-  def get_sync_targets(self, sub_graph: str) -> Tuple[str, List[str]]:
+  def get_sync_targets(self, sub_graph: str) -> Tuple[str, Dict]:
     ps, i = sub_graph.split("_")[:2]
     assert ps == "ps"
-    return sub_graph, self._watcher.get_replicas(ServerType.PS, int(i))
+    return sub_graph, self._watcher.get_replicas_with_extra_info(
+        ServerType.PS, int(i))
 
   def start(self):
     self._watcher.watch_data()

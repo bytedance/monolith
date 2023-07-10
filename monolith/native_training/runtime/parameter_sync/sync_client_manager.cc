@@ -92,9 +92,18 @@ PushResult SyncClientManager::Push(const PushRequest& request,
                  });
 
   auto MakeTagKV = [&](const std::string& target, const std::string& status) {
+    auto it = caddr_to_extra_info_map_.find(target);
+    int replica_id = -1;
+    std::string idc_cluster = "NA";
+    if (it != caddr_to_extra_info_map_.end()) {
+      replica_id = it->second.replica_id();
+      idc_cluster =
+          absl::StrFormat("%s:%s", it->second.idc(), it->second.cluster());
+    }
     return absl::StrFormat(
-        "model_name=%s|signature_name=%s|target=%s|status=%s", model_name,
-        signature_name, target, status);
+        "model_name=%s|signature_name=%s|target=%s|status=%s|idc=%s|replica_id="
+        "%d",
+        model_name, signature_name, target, status, idc_cluster, replica_id);
   };
 
   PushResult result;
@@ -144,11 +153,20 @@ PushResult SyncClientManager::Push(const PushRequest& request,
 }
 
 bool SyncClientManager::TryReplace(
-    const google::protobuf::RepeatedPtrField<std::string>& targets) {
+    const google::protobuf::RepeatedPtrField<std::string>& targets,
+    const google::protobuf::RepeatedPtrField<
+        monolith::parameter_sync::ClientConfig_TargetExtraInfo>&
+        targets_extra_info) {
   absl::WriterMutexLock l(&mu_);
   std::unordered_set<std::string> unique_targets;
   for (const auto& target : targets) {
     unique_targets.insert(target);
+  }
+  caddr_to_extra_info_map_.clear();
+  if (targets.size() == targets_extra_info.size()) {
+    for (int i = 0; i < targets.size(); i++) {
+      caddr_to_extra_info_map_.emplace(targets[i], targets_extra_info[i]);
+    }
   }
 
   // Remove invalid targets

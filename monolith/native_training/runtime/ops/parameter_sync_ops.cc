@@ -127,7 +127,8 @@ class ParameterSyncClientOp
           return std::make_unique<
               monolith::parameter_sync::ParameterSyncClient>(target);
         });
-    (*client_bridge)->TryReplace(config_.targets());
+    (*client_bridge)
+        ->TryReplace(config_.targets(), config_.targets_extra_info());
 
     return Status::OK();
   };
@@ -154,7 +155,7 @@ class ParameterSyncOp : public OpKernel {
                                         "sure it is serialized version of "
                                         "ClientConfig"));
 
-    client->TryReplace(config.targets());
+    client->TryReplace(config.targets(), config.targets_extra_info());
     LOG_EVERY_N_SEC(INFO, 600) << client->DebugString();
     LOG_EVERY_N_SEC(INFO, 600)
         << "ClientConfig: " << config.ShortDebugString() << std::endl;

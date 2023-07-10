@@ -101,7 +101,12 @@ def refresh_sync_config(sync_backend: SyncBackend, ps_index: int) -> bytes:
   saved_model, online_ps_replicas = sync_backend.get_sync_targets(
       f"ps_{ps_index}")
   config = parameter_sync_pb2.ClientConfig()
-  config.targets.extend(online_ps_replicas)
+  if isinstance(online_ps_replicas, list):
+    config.targets.extend(online_ps_replicas)
+  elif isinstance(online_ps_replicas, dict):
+    for addr, target_extra_info in online_ps_replicas.items():
+      config.targets.append(addr)
+      config.targets_extra_info.append(target_extra_info)
   config.model_name = saved_model
   config.signature_name = "hashtable_assign"
   config.timeout_in_ms = 3000
