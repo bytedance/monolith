@@ -264,11 +264,11 @@ INPUT_FN_WRAPPER_KEY = "wrapped"
 
 class EofAwareTask:
   """A NativeTask like object that helps stop training before the eof was raised."""
-
   EOF_KEY = "__EofAwareTask_eof"
 
-  def __init__(self, task: native_task.NativeTask):
+  def __init__(self, task: native_task.NativeTask, use_dataservice: bool = False):
     self._ori_task = task
+    self.use_dataservice = use_dataservice
 
   def create_input_fn(self, mode):
 
@@ -286,14 +286,19 @@ class EofAwareTask:
         # the original data after we wrap the input_fn output.
         def map_fn(features, eof):
           if isinstance(features, dict):
+            logging.info(EofAwareTask.EOF_KEY)
             return {**features, EofAwareTask.EOF_KEY: eof}
+          logging.info('map_fn keys: 1, 2')
           return {"1": features, "2": eof}
 
         return ds.map(map_fn)
 
       return new_input_fn
 
-    return new_input_fn_factory(input_fn)
+    if self.use_dataservice:
+      return new_input_fn_factory(input_fn)
+    else:
+      return input_fn
 
   def create_model_fn(self):
 
@@ -319,7 +324,10 @@ class EofAwareTask:
 
       return new_model_fn
 
-    return new_model_fn_factory(model_fn)
+    if self.use_dataservice:
+      return new_model_fn_factory(model_fn)
+    else:
+      return model_fn
 
   def __getattr__(self, name):
     return getattr(self._ori_task, name)
@@ -338,4 +346,7 @@ class EofAwareTask:
 
     def after_run(self, run_context, run_values):
       if run_values.results:
+        logging.info(f'rank {hvd_lib.rank()} request_stop, results is {run_values.results}, before')
         run_context.request_stop()
+        logging.info(f'rank {hvd_lib.rank()} request_stop, results is {run_values.results}, after')
+

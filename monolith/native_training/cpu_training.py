@@ -1792,9 +1792,9 @@ def _do_worker_train(config: DistributedCpuTrainingConfig,
         session_creation_timeout_secs=config.session_creation_timeout_secs,
         device_fn=config.device_fn)
 
-    if config.enable_partial_sync_training:
-      native_task = sync_training_hooks.EofAwareTask(native_task)
     training = CpuTraining(config, native_task)
+    if config.enable_partial_sync_training or config.use_dataservice:
+      training = sync_training_hooks.EofAwareTask(training, config.use_dataservice)
     estimator = tf.estimator.Estimator(training.create_model_fn(),
                                        config=run_config)
 
@@ -2145,8 +2145,8 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
   if not isinstance(task, NativeTask):
     raise ValueError(
         "distributed train only support NativeTask. Got {}".format(task))
-  task = sync_training_hooks.EofAwareTask(task)
   training = CpuTraining(config, task)
+  training = sync_training_hooks.EofAwareTask(training, config.use_dataservice)
   session_config = tf.compat.v1.ConfigProto(allow_soft_placement=False,
                                             log_device_placement=False)
   # CPU Configs
