@@ -306,9 +306,13 @@ class MonolithBaseModel(NativeTask, ABC):
     else:
       op_fields.append(pred)
     fmt = self.p.delimiter.join(["{}"] * len(op_fields)) + "\n"
-    result = tf.map_fn(fn=lambda t: tf.strings.format(fmt, t),
-                       elems=tuple(op_fields),
-                       fn_output_signature=tf.string)
+    result = tf.nest.map_structure(
+      tf.stop_gradient,
+      tf.map_fn(fn=lambda t: tf.strings.format(fmt, t, summarize=-1),
+                elems=tuple(op_fields),
+                dtype=tf.string,
+                fn_output_signature=tf.string)
+    )
     write_op = op_file.append(tf.strings.reduce_join(result))
     return op_file, write_op
 

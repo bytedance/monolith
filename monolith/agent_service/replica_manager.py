@@ -649,11 +649,11 @@ class ReplicaUpdater(object):
 
   def _reregister(self):
     while not self._has_stop:
-      time.sleep(1)
+      time.sleep(10)
       if self._should_reregister:
         self.register()
         self._should_update = True
-        self._should_reregister = False
+        # self._should_reregister = False
 
   def start(self):
     self.model_monitor.start()
