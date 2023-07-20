@@ -452,6 +452,8 @@ class CpuTrainingConfig:
     :param items_input_has_sort_id: If items input file has sort_id flag
     :param items_input_kafka_dump: If items input file has kafka_dump flag
     :param items_input_kafka_dump_prefix: If items input file has kafka_dump_prefix flag
+    :param save_summary_steps: Save summaries every this many steps
+    :param log_step_count_steps: The frequency, in number of global steps, that the global step and the loss will be logged during training
   """
 
   server_type: str = "worker"
@@ -522,7 +524,9 @@ class CpuTrainingConfig:
   items_input_kafka_dump: bool = False
   items_input_kafka_dump_prefix: bool = False
   device_fn: Callable[[tf.Operation], str] = None
-  use_dataservice : bool = None
+  use_dataservice: bool = None
+  save_summary_steps: int = 100
+  log_step_count_steps: int = 100
 
   @property
   def enable_full_sync_training(self):
@@ -1787,8 +1791,8 @@ def _do_worker_train(config: DistributedCpuTrainingConfig,
     run_config = tf.estimator.RunConfig(
         model_dir=config.model_dir,
         session_config=session_config,
-        save_summary_steps=100 * config.num_workers,
-        log_step_count_steps=100 * config.num_workers,
+        save_summary_steps=config.save_summary_steps * config.num_workers,
+        log_step_count_steps=config.log_step_count_steps * config.num_workers,
         session_creation_timeout_secs=config.session_creation_timeout_secs,
         device_fn=config.device_fn)
 
@@ -1914,8 +1918,8 @@ def _do_worker_feature_engineering(target, config: DistributedCpuTrainingConfig,
   run_config = tf.estimator.RunConfig(
       model_dir=config.model_dir,
       session_config=session_config,
-      save_summary_steps=100 * config.num_workers,
-      log_step_count_steps=100 * config.num_workers,
+      save_summary_steps=config.save_summary_steps * config.num_workers,
+      log_step_count_steps=config.log_step_count_steps * config.num_workers,
       session_creation_timeout_secs=config.session_creation_timeout_secs)
 
   device_fn = _get_replica_device_setter(run_config)
@@ -2181,9 +2185,9 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
       device_fn=device_utils.default_device_fn,
       session_config=session_config,
       save_summary_steps=None if config.index != 0 else int(
-          os.environ.get('MONOLITH_SAVE_SUMMARY_INTERVAL', '1000000')),
+          os.environ.get('MONOLITH_SAVE_SUMMARY_INTERVAL', config.save_summary_steps)),
       log_step_count_steps=params.train.max_steps if config.index != 0 else int(
-          os.environ.get('MONOLITH_ROOT_LOG_INTERVAL', '100')))
+          os.environ.get('MONOLITH_ROOT_LOG_INTERVAL', config.log_step_count_steps)))
 
   estimator = tf.estimator.Estimator(training.create_model_fn(),
                                      config=run_config)
@@ -2279,7 +2283,9 @@ def local_train_internal(params: InstantiableParams,
   session_config.graph_options.rewrite_options.disable_meta_optimizer = True
 
   config = tf.estimator.RunConfig(model_dir=model_dir,
-                                  session_config=session_config)
+                                  session_config=session_config,
+                                  save_summary_steps=conf.save_summary_steps,
+                                  log_step_count_steps=conf.log_step_count_steps)
   estimator = tf.estimator.Estimator(training.create_model_fn(), config=config)
   estimator.train(training.create_input_fn(tf.estimator.ModeKeys.TRAIN),
                   steps=steps)
@@ -2297,7 +2303,9 @@ def local_train_internal(params: InstantiableParams,
     task = params.instantiate()
     training = CpuTraining(conf, task)
     config = tf.estimator.RunConfig(model_dir=model_dir,
-                                    session_config=session_config)
+                                    session_config=session_config,
+                                    save_summary_steps=conf.save_summary_steps,
+                                    log_step_count_steps=conf.log_step_count_steps)
     estimator = tf.estimator.Estimator(training.create_model_fn(), config=config)
     estimator.train(training._task.create_item_input_fn(
         items_path), steps=steps)
@@ -2359,7 +2367,9 @@ def local_feature_engineering_internal(
   if not model_dir:
     model_dir = "/tmp/{}/{}".format(getpass.getuser(), params.name)
   run_config = tf.estimator.RunConfig(model_dir=model_dir,
-                                      session_config=session_config)
+                                      session_config=session_config,
+                                      save_summary_steps=conf.save_summary_steps,
+                                      log_step_count_steps=conf.log_step_count_steps)
 
   device_fn = _get_replica_device_setter(run_config)
 

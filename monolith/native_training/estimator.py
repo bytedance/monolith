@@ -130,6 +130,8 @@ class RunConfig:
     continue_training (:obj:`bool`): 是clear_nn为true时, global_step是否继续保持, 默认为false.
     reload_alias_map (:obj:`dict`): 在加载模型时, 如果由于某些原因, 变量名字不一致, 可以用reload_alias_map指定新老名字的对应关系
     enable_alias_map_auto_gen: 是否需要自动生成 alias_map
+    save_summary_steps: 每隔多少global_step保存一次summary
+    log_step_count_steps: 每隔多少global_step打印一次loss
   """
 
   # basic
@@ -179,6 +181,9 @@ class RunConfig:
   kafka_group_id: str = None
   kafka_servers: str = None
 
+  save_summary_steps: int = 100
+  log_step_count_steps: int = 100
+
   def to_runner_config(self) -> RunnerConfig:
     conf = RunnerConfig(
         restore_dir=self.restore_dir,
@@ -190,7 +195,9 @@ class RunConfig:
         enable_alias_map_auto_gen=self.enable_alias_map_auto_gen,
         kafka_topics=self.kafka_topics,
         kafka_group_id=self.kafka_group_id,
-        kafka_servers=self.kafka_servers)
+        kafka_servers=self.kafka_servers,
+        save_summary_steps=self.save_summary_steps,
+        log_step_count_steps=self.log_step_count_steps)
     for name, _ in get_type_hints(RunConfig).items():
       value = getattr(self, name)
       if hasattr(conf, name) and value is not None:
@@ -350,7 +357,8 @@ class Estimator(object):
       self.__est = tf.estimator.Estimator(
           self._task.create_model_fn(),
           model_dir=self._runner_conf.model_dir,
-          config=tf.estimator.RunConfig(log_step_count_steps=1),
+          config=tf.estimator.RunConfig(
+              log_step_count_steps=self._runner_conf.log_step_count_steps),
           warm_start_from=self._warm_start_from)
 
     return self.__est
