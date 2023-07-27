@@ -169,7 +169,7 @@ class ProcessNode(object):
       self._popen = subprocess.Popen(self._cmd.split(),
                                      shell=self._shell,
                                      stderr=self._stderr,
-                                     stdout=log_stdout,
+                                     stdout=log_stdout if "MLP_POD_NAME" not in os.environ else None,
                                      env=self._env)
       logging.info(f'pid of <{self._cmd}> is {self._popen.pid}')
 

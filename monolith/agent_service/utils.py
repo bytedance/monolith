@@ -41,6 +41,7 @@ from tensorflow.core.protobuf.config_pb2 import ConfigProto
 
 from monolith.agent_service import constants
 from monolith.native_training.zk_utils import default_zk_servers, _HOSTS, _PORT, is_ipv6_only
+import hashlib
 
 ModelState = ModelVersionStatus.State
 SEQ = re.compile(r"[ =\t]+")
@@ -185,6 +186,8 @@ def replica_id_from_pod_name() -> int:
       pod_name = os.environ.get('MY_POD_NAME', 'pod_name')
       md5.update(pod_name.encode('utf-8'))
       return int(md5.hexdigest()[10:20], base=16)
+    else:
+      return -1
   except Exception as e:
     return -1
 
@@ -317,6 +320,11 @@ class AgentConfig(TfServingConfig):
     :param tfs_port_grpc: service grpc port
     :param tfs_port_http: service http port
     :param use_metrics: whether use metrics
+    :param file_system_poll_wait_seconds_ps: Interval in seconds between each poll of the filesystem for new model version.
+                                          If set to zero poll will be exactly done once and not periodically. Setting
+                                          this to negative value will disable polling entirely causing ModelServer to
+                                          indefinitely wait for a new model at startup. Negative values are reserved for
+                                          testing purposes only for ps.
   '''
 
   bzid: str = None
@@ -353,6 +361,7 @@ class AgentConfig(TfServingConfig):
   fetch_ps_long_conn_enable: bool = True
   fetch_ps_retry: int = 2
   aio_thread_num: int = 30
+  file_system_poll_wait_seconds_ps: int = 0
   # for deep rough sort
   rough_sort_model_name: str = None
   rough_sort_model_local_path: str = DefaultRoughSortModelLocalPath
@@ -463,7 +472,7 @@ class AgentConfig(TfServingConfig):
       self.agent_port = int(os.environ.get('PORT2', find_free_port()))
 
     if self.agent_version == 1:
-      self.replica_id = int(os.environ.get('REPLICA_ID', -1))
+      self.replica_id = replica_id_from_pod_name()
     else:
       replica_id = int(os.environ.get('REPLICA_ID', -1))
       if replica_id == -1:
@@ -645,9 +654,9 @@ class AgentConfig(TfServingConfig):
       if key == 'file_system_poll_wait_seconds':
         if self.agent_version == 1:
           if server_type == TFSServerType.PS:
-            flags.append('--file_system_poll_wait_seconds=0')
+            flags.append(f'--file_system_poll_wait_seconds={self.file_system_poll_wait_seconds_ps}')
           elif value != default:  # entry,dense
-            flags.append('--file_system_poll_wait_seconds={value}')
+            flags.append(f'--file_system_poll_wait_seconds={value}')
       elif value != default:
         if clz == bool:
           flags.append(f'--{key}={str(value).lower()}')
@@ -811,13 +820,16 @@ class ZKPath(object):
   )
 
   def __init__(self, path: str):
+    logging.info(f'[INFO] ZKPATH path {path}')
     self.path = path
 
     if path is None or len(path) != 0:
       matched = self.PAT.match(self.path)
       if matched:
+        logging.info("[INFO] path matched")
         self._group_dict = matched.groupdict()
       else:
+        logging.info("[INFO] path not matched")
         self._group_dict = None
     else:
       self._group_dict = None

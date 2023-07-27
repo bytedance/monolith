@@ -43,6 +43,7 @@ def run_agent(agent_config_path: str, tfs_log: str,
               dense_service_index: int):
   if use_mps:
     os.environ["REPLICA_ID"] = str(replica_id)
+    logging.info(f"[INFO] the corresponding replica_id {replica_id}")
     os.environ["DENSE_SERVICE_IDX"] = str(dense_service_index)
     tfs_log = "{}.mps{}".format(tfs_log, dense_service_index)
 

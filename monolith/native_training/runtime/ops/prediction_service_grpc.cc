@@ -28,6 +28,7 @@ limitations under the License.
 #include "absl/time/clock.h"
 #include "grpcpp/create_channel.h"
 #include "grpcpp/security/credentials.h"
+#include "grpcpp/support/channel_arguments.h"
 
 namespace tensorflow {
 namespace monolith_tf {
@@ -42,7 +43,8 @@ absl::Status FromGrpcStatus(const ::grpc::Status& s) {
 }
 
 int GetCallbackThreadNum() {
-  const char * thread_num_str = std::getenv("MONOLITH_GRPC_REMOTE_CALLBACK_THREADS");
+  const char* thread_num_str =
+      std::getenv("MONOLITH_GRPC_REMOTE_CALLBACK_THREADS");
   if (thread_num_str == nullptr) {
     return 10;
   }
@@ -52,11 +54,13 @@ int GetCallbackThreadNum() {
 }  // namespace
 
 ::grpc::CompletionQueue* GetSharedCompletionQueue() {
-  static CompletionQueueWithThreads* cq_with_threads = new CompletionQueueWithThreads(GetCallbackThreadNum());
+  static CompletionQueueWithThreads* cq_with_threads =
+      new CompletionQueueWithThreads(GetCallbackThreadNum());
   return cq_with_threads->GetCompletionQueue();
 }
 
-CompletionQueueWithThreads::CompletionQueueWithThreads(const size_t thread_num) {
+CompletionQueueWithThreads::CompletionQueueWithThreads(
+    const size_t thread_num) {
   queues_ = std::vector<::grpc::CompletionQueue>(thread_num);
   for (size_t i = 0; i < thread_num; ++i) {
     auto* cq = &queues_[i];
@@ -81,15 +85,20 @@ CompletionQueueWithThreads::~CompletionQueueWithThreads() {
   }
 }
 
-::grpc::CompletionQueue * CompletionQueueWithThreads::GetCompletionQueue() {
+::grpc::CompletionQueue* CompletionQueueWithThreads::GetCompletionQueue() {
   return &queues_[queue_idx_++ % queues_.size()];
 }
 
 PredictionServiceGrpcPerAddress::PredictionServiceGrpcPerAddress(
     const std::string& target_address) {
   // TODO(b/159739577): Set security channel from incoming rpc request.
-  auto channel = ::grpc::CreateChannel(target_address,
-                                       ::grpc::InsecureChannelCredentials());
+  // auto channel = ::grpc::CreateChannel(target_address,
+  //                                      ::grpc::InsecureChannelCredentials());
+  ::grpc::ChannelArguments arg;
+  arg.SetMaxReceiveMessageSize(INT32_MAX);
+  arg.SetMaxSendMessageSize(INT32_MAX);
+  auto channel = ::grpc::CreateCustomChannel(
+      target_address, ::grpc::InsecureChannelCredentials(), arg);
   stub_ = tensorflow::serving::PredictionService::NewStub(channel);
 }
 
@@ -109,8 +118,8 @@ void PredictionServiceGrpcPerAddress::Predict(
         callback(FromGrpcStatus(status), std::forward<DoneCallback>(rpc_done));
       };
 
-  new RemotePredictCQTag(GetSharedCompletionQueue(), rpc, &stub_, request, response,
-                         std::move(wrapped_callback));
+  new RemotePredictCQTag(GetSharedCompletionQueue(), rpc, &stub_, request,
+                         response, std::move(wrapped_callback));
 }
 
 }  // namespace monolith_tf
