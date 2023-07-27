@@ -71,11 +71,18 @@ def write_deep_insight(features: Dict[str, tf.Tensor],
         sample_ratio=sample_ratio,
         return_msgs=is_fake)
   else:
-    labels = tf.stack(labels_list)
-    preds = tf.stack(preds_list)
+    labels = tf.stack([label if label.shape.rank == 1 else  tf.reshape(label, (-1,))
+                       for label in labels_list if label is not None])
+    preds = tf.stack([pred if pred.shape.rank == 1 else  tf.reshape(pred, (-1,))
+                      for pred in preds_list if pred is not None])
     if not sample_rates_list:
       sample_rates_list = [tf.reshape(features["sample_rate"], [-1])
                           ] * len(targets)
+    elif isinstance(sample_rates_list, (tuple, list)):
+      sample_rates_list = [sample_rate if sample_rate.shape.rank == 1 else  tf.reshape(sample_rate, (-1,))
+                           for sample_rate in sample_rates_list if sample_rate is not None]
+    else:
+      raise Exception("sample_rates_list error!")
     sample_rates = tf.stack(sample_rates_list)
     if "uid" not in extra_fields_keys:
       extra_fields_keys.append("uid")
