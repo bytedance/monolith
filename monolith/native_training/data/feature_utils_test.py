@@ -27,7 +27,7 @@ from monolith.native_training.data.parsers import parse_instances, \
 from monolith.native_training.model_export.data_gen_utils import lg_header, sort_header
 from monolith.native_training.data.feature_utils import (
     add_action, add_label, feature_combine, filter_by_fids, filter_by_label,
-    filter_by_value, scatter_label, switch_slot, map_id, use_field_as_label,
+    filter_by_value, scatter_label, switch_slot, switch_slot_batch, map_id, use_field_as_label,
     label_upper_bound, label_normalization, multi_label_gen, string_to_variant,
     variant_to_zeros, has_variant)
 
@@ -75,7 +75,8 @@ group_slots = [
 ]
 
 
-def parse_instance_or_example(tensor: tf.Tensor, out_type):
+def parse_instance_or_example(tensor: tf.Tensor, out_type,
+                              extra_sparse_features: List[str] = None):
   fidv1_features = [
       1, 2, 32, 33, 36, 38, 42, 50, 54, 56, 60, 66, 120, 150, 180, 182, 192,
       220, 333, 410, 412, 422, 446
@@ -94,7 +95,8 @@ def parse_instance_or_example(tensor: tf.Tensor, out_type):
   else:
     return parse_examples(
         tensor,
-        sparse_features=[f'fc_slot_{slot}' for slot in fidv1_features],
+        sparse_features=[f'fc_slot_{slot}' for slot in fidv1_features] + \
+          extra_sparse_features if extra_sparse_features else [],
         dense_features=['label'],
         dense_feature_shapes=[2],
         dense_feature_types=[tf.float32],
@@ -104,7 +106,8 @@ def parse_instance_or_example(tensor: tf.Tensor, out_type):
         extra_feature_shapes=[1, 1, 1, 3, 1])
 
 
-def parse_example_batch(tensor: tf.Tensor, out_type):
+def parse_example_batch(tensor: tf.Tensor, out_type,
+                        extra_sparse_features: List[str] = None):
   if out_type == PbType.INSTANCE:
     feature_dict = parse_instances(tensor,
                                    fidv1_features=list(features.values()),
@@ -118,7 +121,8 @@ def parse_example_batch(tensor: tf.Tensor, out_type):
                                    extra_feature_shapes=[1, 1, 1, 3, 1])
   else:
     feature_dict = parse_examples(tensor,
-                                  sparse_features=list(features.keys()),
+                                  sparse_features=list(features.keys()) + \
+                                    extra_sparse_features if extra_sparse_features else [],
                                   dense_features=['label'],
                                   dense_feature_shapes=[2],
                                   dense_feature_types=[tf.float32],
@@ -127,9 +131,10 @@ def parse_example_batch(tensor: tf.Tensor, out_type):
                                       'video_finish_percent'
                                   ],
                                   extra_feature_shapes=[1, 1, 1, 3, 1])
-    feature_dict['f_page'] = switch_slot(feature_dict['f_page'], slot=306)
-    feature_dict['f_user_id-f_goods_tags_terms'] = feature_combine(
-        feature_dict['f_user_id'], feature_dict['f_goods_tags_terms'], slot=505)
+    # print(feature_dict)
+    # feature_dict['f_page'] = switch_slot(feature_dict['f_page'], slot=306)
+    # feature_dict['f_user_id-f_goods_tags_terms'] = feature_combine(
+    #     feature_dict['f_user_id'], feature_dict['f_goods_tags_terms'], slot=505)
   return feature_dict
 
 
@@ -165,7 +170,6 @@ def write_instance_into_file(file: BinaryIO, instance):
 
 
 class DataOpsTest(tf.test.TestCase):
-  '''
   def pb_dataset_target(self,
                         input_pb_type,
                         output_pb_type,
@@ -862,7 +866,6 @@ class DataOpsTest(tf.test.TestCase):
         except tf.errors.OutOfRangeError:
           self.assertTrue(False)
     os.remove(file_name)
-  '''
 
   def test_string_to_variant(self):
     insts = []
@@ -925,6 +928,77 @@ class DataOpsTest(tf.test.TestCase):
       with self.session(config=config) as sess:
         element_result = sess.run(out)
         self.assertTrue(element_result)
+
+  def test_switch_slot_batch(self):
+    input_pb_type = PbType.EXAMPLE
+    output_pb_type = PbType.EXAMPLE
+    if input_pb_type == PbType.EXAMPLE:
+      lagrangex_header = False
+      has_sort_id, kafka_dump, kafka_dump_prefix = True, True, False
+      file_name = "monolith/native_training/data/training_instance/example.pb"
+      variant_type = 'example'
+    else:
+      lagrangex_header = True
+      has_sort_id, kafka_dump, kafka_dump_prefix = False, False, False
+      file_name = "monolith/native_training/data/training_instance/examplebatch.data"
+      variant_type = 'example_batch'
+
+    ss_meta, shared_slot = {}, 10
+    selected_slots = [50, 54, 56, 60, 66, 120, 150, 180, 182]
+    for slot in selected_slots:
+      if slot in {60, 66, 120, 150}:
+        ss_meta[f'fc_slot_{slot}'] = (False, shared_slot)
+      else:
+        ss_meta[f'fc_slot_{slot}'] = (True, shared_slot)
+
+    def parser(tensor: tf.Tensor):
+      extra_sf = []
+      for name, (inplace, _) in ss_meta.items():
+        if not inplace:
+          extra_sf.append(f'{name}_share')
+      if output_pb_type == PbType.PLAINTEXT:
+        return parse_instance_or_example(tensor, input_pb_type, extra_sf)
+      elif input_pb_type != PbType.EXAMPLEBATCH:
+        return parse_instance_or_example(tensor, output_pb_type, extra_sf)
+      else:
+        return parse_example_batch(tensor, output_pb_type, extra_sf)
+
+    with tf.Graph().as_default():
+      config = tf.compat.v1.ConfigProto()
+      config.graph_options.rewrite_options.disable_meta_optimizer = True
+      with self.session(config=config) as sess:
+        dataset = PBDataset(file_name=file_name,
+                            lagrangex_header=lagrangex_header,
+                            has_sort_id=has_sort_id,
+                            kafka_dump=kafka_dump,
+                            kafka_dump_prefix=kafka_dump_prefix,
+                            input_pb_type=input_pb_type,
+                            output_pb_type=output_pb_type)
+        if output_pb_type == PbType.EXAMPLE:
+          batch_size = 4
+          dataset = dataset.batch(batch_size, drop_remainder=True)
+        dataset = dataset.map(lambda batch: switch_slot_batch(batch, ss_meta, variant_type))
+        dataset = dataset.map(parser)  # convert fid v1 -> v2
+        it = tf.compat.v1.data.make_one_shot_iterator(dataset)
+        element = it.get_next()
+
+        for _ in range(10):
+          try:
+            element_result = sess.run(element)
+            for name, (inplace, slot) in ss_meta.items():
+              if not inplace:
+                ragged_tensor = element_result[f'{name}_share']
+                for value in ragged_tensor.values:
+                  self.assertEqual(value >> 48, shared_slot)
+                ragged_tensor = element_result[name]
+                for value in ragged_tensor.values:
+                  self.assertNotEqual(value >> 48, shared_slot)
+              else:
+                ragged_tensor = element_result[name]
+                for value in ragged_tensor.values:
+                  self.assertEqual(value >> 48, shared_slot)
+          except tf.errors.OutOfRangeError:
+            break
 
 
 if __name__ == '__main__':

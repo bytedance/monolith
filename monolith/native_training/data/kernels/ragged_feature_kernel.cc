@@ -14,13 +14,21 @@
 
 #include <string>
 #include <vector>
+#include <unordered_map>
+
 
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
-
+#include "idl/matrix/proto/example.pb.h"
+#include "monolith/native_training/data/training_instance/cc/pb_variant.h"
+#include "monolith/native_training/data/training_instance/cc/reader_util.h"
 namespace tensorflow {
 namespace monolith_tf {
+
+using Example = ::monolith::io::proto::Example;
+using ExampleBatch = ::monolith::io::proto::ExampleBatch;
+using NamedFeature = ::monolith::io::proto::NamedFeature;
 
 class SwitchSlotOp : public OpKernel {
  public:
@@ -82,6 +90,194 @@ class SwitchSlotOp : public OpKernel {
   }
 
   int slot_, fid_version_;
+};
+
+
+enum class VariantType { PBExampleBatch, PBExample };
+
+
+class SwitchSlotBatchOp : public OpKernel {
+ public:
+  using OpKernel::OpKernel;
+  explicit SwitchSlotBatchOp(OpKernelConstruction *ctx) : OpKernel(ctx) {
+    std::vector<std::string> features;
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("features", &features));
+    std::vector<int> slots;
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("slots", &slots));
+    std::vector<bool> inplaces;
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("inplaces", &inplaces));
+    OP_REQUIRES(ctx, features.size() == slots.size(),
+      errors::FailedPrecondition("the length of features and slots are not equal")
+    );
+    OP_REQUIRES(ctx, features.size() == inplaces.size(),
+      errors::FailedPrecondition("the length of features and inplaces are not equal")
+    );
+
+    for (int i = 0; i < features.size(); ++i) {
+      shared_meta_.emplace(std::piecewise_construct,
+                           std::forward_as_tuple(features[i]),
+                           std::forward_as_tuple(inplaces[i], slots[i]));
+    }
+
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("suffix", &suffix_));
+    std::string variant_type;
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("variant_type", &variant_type));
+    if (variant_type == "example") {
+      variant_type_ = VariantType::PBExample;
+    } else if (variant_type == "example_batch") {
+      variant_type_ = VariantType::PBExampleBatch;
+    } else {
+      OP_REQUIRES_OK(ctx, errors::FailedPrecondition(
+        "variant_type error, variant_type must be example or example_batch!"));
+    }
+  }
+
+  void Compute(OpKernelContext *ctx) override {
+    const Tensor *pb_input;
+    OP_REQUIRES_OK(ctx, ctx->input("pb_input", &pb_input));
+    Tensor *pb_output;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("pb_output",
+                                              pb_input->shape(),
+                                              &pb_output));
+    google::protobuf::Arena arena;
+    if (variant_type_ == VariantType::PBExampleBatch) {
+      switch_example_batch(pb_input, pb_output, &arena);
+    } else {
+      switch_example(pb_input, pb_output, &arena);
+    }
+  }
+
+ private:
+  void switch_example(const Tensor *pb_input, Tensor *pb_output, google::protobuf::Arena *arena) {
+    auto variant_flat = pb_input->flat<Variant>();
+    auto out_variant_flat = pb_output->flat<Variant>();
+    for (int i=0; i < variant_flat.size(); ++i) {
+      const Example *example = variant_flat(i).get<Example>();
+      Example *new_example = switch_slot(*example, arena);
+      out_variant_flat(i) = *new_example;
+    }
+  }
+
+  void switch_example_batch(const Tensor *pb_input, Tensor *pb_output, google::protobuf::Arena *arena) {
+    const Variant &variant = pb_input->scalar<Variant>()();
+    auto out_variant_scalar = pb_output->scalar<Variant>();
+    const ExampleBatch *eb = variant.get<ExampleBatch>();
+    ExampleBatch *new_eb = switch_slot(*eb, arena);
+    out_variant_scalar() = *new_eb;
+  }
+
+  Example *switch_slot(const Example &example, google::protobuf::Arena *arena) {
+    auto *base = google::protobuf::Arena::CreateMessage<Example>(arena);
+    base->CopyFrom(example);
+    for (int i = 0; i < example.named_feature_size(); ++i) {
+      const auto &name = base->named_feature(i).name();
+      auto it = shared_meta_.find(name);
+      if (it != shared_meta_.end()) {
+        bool inplace = it->second.first;
+        uint64_t shared_slot = it->second.second;
+        NamedFeature *named_feature = base->mutable_named_feature(i);
+
+        if (inplace) {
+          auto *feature = named_feature->mutable_feature();
+          if (feature->has_fid_v1_list()) {
+            const auto &size = feature->mutable_fid_v1_list()->value_size();
+            auto *data = feature->mutable_fid_v1_list()->mutable_value()->mutable_data();
+            for (int j = 0; j < size; ++j) {
+              data[j] = switch_slot_v1(data[j], shared_slot);
+            }
+          }
+
+          if (feature->has_fid_v2_list()) {
+            const auto &size = feature->mutable_fid_v2_list()->value_size();
+            auto *data = feature->mutable_fid_v2_list()->mutable_value()->mutable_data();
+            for (int j = 0; j < size; ++j) {
+              data[j] = switch_slot_v2(data[j], shared_slot);
+            }
+          }
+        } else {
+          auto &feature = named_feature->feature();
+          auto *additive_nf = base->add_named_feature();
+          additive_nf->set_id(named_feature->id());
+          additive_nf->set_name(name + "_" + suffix_);
+          additive_nf->set_sorted_id(named_feature->sorted_id());
+          if (feature.has_fid_v1_list()) {
+            auto *fid_v1_list = additive_nf->mutable_feature()->mutable_fid_v1_list();
+            for (const auto &value : feature.fid_v1_list().value()) {
+              fid_v1_list->add_value(switch_slot_v1(value, shared_slot));
+            }
+          }
+          if (feature.has_fid_v2_list()) {
+            auto *fid_v2_list = additive_nf->mutable_feature()->mutable_fid_v2_list();
+            for (const auto &value : feature.fid_v2_list().value()) {
+              fid_v2_list->add_value(switch_slot_v2(value, shared_slot));
+            }
+          }
+        }
+      }
+    }
+    return base;
+  }
+
+  ExampleBatch *switch_slot(const ExampleBatch &example_batch, google::protobuf::Arena *arena) {
+    auto *base = google::protobuf::Arena::CreateMessage<ExampleBatch>(arena);
+    base->CopyFrom(example_batch);
+
+    for (int i = 0; i < example_batch.named_feature_list_size(); ++i) {
+      auto *named_feature_list = base->mutable_named_feature_list(i);
+      const auto &name = named_feature_list->name();
+      auto it = shared_meta_.find(name);
+      if (it != shared_meta_.end()) {
+        bool inplace = it->second.first;
+        uint64_t shared_slot = it->second.second;
+        if (inplace) {
+          for (int j = 0; j < named_feature_list->feature_size(); ++j) {
+            auto *feature = named_feature_list->mutable_feature(j);
+            if (feature->has_fid_v1_list()) {
+              auto *values = named_feature_list->mutable_feature(j)->mutable_fid_v1_list()->mutable_value();
+              auto *data = values->mutable_data();
+              for (int k = 0; k < values->size(); ++k) {
+                data[k] = switch_slot_v1(data[k], shared_slot);
+              }
+            }
+            if (feature->has_fid_v2_list()) {
+              auto *values = feature->mutable_fid_v2_list()->mutable_value();
+              auto *data = values->mutable_data();
+              for (int k = 0; k < values->size(); ++k) {
+                data[k] = switch_slot_v2(data[k], shared_slot);
+              }
+            }
+          }
+        } else {
+          auto *additive_nfl = base->add_named_feature_list();
+          additive_nfl->set_id(named_feature_list->id());
+          additive_nfl->set_name(name + "_" + suffix_);
+          additive_nfl->set_type(named_feature_list->type());
+          for (int j = 0; j < named_feature_list->feature_size(); ++j) {
+            auto *feature = additive_nfl->add_feature();
+            if (named_feature_list->feature(j).has_fid_v1_list()) {
+              auto *fid_v1_list = feature->mutable_fid_v1_list();
+              for (const auto &value : named_feature_list->feature(j).fid_v1_list().value()) {
+                fid_v1_list->add_value(switch_slot_v1(value, shared_slot));
+              }
+            }
+
+            if (named_feature_list->feature(j).has_fid_v2_list()) {
+              auto *fid_v2_list = feature->mutable_fid_v2_list();
+              for (const auto &value : named_feature_list->feature(j).fid_v2_list().value()) {
+                fid_v2_list->add_value(switch_slot_v2(value, shared_slot));
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return base;
+  }
+
+  VariantType variant_type_;
+  std::string suffix_;
+  std::unordered_map<std::string, std::pair<bool, uint64_t>> shared_meta_;
 };
 
 class FeatureCombineOp : public OpKernel {
@@ -205,6 +401,7 @@ REGISTER_KERNEL_BUILDER(Name("FeatureCombine").Device(DEVICE_CPU),
                         FeatureCombineOp);
 
 REGISTER_KERNEL_BUILDER(Name("SwitchSlot").Device(DEVICE_CPU), SwitchSlotOp);
+REGISTER_KERNEL_BUILDER(Name("SwitchSlotBatch").Device(DEVICE_CPU), SwitchSlotBatchOp);
 }
 
 }  // namespace monolith_tf

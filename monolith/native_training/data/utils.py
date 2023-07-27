@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Dict, Union, List
 TOBENV = False
 
 USED_FREATUE_NAMES = {}
+NAME_TO_SLOT = {}
+
 
 def enable_to_env():
   global TOBENV
@@ -29,7 +32,9 @@ def get_slot_feature_name(slot: int):
 
 
 def get_slot_from_feature_name(feature_name: str):
-  if feature_name.startswith('slot_') or feature_name.startswith('fc_slot_'):
+  if feature_name in NAME_TO_SLOT:
+    return NAME_TO_SLOT[feature_name]
+  elif feature_name.startswith('slot_') or feature_name.startswith('fc_slot_'):
     slot = feature_name.split('_')[-1]
     return int(slot) if slot.isdigit() else None
   else:
@@ -39,3 +44,12 @@ def get_slot_from_feature_name(feature_name: str):
       USED_FREATUE_NAMES[feature_name] = len(USED_FREATUE_NAMES) + 1
       return len(USED_FREATUE_NAMES)
 
+
+def register_slots(sparse_features: Union[List[int], Dict[str, int]]):
+  if isinstance(sparse_features, (list, tuple)):
+    assert all([isinstance(x, int) for x in sparse_features])
+    sparse_features = {get_slot_feature_name(slot): slot for slot in sparse_features}
+  else:
+    assert isinstance(sparse_features, dict)
+
+  NAME_TO_SLOT.update(sparse_features)

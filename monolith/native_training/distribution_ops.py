@@ -687,7 +687,7 @@ def fused_gather_embeddings_by_input_gradient(
 
 
 def reduce_mean(id_indices: tf.Tensor, id_values: tf.Tensor,
-                id_length: tf.Tensor):
+                id_length: tf.Tensor, name: str = None):
   """
   Very similar to tf.sparse.reduce_mean. The difference is now id_values is a 2-D
   tensors instead of 1-D tensor.
@@ -697,7 +697,7 @@ def reduce_mean(id_indices: tf.Tensor, id_values: tf.Tensor,
     id_length: should be a shape which equals to [batch_size] 
   """
   return gen_distribution_ops.monolith_reduce_mean(id_indices, id_values,
-                                                   id_length)
+                                                   id_length, name=name)
 
 
 def gather_embeddings_by_ids_gradient_back_prop(ids: tf.Tensor,

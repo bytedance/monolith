@@ -14,7 +14,7 @@
 
 import string
 import numpy as np
-from typing import Any, List, Union, Dict
+from typing import Any, List, Union, Dict, Tuple
 
 import tensorflow as tf
 
@@ -494,6 +494,34 @@ def switch_slot(ragged: tf.RaggedTensor, slot: int) -> tf.RaggedTensor:
                                            validate=False)
   else:
     return ragged.with_flat_values(values)
+
+
+@monolith_export
+def switch_slot_batch(variant: tf.Tensor,
+                      features: Dict[str, Tuple[bool, int]],
+                      variant_type: str = 'example_batch',
+                      suffix: str = 'share') -> tf.Tensor:
+  """对Sparse特征批量切换slot
+
+  Args:
+    variant (:obj:`VariantTensor`): 输入特征, 目前只支持pb格式
+    features (:obj:`dict`): 特征配置, 特征名 -> (是否原地修改, 新slot)
+    variant_type (:obj:`str`): 输入variant的类型, 目前支持'example', 'example_batch'这两种
+
+  Returns:
+    Variant Tensor, 切换后的特征
+
+  """
+  feats, slots, inplaces = [], [], []
+  for name, (inplace, slot) in features.items():
+    feats.append(name)
+    inplaces.append(inplace)
+    slots.append(slot)
+
+  assert variant_type in {'example', 'example_batch'}
+  output = ragged_data_ops.switch_slot_batch(
+    variant, features=feats, slots=slots, inplaces=inplaces, suffix=suffix, variant_type=variant_type)
+  return output
 
 
 @monolith_export

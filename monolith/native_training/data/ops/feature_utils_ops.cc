@@ -157,6 +157,19 @@ REGISTER_OP("SwitchSlot")
       return Status::OK();
     });
 
+REGISTER_OP("SwitchSlotBatch")
+    .Input("pb_input: variant")
+    .Output("pb_output: variant")
+    .Attr("features: list(string)")
+    .Attr("slots: list(int)")
+    .Attr("inplaces: list(bool)")
+    .Attr("suffix: string")
+    .Attr("variant_type: string")
+    .SetShapeFn([](shape_inference::InferenceContext *ctx) {
+      ctx->set_output(0, ctx->input(0));
+      return Status::OK();
+    });
+
 REGISTER_OP("FeatureCombine")
     .Input("rt_nested_splits_src1: RAGGED_RANK * int64")
     .Input("rt_dense_values_src1: int64")

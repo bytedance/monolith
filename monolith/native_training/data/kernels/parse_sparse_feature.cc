@@ -71,7 +71,7 @@ ShardingSparseFidsOp::ShardingSparseFidsOp(OpKernelConstruction *ctx,
   CHECK(mapper_raw_ptr_->RegisterValidNames(feature_names));
 
   feature_index_conf_.reserve(feature_cfgs.feature_configs_size() * 2);
-  static std::vector<std::string> slot_id_feature_prfix({"fc_slot_", "slot_"});
+  static std::vector<std::string> slot_id_feature_prefix({"fc_slot_", "slot_"});
   for (auto &iter : feature_cfgs.feature_configs()) {
     auto &feature_cfg = feature_conf_[iter.first];
     feature_cfg.table_name = iter.second.table();
@@ -88,7 +88,7 @@ ShardingSparseFidsOp::ShardingSparseFidsOp(OpKernelConstruction *ctx,
     auto &table_cfg = table_conf_[iter.second.table()];
     table_cfg.table_name = iter.second.table();
 
-    for (auto &feature_prfix : slot_id_feature_prfix) {
+    for (auto &feature_prfix : slot_id_feature_prefix) {
       if (absl::StartsWith(iter.first, feature_prfix)) {
         std::string sub_str(iter.first.substr(feature_prfix.size()));
         try {
@@ -528,9 +528,8 @@ void ShardingSparseFidsOp::Compute(OpKernelContext *ctx) {
 
   Tensor *batch_size_tensor;
   if (version_ == 5) {
-    OP_REQUIRES_OK(ctx, ctx->allocate_output("batch_size", TensorShape({
-                                                               1,
-                                                           }),
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("batch_size",
+                                             TensorShape({1, }),
                                              &batch_size_tensor));
     batch_size_tensor->flat<int32>()(0) = batch_size;
   } else {

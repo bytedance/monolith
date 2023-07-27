@@ -47,6 +47,14 @@ inline uint64_t convert_fid_v1_to_v2(uint64_t fid) {
   return ((fid & fid_v2_mask) | slot_long << 48);
 }
 
+inline uint64_t switch_slot_v1(uint64_t fid, uint64_t slot) {
+  return (slot << 54) | (fid & fid_v1_mask);
+}
+
+inline uint64_t switch_slot_v2(uint64_t fid, uint64_t slot) {
+  return (slot << 48) | (fid & fid_v2_mask);
+}
+
 inline int get_max_slot_number() { return 1 << 15; }
 
 namespace tensorflow {
