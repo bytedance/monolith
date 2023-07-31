@@ -308,6 +308,13 @@ class MonolithBaseModel(NativeTask, ABC):
     else:
       op_fields.append(pred)
     fmt = self.p.delimiter.join(["{}"] * len(op_fields)) + "\n"
+    try:
+      op_fields_tmp = [
+        tf.squeeze(tensor, axis=-1) if tensor.shape.rank > 1 and tensor.shape.as_list()[-1] == 1 else tensor
+        for tensor in op_fields if tensor is not None]
+      op_fields = op_fields_tmp
+    except Exception as e:
+      pass
     result = tf.nest.map_structure(
       tf.stop_gradient,
       tf.map_fn(fn=lambda t: tf.strings.format(fmt, t, summarize=-1),
