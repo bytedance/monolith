@@ -400,7 +400,9 @@ class Estimator(object):
   def latest_checkpoint(self):
     return self._est.latest_checkpoint()
 
-  def train(self, steps=None, max_steps=None):
+  def train(self, steps=None, max_steps=None, hooks=None):
+    assert hooks is None or isinstance(hooks, list) and \
+      all(isinstance(o, tf.estimator.SessionRunHook) for o in hooks)
     set_metric_prefix("monolith.training.{}".format(
         self._runner_conf.deep_insight_name))
     model = copy.deepcopy(self._model)
@@ -423,7 +425,8 @@ class Estimator(object):
                                         self._runner_conf,
                                         model_dir=model_dir,
                                         steps=steps,
-                                        profiling=self._enable_loacl_profiling)
+                                        profiling=self._enable_loacl_profiling,
+                                        user_hooks=hooks)
       DumpUtils().dump(f'{self._runner_conf.model_dir}/model_dump')
     else:
       DumpUtils().enable = False
@@ -439,7 +442,8 @@ class Estimator(object):
         init_sync_train_and_update_conf(self._runner_conf)
         self.__est = distributed_sync_train(self._runner_conf,
                                             params=model,
-                                            sync_backend=self._sync_backend)
+                                            sync_backend=self._sync_backend,
+                                            user_hooks=hooks)
       else:
         with monolith_discovery(self._runner_conf) as discovery:
           if self._runner_conf.enable_gpu_training:
@@ -452,10 +456,13 @@ class Estimator(object):
           self.__est = distributed_train(config=self._runner_conf,
                                          discovery=discovery,
                                          params=model,
-                                         sync_backend=self._sync_backend)
+                                         sync_backend=self._sync_backend,
+                                         user_hooks=hooks)
     self.close()
 
-  def evaluate(self, steps=None):
+  def evaluate(self, steps=None, hooks=None):
+    assert hooks is None or isinstance(hooks, list) and \
+      all(isinstance(o, tf.estimator.SessionRunHook) for o in hooks)
     model = copy.deepcopy(self._model)
     model.mode = tf.estimator.ModeKeys.EVAL
     if not isinstance(model, InstantiableParams):
@@ -474,7 +481,8 @@ class Estimator(object):
                                         self._runner_conf,
                                         model_dir=model_dir,
                                         steps=steps,
-                                        profiling=self._enable_loacl_profiling)
+                                        profiling=self._enable_loacl_profiling,
+                                        user_hooks=hooks)
       DumpUtils().dump(f'{self._runner_conf.model_dir}/model_dump')
     else:
       DumpUtils().enable = False
@@ -486,7 +494,8 @@ class Estimator(object):
         init_sync_train_and_update_conf(self._runner_conf)
         self.__est = distributed_sync_train(self._runner_conf,
                                             params=model,
-                                            sync_backend=self._sync_backend)
+                                            sync_backend=self._sync_backend,
+                                            user_hooks=hooks)
       else:
         with monolith_discovery(self._runner_conf) as discovery:
           if self._runner_conf.enable_gpu_training:

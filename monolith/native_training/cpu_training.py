@@ -1765,7 +1765,10 @@ class NodeAliveCheckerError(Exception):
 
 
 def _do_worker_train(config: DistributedCpuTrainingConfig,
-                     params: InstantiableParams, cluster: Dict, task: Dict):
+                     params: InstantiableParams, 
+                     cluster: Dict, 
+                     task: Dict,
+                     user_hooks = None):
   params.mode = config.mode
   native_task = params.instantiate()
   if not isinstance(native_task, NativeTask):
@@ -1805,6 +1808,8 @@ def _do_worker_train(config: DistributedCpuTrainingConfig,
     if is_chief(config):
       _save_debugging_info(config, cluster, training)
     run_hooks = get_sync_run_hooks(False)
+    if user_hooks is not None:
+      run_hooks += user_hooks
     estimator.train(training.create_input_fn(config.mode),
                 hooks=run_hooks,
                 max_steps=params.train.max_steps)
@@ -1838,7 +1843,7 @@ _EXTRA_PS_BENCHMARK_SECS = 120
 
 
 def _run_ps_benchmark(config: DistributedCpuTrainingConfig,
-                      num_ps_required: int, cluster: dict, task: dict):
+                      num_ps_required: int, cluster: dict, task: dict, user_hooks):
   config = copy.deepcopy(config)
   cluster = copy.deepcopy(cluster)
   bm_params = ps_benchmark.PsBenchMarkTask.params()
@@ -1854,7 +1859,7 @@ def _run_ps_benchmark(config: DistributedCpuTrainingConfig,
   config.operation_timeout_in_ms = int(_EXTRA_PS_BENCHMARK_SECS * 1000 +
                                        30 * 1000)
   logging.info("Run PS benchmark")
-  _do_worker_train(config, bm_params, cluster, task)
+  _do_worker_train(config, bm_params, cluster, task, user_hooks)
   cluster["ps"] = ps_list
   return cluster
 
@@ -1958,7 +1963,8 @@ def make_config_backward_compatible(model_dir: str, config: CpuTrainingConfig):
 def distributed_train(config: DistributedCpuTrainingConfig,
                       discovery: ServiceDiscovery,
                       params: InstantiableParams,
-                      sync_backend: SyncBackend = None):
+                      sync_backend: SyncBackend = None,
+                      user_hooks = None):
   """Trains the server in a distributed fashion."""
   if config.index is None:
     raise ValueError("Index can't be none.")
@@ -2037,7 +2043,8 @@ def distributed_train(config: DistributedCpuTrainingConfig,
         config.containers_ready_time_secs = int(time.time())
       if config.num_extra_ps:
         filtered_cluster = _run_ps_benchmark(config, config.num_ps,
-                                             filtered_cluster, task)
+                                             filtered_cluster, task, 
+                                             user_hooks)
       return filtered_cluster, task
 
     cluster, task = _get_cluster_and_task()
@@ -2059,7 +2066,7 @@ def distributed_train(config: DistributedCpuTrainingConfig,
             if config.enable_gpu_training:
               device_utils.enable_gpu_training()
               params.train.use_gpu_emb_table = False
-            estimator = _do_worker_train(config, params, cluster, task)
+            estimator = _do_worker_train(config, params, cluster, task, user_hooks)
           break
         except (tf.errors.DeadlineExceededError, tf.errors.UnavailableError,
                 NodeAliveCheckerError) as e:
@@ -2120,7 +2127,8 @@ def distributed_train(config: DistributedCpuTrainingConfig,
 
 def distributed_sync_train(config: DistributedCpuTrainingConfig,
                            params: InstantiableParams,
-                           sync_backend: SyncBackend = None):
+                           sync_backend: SyncBackend = None,
+                           user_hooks = None):
   """
   This is the entry point for synchronous distributed training.
   This system allows the model to train in a half sync manner as well, when set
@@ -2224,6 +2232,9 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
         sync_training_hooks.ParameterSyncHook(sync_backend, config.index))
   run_hooks.append(sync_training_hooks.SyncTrainingInfoHook())
 
+  if user_hooks is not None:
+    run_hooks += user_hooks
+
   estimator.train(training.create_input_fn(config.mode),
                   hooks=run_hooks,
                   max_steps=params.train.max_steps)
@@ -2236,7 +2247,8 @@ def local_train_internal(params: InstantiableParams,
                          conf: CpuTrainingConfig,
                          model_dir: str,
                          steps: int = 100,
-                         profiling: bool = False) -> tf.estimator.Estimator:
+                         profiling: bool = False,
+                         user_hooks = None) -> tf.estimator.Estimator:
   """Do a local training. Especially useful in the local demo."""
   if tf.compat.v1.executing_eagerly():
     raise EnvironmentError(
@@ -2288,6 +2300,7 @@ def local_train_internal(params: InstantiableParams,
                                   log_step_count_steps=conf.log_step_count_steps)
   estimator = tf.estimator.Estimator(training.create_model_fn(), config=config)
   estimator.train(training.create_input_fn(tf.estimator.ModeKeys.TRAIN),
+                  hooks=user_hooks,
                   steps=steps)
 
   if conf.enable_resource_constrained_roughsort and conf.mode == tf.estimator.ModeKeys.TRAIN:
