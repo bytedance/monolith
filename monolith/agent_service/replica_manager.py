@@ -474,21 +474,27 @@ class ReplicaUpdater(object):
                                archon_address_ipv6=f'{host_ipv6}:{archon_port}')
     self.meta[replica_path] = replica_meta
     replica_meta_bytes = bytes(replica_meta.to_json(), encoding='utf-8')
-    try:
-      sequence = True if TFSServerType.ENTRY in replica_path and self._conf.replica_id == -1 else False
-      real_path = self.zk.retry(self.zk.create,
-                                path=replica_path,
-                                value=replica_meta_bytes,
-                                ephemeral=True,
-                                makepath=True,
-                                sequence=sequence)
-      if self._conf.replica_id == -1:
-        self._conf.replica_id = int(os.path.basename(real_path))
-        del self.meta[replica_path]
-        self.meta[real_path] = replica_meta
-    except NodeExistsError:
-      logging.info(f'{replica_path} has already exists')
-      self.zk.retry(self.zk.set, path=replica_path, value=replica_meta_bytes)
+    node_stat = self.zk.exists(replica_path)
+    if not node_stat:
+      try:
+        sequence = True if TFSServerType.ENTRY in replica_path and self._conf.replica_id == -1 else False
+        real_path = self.zk.retry(self.zk.create,
+                                  path=replica_path,
+                                  value=replica_meta_bytes,
+                                  ephemeral=True,
+                                  makepath=True,
+                                  sequence=sequence)
+        if self._conf.replica_id == -1:
+          self._conf.replica_id = int(os.path.basename(real_path))
+          del self.meta[replica_path]
+          self.meta[real_path] = replica_meta
+      except NodeExistsError:
+        logging.info(f'{replica_path} has already exists')
+        self.zk.retry(self.zk.set, path=replica_path, value=replica_meta_bytes)
+    else:
+      value, _ = self.zk.get(replica_path)
+      if value != replica_meta_bytes:
+        self.zk.retry(self.zk.set, path=replica_path, value=replica_meta_bytes)
 
   def register(self):
     if self._conf.deploy_type == DeployType.MIXED or self._conf.deploy_type == DeployType.ENTRY:
