@@ -50,6 +50,7 @@ from monolith.native_training.data.feature_utils import create_item_pool, string
   has_variant, kafka_resource_init, kafka_read_next, kafka_read_next_v2, string_to_variant_with_transform
 from monolith.native_training.data.feature_list import FeatureList
 from monolith.native_training.data.parsers import get_default_parser_ctx
+from monolith.native_training.data.transform.transforms import Transform
 from monolith.native_training import native_task_context
 from monolith.native_training.distribute import distributed_dataset
 from monolith.native_training.runtime.ops import gen_monolith_ops
@@ -1507,9 +1508,47 @@ def distribute(self,
   return dataset
 
 
+def transform(self, t: Transform, variant_type: str):
+  assert variant_type in {"instance", "example"}
+  return TransformDataset(self, t, variant_type=variant_type)
+
+
+@monolith_export
+class TransformDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  """样本过滤/改写
+
+  Args:
+    input_dataset (:obj:`dataset`): 输入数据集
+    transform (:obj:`Transform`): 改写方式
+    variant_type (:obj:`str`): 输入数据是variant类型的, 支持两种格式, instance/example
+
+  Raises:
+    TypeError: 如果有任何参数与类型不匹配, 则抛TypeError
+    ValueError: 如果有任何值与期望不匹配, 则抛ValueError
+
+  """
+
+  def __init__(self, input_dataset, transform: Transform, variant_type: str):
+    assert variant_type in {"instance", "example"}
+    self._transform = transform
+    self._variant_type = variant_type
+
+    variant_tensor = pb_datasource_ops.transform_dataset(
+        input=input_dataset._variant_tensor,
+        config=transform.as_proto().SerializeToString(),
+        variant_type=variant_type)
+    logging.info("Start init of the pb instance dataset base.")
+    super(TransformDataset, self).__init__(input_dataset, variant_tensor)
+
+  @property
+  def element_spec(self):
+    return tensor_spec.TensorSpec([], dtypes.variant)
+
+
 Dataset.instance_reweight = instance_reweight
 Dataset.negative_gen = negative_gen
 Dataset.split_flow = split_flow
 Dataset.merge_flow = merge_flow
 Dataset.distribute = lambda ds, *args, **kwargs: ds
 Dataset.merged_window = merged_window
+Dataset.transform = transform

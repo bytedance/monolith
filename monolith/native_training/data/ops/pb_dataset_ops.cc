@@ -153,4 +153,16 @@ REGISTER_OP("MonolithCacheOneDataset")
       return shape_inference::ScalarShape(c);
     });
 
+REGISTER_OP("TransformDataset")
+    .Input("input: variant")
+    .Attr("config: string")
+    .Attr("variant_type: string")
+    .Output("handle: variant")
+    .SetDoNotOptimize()  // Source dataset ops must disable constant folding.
+    .SetShapeFn([](shape_inference::InferenceContext* c) {
+      shape_inference::ShapeHandle unused;
+      TF_RETURN_IF_ERROR(c->WithRankAtMost(c->input(0), 0, &unused));
+      return shape_inference::ScalarShape(c);
+    });
+
 }  // namespace tensorflow

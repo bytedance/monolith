@@ -42,15 +42,40 @@ message FilterByLabelConfig {
   repeated float thresholds = 1;
 }
 
+message FilterByValueConfig {
+  required string field_name = 1;
+  required string op = 2;
+  repeated float float_operand = 3;
+  repeated int64 int_operand = 4;
+  repeated string string_operand = 5;
+  optional bool keep_empty = 6 [default = false];
+  optional string operand_filepath = 7 [default = ""];
+}
+
+message BasicTransformConfig {
+  oneof type {
+    FilterByFidConfig filter_by_fid = 1;
+    FilterByActionConfig filter_by_action = 2;
+    FilterByLabelConfig filter_by_label = 3;
+    AddLabelConfig add_label = 4;
+    FilterByValueConfig filter_by_value = 5;
+  }
+}
+
+message LogicalOrTransformConfig {
+  required BasicTransformConfig x = 1;
+  required BasicTransformConfig y = 2;
+}
+
 message TransformConfig {
   message OneTransformConfig {
     oneof type {
-      FilterByFidConfig filter_by_fid = 1;
-      FilterByActionConfig filter_by_action = 2;
-      FilterByLabelConfig filter_by_label = 3;
-      AddLabelConfig add_label = 4;
+      BasicTransformConfig basic_config = 1;
+      LogicalOrTransformConfig logical_or_config = 2;
     }
   }
 
   repeated OneTransformConfig configs = 1;
 }
+
+

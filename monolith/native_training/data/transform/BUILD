@@ -25,6 +25,8 @@ cc_library(
         ":transform_config_cc_proto",
         "//monolith/native_training/data/training_instance:instance_utils",
         "//monolith/native_training/data/kernels/internal:label_utils",
+        "//monolith/native_training/data/kernels/internal:line_id_value_filter",
+        "//monolith/native_training/data/kernels/internal:relational_utils",
         "//monolith/native_training/runtime/common:linalg_utils",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
@@ -39,6 +41,8 @@ py_library(
     ],
     deps = [
         ":transform_config_py_proto",
+        "//idl:example_py_proto",
+        "//idl:proto_parser_py_proto",
     ],
 )
 

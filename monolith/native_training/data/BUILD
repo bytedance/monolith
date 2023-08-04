@@ -61,6 +61,8 @@ cc_library(
         "kernels/scatter_label_kernel.cc",
         "kernels/split_flow_dataset_kernel.cc",
         "kernels/string_to_variant.cc",
+        "kernels/transform_dataset_kernel.cc",
+        "kernels/transform_dataset_kernel.h",
         "kernels/variant_filter_kernel.cc",
     ],
     deps = [
@@ -70,6 +72,7 @@ cc_library(
         "//monolith/native_training/data/kernels/internal:datasource_utils",
         "//monolith/native_training/data/kernels/internal:file_match_split_provider",
         "//monolith/native_training/data/kernels/internal:label_utils",
+        "//monolith/native_training/data/kernels/internal:line_id_value_filter",
         "//monolith/native_training/data/kernels/internal:parquet_example_reader",
         "//monolith/native_training/data/kernels/internal:relational_utils",
         "//monolith/native_training/data/kernels/internal:uniq_hashtable",
@@ -77,6 +80,7 @@ cc_library(
         "//monolith/native_training/data/training_instance:instance_utils",
         "//monolith/native_training/data/training_instance:parse_instance_lib",
         "//monolith/native_training/data/training_instance:reader_util",
+        "//monolith/native_training/data/transform:transforms",
         "//monolith/native_training/runtime/common:metrics",
         "//monolith/native_training/runtime/common:linalg_utils",
         "//monolith/native_training/runtime/concurrency:queue",
@@ -118,6 +122,7 @@ py_library(
         "//monolith:utils",
         "//monolith/native_training:mlp_utils",
         "//monolith/native_training:monolith_export",
+        "//monolith/native_training/data/transform:transforms_py",
         "//monolith/native_training/distribute:distributed_dataset",
         "//monolith/native_training/hooks:ckpt_hooks",
         "//monolith/native_training/runtime/ops:gen_monolith_ops",
@@ -300,6 +305,7 @@ py_binary(
         ":feature_utils_py",
     ],
 )
+
 
 exports_files([
     "kernels/add_action_kernel.cc",

@@ -132,6 +132,7 @@ class RunConfig:
     enable_alias_map_auto_gen: 是否需要自动生成 alias_map
     save_summary_steps: 每隔多少global_step保存一次summary
     log_step_count_steps: 每隔多少global_step打印一次loss
+    disable_native_metrics: 是否关闭 TensorFlow 的 metrics 功能，如 AUC、MSE 的计算，默认为 True
   """
 
   # basic
@@ -181,6 +182,8 @@ class RunConfig:
   kafka_group_id: str = None
   kafka_servers: str = None
 
+  disable_native_metrics: bool = True
+
   save_summary_steps: int = 100
   log_step_count_steps: int = 100
 
@@ -197,7 +200,8 @@ class RunConfig:
         kafka_group_id=self.kafka_group_id,
         kafka_servers=self.kafka_servers,
         save_summary_steps=self.save_summary_steps,
-        log_step_count_steps=self.log_step_count_steps)
+        log_step_count_steps=self.log_step_count_steps,
+        disable_native_metrics=self.disable_native_metrics)
     for name, _ in get_type_hints(RunConfig).items():
       value = getattr(self, name)
       if hasattr(conf, name) and value is not None:

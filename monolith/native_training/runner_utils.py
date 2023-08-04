@@ -229,7 +229,7 @@ class RunnerConfig(DistributedCpuTrainingConfig):
   end_hour: int = None
   enable_dynamic_sharding: bool = False
   max_task_num_per_worker: int = 1
-  disable_native_metrics: bool = False
+  disable_native_metrics: bool = True
 
   def __post_init__(self):
     mlp_pass()

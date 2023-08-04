@@ -26,15 +26,20 @@ namespace tensorflow {
 namespace monolith_tf {
 
 using monolith::native_training::data::AddLabelConfig;
+using monolith::native_training::data::BasicTransformConfig;
 using monolith::native_training::data::FilterByActionConfig;
 using monolith::native_training::data::FilterByFidConfig;
 using monolith::native_training::data::FilterByLabelConfig;
+using monolith::native_training::data::FilterByValueConfig;
+using monolith::native_training::data::LogicalOrTransformConfig;
 using monolith::native_training::data::TransformConfig;
 using monolith::native_training::data::TransformConfig_OneTransformConfig;
 
 class TransformInterface {
  public:
   virtual ~TransformInterface() = default;
+
+  virtual std::string Name() = 0;
 
   virtual void Transform(
       std::shared_ptr<::parser::proto::Instance>,
@@ -43,15 +48,10 @@ class TransformInterface {
   virtual void Transform(
       std::shared_ptr<::monolith::io::proto::Example>,
       std::vector<std::shared_ptr<::monolith::io::proto::Example>>*) = 0;
-
-  virtual void Transform(
-      std::shared_ptr<::monolith::io::proto::ExampleBatch>,
-      std::vector<std::shared_ptr<::monolith::io::proto::ExampleBatch>>*) = 0;
 };
 
-std::unique_ptr<TransformInterface> NewSampleCounter(
-    std::unique_ptr<TransformInterface> transform,
-    const std::string& transform_name = "end-2-end");
+std::unique_ptr<TransformInterface> NewTransformSummary(
+    std::unique_ptr<TransformInterface> transform, bool print_summary = false);
 
 std::unique_ptr<TransformInterface> NewIdentity();
 
@@ -65,12 +65,15 @@ std::unique_ptr<TransformInterface> NewFilterByLabel(
 
 std::unique_ptr<TransformInterface> NewAddLabel(AddLabelConfig config);
 
+std::unique_ptr<TransformInterface> NewFilterByValue(
+    FilterByValueConfig config);
+
 std::unique_ptr<TransformInterface> CombineTransforms(
     std::unique_ptr<TransformInterface> t1,
     std::unique_ptr<TransformInterface> t2);
 
-std::unique_ptr<TransformInterface> NewTransformFromConfig(
-    TransformConfig_OneTransformConfig config);
+std::unique_ptr<TransformInterface> NewTransformFromBasicConfig(
+    BasicTransformConfig config);
 
 std::unique_ptr<TransformInterface> NewTransformFromConfig(
     const TransformConfig& config);

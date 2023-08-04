@@ -22,6 +22,7 @@
 #include "absl/strings/str_format.h"
 #include "idl/matrix/proto/example.pb.h"
 #include "monolith/native_training/data/kernels/feature_name_mapper_tf_bridge.h"
+#include "monolith/native_training/data/kernels/internal/line_id_value_filter.h"
 #include "monolith/native_training/data/kernels/internal/relational_utils.h"
 #include "monolith/native_training/data/training_instance/cc/instance_utils.h"
 #include "monolith/native_training/data/training_instance/cc/pb_variant.h"
@@ -33,10 +34,12 @@
 
 namespace tensorflow {
 namespace monolith_tf {
+
 using IFeature = ::idl::matrix::proto::Feature;
 using Instance = ::parser::proto::Instance;
 using Example = ::monolith::io::proto::Example;
 using LineId = ::idl::matrix::proto::LineId;
+using tensorflow::monolith_tf::internal::LineIdValueFilter;
 
 class SetFilterOp : public OpKernel {
  public:
@@ -147,62 +150,9 @@ class ValueFilterOp : public OpKernel {
     OP_REQUIRES_OK(context, context->GetAttr("keep_empty", &keep_empty_));
     OP_REQUIRES_OK(context, context->GetAttr("variant_type", &variant_type_));
 
-    uint_operand_.insert(uint_operand_.end(), int_operand_.begin(),
-                         int_operand_.end());
-
-    std::unordered_set<std::string> valid_set_ops = {"any", "all", "diff",
-                                                     "startswith", "endswith"};
-    if (!internal::VALID_OPS.count(op_) && !valid_set_ops.count(op_)) {
-      std::string valid_ops_str = absl::StrJoin(internal::VALID_OPS, ", ");
-      std::string valid_set_ops_str = absl::StrJoin(valid_set_ops, ", ");
-      LOG(FATAL) << absl::StrFormat(
-          "Invalid op: %s, please choose one from [%s] or [%s]", op_,
-          valid_ops_str, valid_set_ops_str);
-    }
-
-    nlohmann::json j;
-    j["field_name"] = field_name_;
-    j["op"] = op_;
-    j["float_operand_count"] = float_operand_.size();
-    j["int_operand_count"] = int_operand_.size();
-    j["string_operand_count"] = string_operand_.size();
-    j["operand_filepath"] = operand_filepath_;
-
-    int64_t limit = 1000;
-    if (float_operand_.size() <= limit) {
-      j["float_operand"] = float_operand_;
-    } else {
-      std::vector<float> values(float_operand_.begin(),
-                                float_operand_.begin() + limit);
-      j["float_operand_first_1000"] = values;
-    }
-
-    if (int_operand_.size() <= limit) {
-      j["int_operand"] = int_operand_;
-    } else {
-      std::vector<int> values(int_operand_.begin(),
-                              int_operand_.begin() + limit);
-      j["int_operand_first_1000"] = values;
-    }
-
-    if (string_operand_.size() <= limit) {
-      j["string_operand"] = string_operand_;
-    } else {
-      std::vector<std::string> values(string_operand_.begin(),
-                                      string_operand_.begin() + limit);
-      j["string_operand_first_1000"] = values;
-    }
-
-    LOG(INFO) << j.dump(2);
-
-    if ((op_ == internal::IN || op_ == internal::NOT_IN) &&
-        operand_filepath_.empty()) {
-      float_operand_set_.insert(float_operand_.begin(), float_operand_.end());
-      int_operand_set_.insert(int_operand_.begin(), int_operand_.end());
-      uint_operand_set_.insert(uint_operand_.begin(), uint_operand_.end());
-      string_operand_set_.insert(string_operand_.begin(),
-                                 string_operand_.end());
-    }
+    line_id_value_filter_ = std::make_unique<LineIdValueFilter>(
+        field_name_, op_, float_operand_, int_operand_, string_operand_,
+        operand_filepath_, keep_empty_);
   }
 
   void Compute(OpKernelContext *context) override {
@@ -212,158 +162,12 @@ class ValueFilterOp : public OpKernel {
                                                      &output_tensor));
     auto output = output_tensor->scalar<bool>();
 
-    const google::protobuf::Descriptor *descriptor = nullptr;
-    const google::protobuf::Reflection *reflection = nullptr;
-    const google::protobuf::FieldDescriptor *field = nullptr;
-    descriptor = ::idl::matrix::proto::LineId::GetDescriptor();
-    reflection = ::idl::matrix::proto::LineId::GetReflection();
-    field = descriptor->FindFieldByName(field_name_);
-
-    // don't has field or the given field is not int like
-    if (field == nullptr) {
-      output() = false;
-      return;
-    }
-
     const LineId &line_id = GetLineId(input_tensor);
-
-    if (!field->is_repeated()) {
-      if ((op_ == internal::IN || op_ == internal::NOT_IN) &&
-          !operand_filepath_.empty()) {
-        OP_REQUIRES_OK(context, EnsureLoadFilterValues(context));
-      }
-      switch (field->cpp_type()) {
-        case google::protobuf::FieldDescriptor::CppType::CPPTYPE_FLOAT: {
-          float value = reflection->GetFloat(line_id, field);
-          output() = internal::COMPARE_OPS.count(op_)
-                         ? internal::compare(op_, value, float_operand_)
-                         : internal::contains(op_, value, float_operand_set_);
-          break;
-        }
-        case google::protobuf::FieldDescriptor::CppType::CPPTYPE_DOUBLE: {
-          double value = reflection->GetDouble(line_id, field);
-          output() = internal::COMPARE_OPS.count(op_)
-                         ? internal::compare(op_, value, float_operand_)
-                         : internal::contains(op_, value, float_operand_set_);
-          break;
-        }
-        case google::protobuf::FieldDescriptor::CppType::CPPTYPE_INT32: {
-          int64 value = reflection->GetInt32(line_id, field);
-          output() = internal::COMPARE_OPS.count(op_)
-                         ? internal::compare(op_, value, int_operand_)
-                         : internal::contains(op_, value, int_operand_set_);
-          break;
-        }
-        case google::protobuf::FieldDescriptor::CppType::CPPTYPE_INT64: {
-          int64 value = reflection->GetInt64(line_id, field);
-          output() = internal::COMPARE_OPS.count(op_)
-                         ? internal::compare(op_, value, int_operand_)
-                         : internal::contains(op_, value, int_operand_set_);
-          break;
-        }
-        case google::protobuf::FieldDescriptor::CppType::CPPTYPE_UINT32: {
-          int64 value = reflection->GetUInt32(line_id, field);
-          output() = internal::COMPARE_OPS.count(op_)
-                         ? internal::compare(op_, value, int_operand_)
-                         : internal::contains(op_, value, int_operand_set_);
-          break;
-        }
-        case google::protobuf::FieldDescriptor::CppType::CPPTYPE_UINT64: {
-          uint64 value = reflection->GetUInt64(line_id, field);
-          output() = internal::COMPARE_OPS.count(op_)
-                         ? internal::compare(op_, value, uint_operand_)
-                         : internal::contains(op_, value, uint_operand_set_);
-          break;
-        }
-        case google::protobuf::FieldDescriptor::CppType::CPPTYPE_STRING: {
-          std::string value = reflection->GetString(line_id, field);
-          output() = false;
-          if (op_ == "startswith") {
-            for (const std::string &operand : string_operand_) {
-              if (value.find(operand) == 0) {
-                output() = true;
-                break;
-              }
-            }
-          } else if (op_ == "endswith") {
-            for (const std::string &operand : string_operand_) {
-              if (operand.size() <= value.size()) {
-                bool found = std::equal(operand.rbegin(), operand.rend(),
-                                        value.rbegin());
-                if (found) {
-                  output() = true;
-                  break;
-                }
-              }
-            }
-          } else {
-            output() =
-                internal::COMPARE_OPS.count(op_)
-                    ? internal::compare(op_, value, string_operand_)
-                    : internal::contains(op_, value, string_operand_set_);
-          }
-          break;
-        }
-        default:
-          output() = false;
-          LOG(INFO) << "dtype is " << field->cpp_type();
-          break;
-      }
-    } else {
-      const int field_size = reflection->FieldSize(line_id, field);
-      std::vector<int64> values;
-      switch (field->cpp_type()) {
-        case google::protobuf::FieldDescriptor::CppType::CPPTYPE_INT32:
-          for (int i = 0; i < field_size; ++i) {
-            values.push_back(reflection->GetRepeatedInt32(line_id, field, i));
-          }
-          break;
-        case google::protobuf::FieldDescriptor::CppType::CPPTYPE_INT64:
-          for (int i = 0; i < field_size; ++i) {
-            values.push_back(reflection->GetRepeatedInt64(line_id, field, i));
-          }
-          break;
-        case google::protobuf::FieldDescriptor::CppType::CPPTYPE_UINT32:
-          for (int i = 0; i < field_size; ++i) {
-            values.push_back(reflection->GetRepeatedUInt32(line_id, field, i));
-          }
-          break;
-        case google::protobuf::FieldDescriptor::CppType::CPPTYPE_UINT64:
-          for (int i = 0; i < field_size; ++i) {
-            values.push_back(reflection->GetRepeatedUInt64(line_id, field, i));
-          }
-          break;
-        default:
-          LOG(INFO) << "dtype is " << field->cpp_type();
-          break;
-      }
-
-      if (values.size() > 0) {
-        output() = cmp(values);
-      } else {
-        output() = keep_empty_;
-      }
-    }
+    output() =
+        line_id_value_filter_->IsInstanceOfInterest(context->env(), line_id);
   }
 
  private:
-  bool cmp(const std::vector<int64> &values) {
-    std::set<int64> intersection;
-    std::set_intersection(values.begin(), values.end(), int_operand_.begin(),
-                          int_operand_.end(),
-                          std::inserter(intersection, intersection.begin()));
-    if (op_ == "any") {
-      return intersection.size() > 0;
-    } else if (op_ == "all") {
-      return intersection.size() == int_operand_.size();
-    } else if (op_ == "diff") {
-      return intersection.size() == 0;
-    } else {
-      LOG(FATAL) << "Invalid op: " << op_;
-      return false;
-    }
-  }
-
   const LineId &GetLineId(const Tensor &input_tensor) {
     if (variant_type_ == "instance") {
       return input_tensor.scalar<Variant>()().get<Instance>()->line_id();
@@ -372,80 +176,6 @@ class ValueFilterOp : public OpKernel {
     }
   }
 
-  Status EnsureLoadFilterValues(OpKernelContext *context)
-      TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
-    mutex_lock l(mu_);
-    if (load_filter_values_finished_ || operand_filepath_.empty()) {
-      return Status::OK();
-    }
-
-    std::string filter_values_serialized;
-    TF_RETURN_IF_ERROR(ReadFileToString(context->env(), operand_filepath_,
-                                        &filter_values_serialized));
-    ::monolith::io::proto::FilterValues filter_values;
-    if (!filter_values.ParseFromString(filter_values_serialized)) {
-      return errors::InvalidArgument(
-          "Unable to parse filter values, please make sure it is "
-          "serialized version of message:FilterValues.");
-    }
-
-    const google::protobuf::Descriptor *descriptor = nullptr;
-    const google::protobuf::FieldDescriptor *field = nullptr;
-    descriptor = ::idl::matrix::proto::LineId::GetDescriptor();
-    field = descriptor->FindFieldByName(field_name_);
-
-    switch (field->cpp_type()) {
-      case google::protobuf::FieldDescriptor::CppType::CPPTYPE_FLOAT:
-      case google::protobuf::FieldDescriptor::CppType::CPPTYPE_DOUBLE: {
-        if (!filter_values.has_float_list()) {
-          return errors::InvalidArgument(
-              "Filter values' type should be the same with field type.");
-        }
-        float_operand_set_.insert(filter_values.float_list().value().begin(),
-                                  filter_values.float_list().value().end());
-        break;
-      }
-      case google::protobuf::FieldDescriptor::CppType::CPPTYPE_INT32:
-      case google::protobuf::FieldDescriptor::CppType::CPPTYPE_INT64: {
-        if (!filter_values.has_int64_list()) {
-          return errors::InvalidArgument(
-              "Filter values' type should be the same with field type.");
-        }
-        int_operand_set_.insert(filter_values.int64_list().value().begin(),
-                                filter_values.int64_list().value().end());
-        break;
-      }
-      case google::protobuf::FieldDescriptor::CppType::CPPTYPE_UINT32:
-      case google::protobuf::FieldDescriptor::CppType::CPPTYPE_UINT64: {
-        if (!filter_values.has_int64_list()) {
-          return errors::InvalidArgument(
-              "Filter values' type should be the same with field type.");
-        }
-        uint_operand_set_.insert(filter_values.int64_list().value().begin(),
-                                 filter_values.int64_list().value().end());
-        break;
-      }
-      case google::protobuf::FieldDescriptor::CppType::CPPTYPE_STRING: {
-        if (!filter_values.has_bytes_list()) {
-          return errors::InvalidArgument(
-              "Filter values' type should be the same with field type.");
-        }
-        string_operand_set_.insert(filter_values.bytes_list().value().begin(),
-                                   filter_values.bytes_list().value().end());
-        break;
-      }
-      default: {
-        return errors::InvalidArgument("Invalid field type for filter.");
-      }
-    }
-    load_filter_values_finished_ = true;
-
-    return Status::OK();
-  }
-
-  mutex mu_;
-  bool load_filter_values_finished_ TF_GUARDED_BY(mu_) = false;
-
   std::string field_name_;
   std::string op_;  // gt, ge, eq, lt, le, neq, between
   bool keep_empty_ = false;
@@ -453,13 +183,9 @@ class ValueFilterOp : public OpKernel {
 
   std::vector<float> float_operand_;
   std::vector<int64> int_operand_;
-  std::vector<uint64> uint_operand_;
   std::vector<std::string> string_operand_;
 
-  std::unordered_set<float> float_operand_set_;
-  std::unordered_set<int64> int_operand_set_;
-  std::unordered_set<uint64> uint_operand_set_;
-  std::unordered_set<std::string> string_operand_set_;
+  std::unique_ptr<LineIdValueFilter> line_id_value_filter_;
 
   std::string variant_type_;
 };

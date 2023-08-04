@@ -40,6 +40,12 @@ class TransformsTest(unittest.TestCase):
                                 new_sample_rate=0.3).as_proto()
     logging.info(proto)
 
+  def test_logical_or(self):
+    proto = transforms.LogicalOr(
+        x=transforms.FilterByAction(has_actions=[1, 2]),
+        y=transforms.FilterByFid(has_fids=[10000000])).as_proto()
+    logging.info(proto)
+
   def test_compose(self):
     transform = transforms.Compose([
         transforms.FilterByFid(has_fids=[1],
@@ -48,7 +54,9 @@ class TransformsTest(unittest.TestCase):
         transforms.FilterByLabel(thresholds=[-100, -100]),
         transforms.AddLabel(config='1,2:3:1.0;4::0.5',
                             negative_value=0.0,
-                            new_sample_rate=0.3)
+                            new_sample_rate=0.3),
+        transforms.LogicalOr(x=transforms.FilterByAction(has_actions=[1, 2]),
+                             y=transforms.FilterByFid(has_fids=[10000000]))
     ])
     logging.info(transform.as_proto())
 

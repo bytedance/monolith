@@ -19,6 +19,7 @@
 
 #include "monolith/native_training/data/kernels/parse_sparse_feature.h"
 #include "monolith/native_training/data/training_instance/cc/pb_variant.h"
+#include "monolith/native_training/runtime/common/metrics.h"
 
 namespace tensorflow {
 namespace monolith_tf {
