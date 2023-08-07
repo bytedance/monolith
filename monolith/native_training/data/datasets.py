@@ -1283,9 +1283,11 @@ def register_dataset(service, dataset, buffer_size=32):
   external_state_policy = dataset.options().experimental_external_state_policy
   if external_state_policy is None:
     external_state_policy = ExternalStatePolicy.WARN
-
+  logging.info('external_state_policy: %s', external_state_policy)
   dataset = dataset.map(lambda *x: compression_ops.compress(x),
-                        num_parallel_calls=dataset_ops.AUTOTUNE)
+                        # num_parallel_calls=dataset_ops.AUTOTUNE)
+                        num_parallel_calls=None)
+  logging.info('num_parallel_calls: None')
   # dataset = dataset.prefetch(buffer_size=buffer_size)
   dataset = dataset._apply_options()
 
