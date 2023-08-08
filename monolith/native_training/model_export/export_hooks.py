@@ -127,9 +127,10 @@ class ExportSaverListener(tf.estimator.CheckpointSaverListener):
         "model_name": model_name,
       }
       version = version.split(".")[0] # In case version is float
-      self._mcli.emit_store("export_models.latest_version",
-                            int(version), tags)
-      self._mcli.flush()
+      if version.isdigit(): # In case rough sort, version maybe xxx_dense
+        self._mcli.emit_store("export_models.latest_version",
+                              int(version), tags)
+        self._mcli.flush()
     except Exception as e:
       err_mesg = f"meet error when trying to emit metric: export_models.latest_version, stack trace: {traceback.format_exc()}"
       logging.log_every_n_seconds(logging.WARNING, err_mesg, 1200)
