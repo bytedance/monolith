@@ -452,6 +452,7 @@ class CpuTrainingConfig:
     :param items_input_has_sort_id: If items input file has sort_id flag
     :param items_input_kafka_dump: If items input file has kafka_dump flag
     :param items_input_kafka_dump_prefix: If items input file has kafka_dump_prefix flag
+    :param num_extra_dsworker_on_gpu_worker: The number of extra dsworker on GPU worker.
     :param save_summary_steps: Save summaries every this many steps
     :param log_step_count_steps: The frequency, in number of global steps, that the global step and the loss will be logged during training
   """
@@ -525,6 +526,7 @@ class CpuTrainingConfig:
   items_input_kafka_dump_prefix: bool = False
   device_fn: Callable[[tf.Operation], str] = None
   use_dataservice: bool = None
+  num_extra_dsworker_on_gpu_worker: int = 0
   save_summary_steps: int = 100
   log_step_count_steps: int = 100
 

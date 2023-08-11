@@ -29,7 +29,6 @@ from monolith.native_training.distribution_utils import get_mpi_rank, \
 
 FLAGS = flags.FLAGS
 
-
 from monolith.native_training import yarn_runtime
 
 
@@ -38,7 +37,7 @@ def kill_by_port(port: int):
   stdout, stderr = process.communicate()
   try:
     pid = None
-    for process in str(stdout.decode("utf-8")).split("\n")[1:]:       
+    for process in str(stdout.decode("utf-8")).split("\n")[1:]:
       data = [x for x in process.split(" ") if x]
       if data and len(data) > 1:
         pid = int(data[1])
@@ -73,9 +72,13 @@ def check_port(host: str, port: int, timeout: float = 1) -> bool:
 
 
 class MLPEnv(object):
+
   def __init__(self):
-    self._mlp_env = {k: v for k, v in os.environ.items()
-                     if k.startswith('MLP_') or k.startswith('MPI_')}
+    self._mlp_env = {
+        k: v
+        for k, v in os.environ.items()
+        if k.startswith('MLP_') or k.startswith('MPI_')
+    }
     self.framework = self._get('MLP_FRAMEWORK')
     self.ssh_port = self._get('MLP_SSH_PORT')
     self.log_path = self._get('MLP_LOG_PATH')
@@ -83,13 +86,18 @@ class MLPEnv(object):
     self.entrypoint_dir = self._get('MLP_ENTRYPOINT_DIR')
     self.task_cmd = self._get('MLP_TASK_CMD')
     self.role = self._get('MLP_ROLE', "").upper()
-    self.all_roles = {k.split('_')[1]: int(self._get(k, 0)) for k in self._mlp_env
-                      if k.endswith('_NUM') and len(k.split('_')) == 3}
+    self.all_roles = {
+        k.split('_')[1]: int(self._get(k, 0))
+        for k in self._mlp_env
+        if k.endswith('_NUM') and len(k.split('_')) == 3
+    }
     if self.enable_mpi:
       self.index = get_mpi_rank()
       self.all_roles['WORKER'] = get_mpi_size()
       self.port = int(self._get('MLP_PORT', 0)) + self.index
-      logging.info(f'total process is {get_mpi_size()}, this is {get_mpi_rank()}, port is {self.port}')
+      logging.info(
+          f'total process is {get_mpi_size()}, this is {get_mpi_rank()}, port is {self.port}'
+      )
     else:
       self.index = int(self._get('MLP_ROLE_INDEX', 0))
       self.port = int(self._get('MLP_PORT', 0))
@@ -105,7 +113,7 @@ class MLPEnv(object):
     self.gpu_type = self._get('MLP_GPU_TYPE', "")
     self.mem = int(self._get('MLP_MEM', 0))
 
-    self.host = yarn_runtime.get_local_host()#self._get('MLP_HOST')
+    self.host = yarn_runtime.get_local_host()  #self._get('MLP_HOST')
 
     self._has_started_profiler = False
 
@@ -128,7 +136,9 @@ class MLPEnv(object):
     logging.info(f"{key}, mlp_env: {self._mlp_env}")
     return int(self._get(key, 0))
 
-  def get_all_host(self, role: str = None, is_primary: bool = True) -> List[str]:
+  def get_all_host(self,
+                   role: str = None,
+                   is_primary: bool = True) -> List[str]:
     role = (role or self.role).upper()
     if is_primary:
       key = f'MLP_{role}_ALL_PRIMARY_HOSTS'
@@ -136,7 +146,9 @@ class MLPEnv(object):
       key = f'MLP_{role}_ALL_HOSTS'
     return self._get(key)
 
-  def get_all_addrs(self, role: str = None, is_primary: bool = True) -> List[str]:
+  def get_all_addrs(self,
+                    role: str = None,
+                    is_primary: bool = True) -> List[str]:
     role = (role or self.role).upper()
     if is_primary:
       key = f'MLP_{role}_ALL_PRIMARY_ADDRS'
@@ -148,7 +160,10 @@ class MLPEnv(object):
     else:
       return []
 
-  def get_host(self, role: str = None, index: int = None, is_primary: bool = True) -> str:
+  def get_host(self,
+               role: str = None,
+               index: int = None,
+               is_primary: bool = True) -> str:
     role = (role or self.role).upper()
     if self.enable_mpi and role == 'WORKER':
       index = (self.index if index is None else index) // get_mpi_local_size()
@@ -163,7 +178,10 @@ class MLPEnv(object):
 
     return self._get(key)
 
-  def get_addr(self, role: str = None, index: int = None, is_primary: bool = True) -> str:
+  def get_addr(self,
+               role: str = None,
+               index: int = None,
+               is_primary: bool = True) -> str:
     role = (role or self.role).upper()
     if role == self.role:
       index = self.index if index is None else index
@@ -206,7 +224,11 @@ class MLPEnv(object):
     role = (role or 'dispatcher').upper()
     return self.get_addr(role)
 
-  def wait(self, role: str = None, index: int = 0, timeout: int = -1, use_ssh: bool = True):
+  def wait(self,
+           role: str = None,
+           index: int = 0,
+           timeout: int = -1,
+           use_ssh: bool = True):
     host = self.get_host(role, index, True)
     port = self.ssh_port if use_ssh else self.get_port(role, index)
     if host:
@@ -230,7 +252,7 @@ class MLPEnv(object):
     if host:
       while True:
         if not check_port(host, port, timeout=60):
-          break #return
+          break  #return
         else:
           time.sleep(10)
     else:
@@ -260,7 +282,6 @@ class MLPEnv(object):
     tf.profiler.experimental.server.start(port)
     self._has_started_profiler = True
 
-
   def profiler_trace(self,
                      role: str = 'dsworker',
                      index: int = -1,
@@ -270,27 +291,26 @@ class MLPEnv(object):
                      delay_ms=10000):
     logdir = self._get("TENSORBOARD_LOG_PATH", "/tensorboard_logs/")
     options = tf.profiler.experimental.ProfilerOptions(
-      host_tracer_level=host_tracer_level,
-      python_tracer_level=python_tracer_level,
-      device_tracer_level=device_tracer_level,
-      delay_ms=delay_ms)
+        host_tracer_level=host_tracer_level,
+        python_tracer_level=python_tracer_level,
+        device_tracer_level=device_tracer_level,
+        delay_ms=delay_ms)
     if index < 0:
       all_addrs = self.get_all_addrs(role)
-      service_addr=','.join(map(lambda addr: f'grpc://{addr}', all_addrs))
+      service_addr = ','.join(map(lambda addr: f'grpc://{addr}', all_addrs))
     else:
-      service_addr=f'grpc://{self.get_addr(role, index)}'
-    tf.profiler.experimental.client.trace(
-      service_addr=service_addr,
-      logdir=logdir,
-      duration_ms=delay_ms,
-      options=options
-    )
+      service_addr = f'grpc://{self.get_addr(role, index)}'
+    tf.profiler.experimental.client.trace(service_addr=service_addr,
+                                          logdir=logdir,
+                                          duration_ms=delay_ms,
+                                          options=options)
 
 
 def add_mpi_exception_hook():
   if 'OMPI_COMM_WORLD_RANK' not in os.environ:
     return
   logging.info("add_mpi_exception_hook")
+
   # Global error handler
   def global_except_hook(exctype, value, traceback):
     try:
@@ -318,7 +338,12 @@ def add_mpi_exception_hook():
             "*****************************************************\n")
         sys.stderr.flush()
         raise e
+
   sys.excepthook = global_except_hook
+
+
+EXTRA_DSWORKERS = []
+
 
 def mlp_pass(dispatcher_role: str = 'dispatcher',
              dsworker_role: str = 'dsworker',
@@ -329,13 +354,14 @@ def mlp_pass(dispatcher_role: str = 'dispatcher',
   worker_role = None if worker_role is None else worker_role.upper()
   pa_role = None if ps_role is None else ps_role.upper()
 
-
   if FLAGS.dataset_use_dataservice:
     _DatasetInitializerHook.begin = begin
     _DatasetInitializerHook.after_create_session = after_create_session
   mlp_env = MLPEnv()
   if mlp_env.avaiable:
     logging.info('MLP is available')
+    logging.info('mlp_env_host: %s, mlp_env_port: %s', mlp_env.host,
+                 mlp_env.port)
     if mlp_env.role == dispatcher_role:
       if dispatcher_role:
         dispatcher = dsvc.DispatchServer(
@@ -350,9 +376,9 @@ def mlp_pass(dispatcher_role: str = 'dispatcher',
         logging.info('Dispatcher started, dsworker begin to start...')
         dispatcher_address = mlp_env.dispatcher_addr(role=dispatcher_role)
         worker = dsvc.WorkerServer(
-          dsvc.WorkerConfig(dispatcher_address=dispatcher_address,
-                            worker_address=f'{mlp_env.host}:{mlp_env.port}',
-                            port=mlp_env.port))
+            dsvc.WorkerConfig(dispatcher_address=dispatcher_address,
+                              worker_address=f'{mlp_env.host}:{mlp_env.port}',
+                              port=mlp_env.port))
         logging.info('Dsworker started....')
         mlp_env.start_profiler()
         mlp_env.join()
@@ -367,7 +393,25 @@ def mlp_pass(dispatcher_role: str = 'dispatcher',
           for idx in range(mlp_env.num_replicas(role=dsworker_role)):
             mlp_env.wait(dsworker_role, index=idx, use_ssh=False)
             logging.info(f'dsworker {idx} started! ')
-      logging.info(f"worker {mlp_env.index} start at {mlp_env.host}:{mlp_env.port}")
+
+        # Extra dsworkers on GPU worker
+        dispatcher_address = mlp_env.dispatcher_addr(role=dispatcher_role)
+        logging.info("dispatcher_address: %s", dispatcher_address)
+        global EXTRA_DSWORKERS
+        for i in range(FLAGS.num_extra_dsworker_on_gpu_worker):
+          # base port number + gpu worker port offset + number generated by (gpu worker index, extra dswroker index)
+          port = (mlp_env.port - mlp_env.index) + get_mpi_size(
+          ) + mlp_env.index * FLAGS.num_extra_dsworker_on_gpu_worker + i
+          logging.info('extra_port: %s', port)
+          worker = dsvc.WorkerServer(
+              dsvc.WorkerConfig(dispatcher_address=dispatcher_address,
+                                worker_address=f'{mlp_env.host}:{port}',
+                                port=port))
+          EXTRA_DSWORKERS.append(worker)
+        logging.info('Start %s extra dsworkers on GPU worker %s',
+                     len(EXTRA_DSWORKERS), mlp_env.index)
+      logging.info(
+          f"worker {mlp_env.index} start at {mlp_env.host}:{mlp_env.port}")
       logging.info(f'{mlp_env.all_roles}')
       # if ps_role is None or ps_role not in mlp_env.all_roles:
       #   mlp_env.start_profiler()
@@ -392,10 +436,12 @@ def begin(self):
         if dataset_id is not None:
           self._rank = hvd.rank()
           #with tf.device(None), tf.device(get_device_str(True)):
-          self._broadcast_dataset_id = [dataset_id,
-                                        hvd.broadcast(tensor=dataset_id,
-                                                      root_rank=0,
-                                                      name="broadcast_dataset_id")]
+          self._broadcast_dataset_id = [
+              dataset_id,
+              hvd.broadcast(tensor=dataset_id,
+                            root_rank=0,
+                            name="broadcast_dataset_id")
+          ]
           graph.clear_collection(name='registed_dataset_id')
     except Exception as e:
       logging.info(f'import byteps/horovod error: {e}')
@@ -405,6 +451,8 @@ def after_create_session(self, session, coord):
   del coord
   if self._broadcast_dataset_id is not None:
     dataset_id, bc_dataset_id = session.run(self._broadcast_dataset_id)
-    logging.info(f'dataset_id is {dataset_id}, bc_dataset_id is {bc_dataset_id}, rank {self._rank}')
+    logging.info(
+        f'dataset_id is {dataset_id}, bc_dataset_id is {bc_dataset_id}, rank {self._rank}'
+    )
     self._broadcast_dataset_id = None
   session.run(self._initializer)
