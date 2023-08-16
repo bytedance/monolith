@@ -720,6 +720,7 @@ class NegativeGenDataset(dataset_ops.UnaryUnchangedStructureDataset):
                throw_origin: bool = False,
                throw_origin_neg: bool = False,
                cache_only_pos: bool = True,
+               cache_negative_actions: List[int] = [],
                real_neg_instance_weight: float = 1.0,
                sampled_neg_instance_weight: float = -1.0,
                unbias_sampled_neg: bool = True,
@@ -738,6 +739,11 @@ class NegativeGenDataset(dataset_ops.UnaryUnchangedStructureDataset):
     assert variant_type in {'instance', 'example'}
     assert label_index >= 0
 
+    assert isinstance(cache_negative_actions, list) and \
+      all(isinstance(x, int) for x in cache_negative_actions)
+    assert len(set(positive_actions) & set(cache_negative_actions)) == 0, \
+      "positive_actions and cache_negative_actions have intersection, pls check"
+
     variant_tensor = pb_datasource_ops.instance_negative_gen_dataset(
         input=input_dataset._variant_tensor,
         pool=pool,
@@ -755,6 +761,7 @@ class NegativeGenDataset(dataset_ops.UnaryUnchangedStructureDataset):
         throw_origin=throw_origin,
         throw_origin_neg=throw_origin_neg,
         cache_only_pos=cache_only_pos,
+        cache_negative_actions=cache_negative_actions,
         real_neg_instance_weight=real_neg_instance_weight,
         sampled_neg_instance_weight=sampled_neg_instance_weight,
         unbias_sampled_neg=unbias_sampled_neg,
@@ -902,6 +909,7 @@ def negative_gen(self,
                  throw_origin: bool = False,
                  throw_origin_neg: bool = False,
                  cache_only_pos: bool = False,
+                 cache_negative_actions: List[int] = [],
                  real_neg_instance_weight: float = 1.0,
                  sampled_neg_instance_weight: float = -1.0,
                  unbias_sampled_neg: bool = True,
@@ -927,6 +935,7 @@ def negative_gen(self,
       throw_origin=throw_origin,
       throw_origin_neg=throw_origin_neg,
       cache_only_pos=cache_only_pos,
+      cache_negative_actions=cache_negative_actions,
       real_neg_instance_weight=real_neg_instance_weight,
       sampled_neg_instance_weight=sampled_neg_instance_weight,
       unbias_sampled_neg=unbias_sampled_neg,

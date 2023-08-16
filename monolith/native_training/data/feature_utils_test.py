@@ -29,7 +29,7 @@ from monolith.native_training.data.feature_utils import (
     add_action, add_label, feature_combine, filter_by_fids, filter_by_label,
     filter_by_value, scatter_label, switch_slot, switch_slot_batch, map_id, use_field_as_label,
     label_upper_bound, label_normalization, multi_label_gen, string_to_variant,
-    variant_to_zeros, has_variant)
+    variant_to_zeros, has_variant, negative_sample)
 
 fid_v1_mask = (1 << 54) - 1
 fid_v2_mask = (1 << 48) - 1
@@ -999,6 +999,72 @@ class DataOpsTest(tf.test.TestCase):
                   self.assertEqual(value >> 48, shared_slot)
           except tf.errors.OutOfRangeError:
             break
+
+
+  def test_negative_sample_with_positive_actions(self):
+    neg_counter = 0
+    filt_counter = 0
+    neg_counter_mismatch = 0
+    filt_counter_mismatch = 0
+    for i in range(1000):
+      inst = proto_parser_pb2.Instance()
+      if i % 11 == 0:
+        inst.label.append(1)
+      else:
+        inst.label.append(0)
+      if i % 5 == 0:
+        # match action=2, drop_rate=0
+        inst.line_id.actions.extend([1, 2, 4, 5])
+      elif i % 5 == 1:
+        # match action=3, drop_rate=1
+        inst.line_id.actions.extend([1, 3, 5])
+      elif i % 5 == 2:
+        # match action=5, drop_rate=0.22
+        inst.line_id.actions.extend([5, 6])
+      elif i % 5 == 3:
+        # match priority, but not in per_action_drop_rate
+        inst.line_id.actions.extend([6])
+      elif i % 5 == 4:
+        # mismatch
+        inst.line_id.actions.extend([10, 11, 12])
+      inst_str = inst.SerializeToString()
+      data = struct.pack(f"<Q{len(inst_str)}s", len(inst_str), inst_str)
+
+      with tf.Graph().as_default():
+        config = tf.compat.v1.ConfigProto()
+        config.graph_options.rewrite_options.disable_meta_optimizer = True
+        ipts = tf.constant(value=[data], dtype=tf.string, shape=tuple())
+        variant_op = string_to_variant(ipts,
+                                      variant_type="instance",
+                                      has_header=True,
+                                      lagrangex_header=False,
+                                      has_sort_id=False,
+                                      kafka_dump=False,
+                                      kafka_dump_prefix=False)
+        filter_op = negative_sample(variant_op,
+                                    drop_rate=0.88,
+                                    label_index=0,
+                                    threshold=0.5,
+                                    variant_type="instance",
+                                    action_priority="2,3,4,1,5,6",
+                                    per_action_drop_rate="1:1.0,2:0.0,3:1.0,4:0.5,5:0.22")
+        with self.session(config=config) as sess:
+          filter_result = sess.run(filter_op)
+          if i % 11 == 0:
+            self.assertTrue(filter_result)
+          elif i % 5 == 0:
+            self.assertTrue(filter_result)
+          elif i % 5 == 1:
+            self.assertFalse(filter_result)
+          elif i % 5 == 2:
+            neg_counter += 1
+            if not filter_result:
+              filt_counter += 1
+          else:
+            neg_counter_mismatch += 1
+            if not filter_result:
+              filt_counter_mismatch += 1
+    logging.info("drop_rate_match: {:2f}, drop_rate_mismatch: {:.2f}".format(filt_counter/neg_counter, filt_counter_mismatch/neg_counter_mismatch))
 
 
 if __name__ == '__main__':

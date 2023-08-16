@@ -115,6 +115,9 @@ REGISTER_OP("NegativeSample")
     .Attr("label_index: int = 0")
     .Attr("threshold: float = 0.0")
     .Attr("variant_type: string")
+    .Attr("priorities: list(int)")
+    .Attr("actions: list(int)")
+    .Attr("per_action_drop_rate: list(float)")
     .Output("output: bool");
 
 REGISTER_OP("LabelUpperBound")

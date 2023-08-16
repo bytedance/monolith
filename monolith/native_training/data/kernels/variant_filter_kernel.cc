@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <climits>
 #include <cstdio>
 #include <random>
 #include <string>
@@ -326,10 +327,30 @@ class SpecialStrategyOp : public OpKernel {
 class NegativeSampleOp : public OpKernel {
  public:
   explicit NegativeSampleOp(OpKernelConstruction *context) : OpKernel(context) {
+    std::vector<int> priorities;
+    std::vector<int> actions;
+    std::vector<float> per_action_drop_rate;
     OP_REQUIRES_OK(context, context->GetAttr("drop_rate", &drop_rate_));
     OP_REQUIRES_OK(context, context->GetAttr("label_index", &label_index_));
     OP_REQUIRES_OK(context, context->GetAttr("threshold", &threshold_));
+    OP_REQUIRES_OK(context, context->GetAttr("priorities", &priorities));
+    OP_REQUIRES_OK(context, context->GetAttr("actions", &actions));
+    OP_REQUIRES_OK(context, context->GetAttr("per_action_drop_rate",
+                                             &per_action_drop_rate));
     OP_REQUIRES_OK(context, context->GetAttr("variant_type", &variant_type_));
+
+    OP_REQUIRES(context, actions.size() == per_action_drop_rate.size(),
+                errors::Unknown("internal error"));
+
+    for (size_t i = 0; i < actions.size(); i++) {
+      action_drop_rate_map_.emplace(actions[i], per_action_drop_rate[i]);
+    }
+    for (size_t i = 0; i < priorities.size(); i++) {
+      action_priorities_map_.emplace(priorities[i], i);
+    }
+    if (actions.size() > 0) {
+      enable_drop_by_action_ = true;
+    }
   }
 
   void Compute(OpKernelContext *context) override {
@@ -341,9 +362,13 @@ class NegativeSampleOp : public OpKernel {
     float label = GetLabel(input_tensor);
 
     if (label < threshold_) {
+      float sample_drop_rate = drop_rate_;
+      if (enable_drop_by_action_) {
+        sample_drop_rate = GetNegDropRate(input_tensor);
+      }
       thread_local std::mt19937 gen((std::random_device())());
       float random = gen() % 1000 / 1000.0;
-      output() = random <= drop_rate_ ? false : true;
+      output() = random < sample_drop_rate ? false : true;
     } else {
       output() = true;
     }
@@ -353,6 +378,9 @@ class NegativeSampleOp : public OpKernel {
   float drop_rate_ = 0.0;
   int label_index_ = 0;
   float threshold_ = 0.0;
+  bool enable_drop_by_action_ = false;
+  std::unordered_map<int, int> action_priorities_map_;
+  std::unordered_map<int, float> action_drop_rate_map_;
   std::string variant_type_ = "instance";
 
   float GetLabel(const Tensor &input_tensor) {
@@ -366,6 +394,43 @@ class NegativeSampleOp : public OpKernel {
     }
 
     return 0;
+  }
+
+  const LineId *GetLineId(const Tensor &input_tensor) {
+    auto input = input_tensor.scalar<Variant>();
+    if (variant_type_ == "instance") {
+      const Instance *instance = input().get<Instance>();
+      return &instance->line_id();
+    } else {
+      const Example *example = input().get<Example>();
+      return &example->line_id();
+    }
+  }
+
+  int FindMostPriorAction(const Tensor &input_tensor) {
+    const LineId *line_id = GetLineId(input_tensor);
+    CHECK(line_id != nullptr);
+    int most_prior = INT_MAX;
+    int record_action = -1;
+    for (int action : line_id->actions()) {
+      auto it = action_priorities_map_.find(action);
+      if (it != action_priorities_map_.end() && it->second < most_prior) {
+        most_prior = it->second;
+        record_action = action;
+      }
+    }
+    return record_action;
+  }
+
+  float GetNegDropRate(const Tensor &input_tensor) {
+    int prior_action = FindMostPriorAction(input_tensor);
+    if (prior_action > 0) {
+      auto it = action_drop_rate_map_.find(prior_action);
+      if (it != action_drop_rate_map_.end()) {
+        return it->second;
+      }
+    }
+    return drop_rate_;
   }
 };
 

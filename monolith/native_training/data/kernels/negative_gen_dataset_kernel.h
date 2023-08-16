@@ -50,6 +50,7 @@ class InstanceNegativeGenDatasetOp : public UnaryDatasetOpKernel {
   bool throw_origin_;
   bool throw_origin_neg_;
   bool cache_only_pos_;
+  std::vector<int32> cache_negative_actions_;
   float real_neg_instance_weight_ = 1.0;
   float sampled_neg_instance_weight_ = -1;
   bool unbias_sampled_neg_;

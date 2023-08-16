@@ -409,7 +409,9 @@ def negative_sample(variant: tf.Tensor,
                     drop_rate: float,
                     label_index: int = 0,
                     threshold: float = 0.0,
-                    variant_type: str = 'instance'):
+                    variant_type: str = 'instance',
+                    action_priority: str = None,
+                    per_action_drop_rate: str = None):
   """负例采样
   
   Args:
@@ -418,16 +420,33 @@ def negative_sample(variant: tf.Tensor,
     label_index (:obj:`int`): 样本中labels是一个列表, label_index表示本次启用哪一个index对应的label
     threshold (:obj:`float`): label是一个实数, 大于`threshold`的是正样本
     variant_type (:obj:`str`): variant类型, 可以为instance/example
+    action_priority (:obj:`str`): action的优先级列表, action用int表示, 以逗号分隔, 排在前面的优先级高
+    per_action_drop_rate (:obj:`str`): 基本单元是`action:drop_rate`, 可以用逗号分隔多个基本单元
   
   Returns:
     variant tensor, 过滤后的数据, variant类型
   """
 
+  assert action_priority is None or isinstance(action_priority, str)
+  assert per_action_drop_rate is None or isinstance(per_action_drop_rate, str)
+  priority = []
+  actions, action_drop_rate = [], []
+
+  if action_priority and per_action_drop_rate:
+    priority = [int(i) for i in action_priority.strip().split(",")]
+    for item in per_action_drop_rate.strip().split(","):
+      action, dr = item.strip().split(":")
+      actions.append(int(action))
+      action_drop_rate.append(float(dr))
+
   return ragged_data_ops.negative_sample(variant,
                                          drop_rate=drop_rate,
                                          label_index=label_index,
                                          threshold=threshold,
-                                         variant_type=variant_type)
+                                         variant_type=variant_type,
+                                         priorities=priority,
+                                         actions=actions,
+                                         per_action_drop_rate=action_drop_rate)
 
 
 @monolith_export

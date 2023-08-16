@@ -66,6 +66,8 @@ static constexpr const char *const kNegativeAction = "negative_action";
 static constexpr const char *const kActionPriority = "action_priority";
 static constexpr const char *const kPositiveActions = "positive_actions";
 static constexpr const char *const kCacheOnlyPos = "cache_only_pos";
+static constexpr const char *const kCacheNegativeActions =
+    "cache_negative_actions";
 static constexpr const char *const kIndexFeature = "index_feature";
 static constexpr const char *const kThrowOrigin = "throw_origin";
 static constexpr const char *const kThrowOriginNeg = "throw_origin_neg";
@@ -92,6 +94,7 @@ class InnerIterator {
                 const std::vector<int32> &positive_actions,
                 const std::string &index_feature, bool throw_origin,
                 bool throw_origin_neg, bool cache_only_pos,
+                const std::vector<int32> &cache_negative_actions,
                 float real_neg_instance_weight,
                 float sampled_neg_instance_weight, bool unbias_sampled_neg,
                 float origin_neg_in_pool_proba, float neg_sample_declay_factor,
@@ -118,6 +121,8 @@ class InnerIterator {
         throw_origin_(throw_origin),
         throw_origin_neg_(throw_origin_neg),
         cache_only_pos_(cache_only_pos),
+        cache_negative_actions_(cache_negative_actions.begin(),
+                                cache_negative_actions.end()),
         real_neg_instance_weight_(real_neg_instance_weight),
         sampled_neg_instance_weight_(sampled_neg_instance_weight),
         unbias_sampled_neg_(unbias_sampled_neg),
@@ -311,7 +316,19 @@ class InnerIterator {
   }
 
   inline bool Cacheable(bool is_positive) {
-    return (!cache_only_pos_ || is_positive);
+    if (!cache_only_pos_ || is_positive) {
+      return true;
+    } else if (cache_negative_actions_.empty()) {
+      return false;
+    } else {
+      const LineId *line_id = GetLineId();
+      for (auto &action : line_id->actions()) {
+        if (cache_negative_actions_.count(action)) {
+          return true;
+        }
+      }
+      return false;
+    }
   }
 
   inline bool Emitable(bool is_positive) {
@@ -572,11 +589,11 @@ class InnerIterator {
   int32 channel_slot_;
   std::unordered_set<std::string> item_features_;
   std::unordered_set<int32> item_slots_;
+  int32 label_index_;
   int32 positive_label_;
   int32 negative_label_;
   int32 negative_action_;
   std::unordered_set<int32> positive_actions_;
-  int32 label_index_;
   std::unordered_map<int32, int32> action_priority_;
   std::string index_feature_;
   int32 index_slot_;
@@ -584,6 +601,7 @@ class InnerIterator {
   bool throw_origin_;
   bool throw_origin_neg_;
   bool cache_only_pos_;
+  std::unordered_set<int> cache_negative_actions_;
   float real_neg_instance_weight_;
   float sampled_neg_instance_weight_;
   bool unbias_sampled_neg_;
@@ -608,6 +626,7 @@ class InstanceNegativeGenDatasetOp::Dataset : public DatasetBase {
           const std::vector<int32> &positive_actions,
           const std::string &index_feature, bool throw_origin,
           bool throw_origin_neg, bool cache_only_pos,
+          const std::vector<int32> &cache_negative_actions,
           float real_neg_instance_weight, float sampled_neg_instance_weight,
           bool unbias_sampled_neg, float origin_neg_in_pool_proba,
           float neg_sample_declay_factor, float easy_hard_ratio,
@@ -628,6 +647,7 @@ class InstanceNegativeGenDatasetOp::Dataset : public DatasetBase {
         throw_origin_(throw_origin),
         throw_origin_neg_(throw_origin_neg),
         cache_only_pos_(cache_only_pos),
+        cache_negative_actions_(cache_negative_actions),
         real_neg_instance_weight_(real_neg_instance_weight),
         sampled_neg_instance_weight_(sampled_neg_instance_weight),
         unbias_sampled_neg_(unbias_sampled_neg),
@@ -742,6 +762,9 @@ class InstanceNegativeGenDatasetOp::Dataset : public DatasetBase {
     AttrValue cache_only_pos_node;
     b->BuildAttrValue(cache_only_pos_, &cache_only_pos_node);
 
+    AttrValue cache_negative_actions_node;
+    b->BuildAttrValue(cache_negative_actions_, &cache_negative_actions_node);
+
     AttrValue real_neg_instance_weight_node;
     b->BuildAttrValue(real_neg_instance_weight_,
                       &real_neg_instance_weight_node);
@@ -784,6 +807,7 @@ class InstanceNegativeGenDatasetOp::Dataset : public DatasetBase {
          {kThrowOrigin, throw_origin_node},
          {kThrowOriginNeg, throw_origin_neg_node},
          {kCacheOnlyPos, cache_only_pos_node},
+         {kCacheNegativeActions, cache_negative_actions_node},
          {kRealNegInstanceWeight, real_neg_instance_weight_node},
          {kSampledNegInstanceWeight, sampled_neg_instance_weight_node},
          {kUnbiasSampledNeg, unbias_sampled_neg_node},
@@ -820,7 +844,8 @@ class InstanceNegativeGenDatasetOp::Dataset : public DatasetBase {
           dataset()->negative_action_, dataset()->action_priority_,
           dataset()->positive_actions_, dataset()->index_feature_,
           dataset()->throw_origin_, dataset()->throw_origin_neg_,
-          dataset()->cache_only_pos_, dataset()->real_neg_instance_weight_,
+          dataset()->cache_only_pos_, dataset()->cache_negative_actions_,
+          dataset()->real_neg_instance_weight_,
           dataset()->sampled_neg_instance_weight_,
           dataset()->unbias_sampled_neg_, dataset()->origin_neg_in_pool_proba_,
           dataset()->neg_sample_declay_factor_, dataset()->easy_hard_ratio_,
@@ -879,16 +904,17 @@ class InstanceNegativeGenDatasetOp::Dataset : public DatasetBase {
   bool per_channel_;
   std::string channel_feature_;
   std::vector<std::string> item_features_;
+  int32 label_index_;
   int32 positive_label_;
   int32 negative_label_;
   int32 negative_action_;
-  std::vector<int32> positive_actions_;
-  int32 label_index_;
   std::string action_priority_;
+  std::vector<int32> positive_actions_;
   std::string index_feature_;
   bool throw_origin_;
   bool throw_origin_neg_;
   bool cache_only_pos_;
+  std::vector<int32> cache_negative_actions_;
   float real_neg_instance_weight_;
   float sampled_neg_instance_weight_;
   bool unbias_sampled_neg_;
@@ -919,6 +945,8 @@ InstanceNegativeGenDatasetOp::InstanceNegativeGenDatasetOp(
   OP_REQUIRES_OK(ctx, ctx->GetAttr(kThrowOrigin, &throw_origin_));
   OP_REQUIRES_OK(ctx, ctx->GetAttr(kThrowOriginNeg, &throw_origin_neg_));
   OP_REQUIRES_OK(ctx, ctx->GetAttr(kCacheOnlyPos, &cache_only_pos_));
+  OP_REQUIRES_OK(ctx,
+                 ctx->GetAttr(kCacheNegativeActions, &cache_negative_actions_));
   OP_REQUIRES_OK(
       ctx, ctx->GetAttr(kRealNegInstanceWeight, &real_neg_instance_weight_));
   OP_REQUIRES_OK(ctx, ctx->GetAttr(kSampledNegInstanceWeight,
@@ -948,10 +976,10 @@ void InstanceNegativeGenDatasetOp::MakeDataset(OpKernelContext *ctx,
       ctx, input, neg_num_, per_channel_, channel_feature_, item_features_,
       label_index_, positive_label_, negative_label_, negative_action_,
       action_priority_, positive_actions_, index_feature_, throw_origin_,
-      throw_origin_neg_, cache_only_pos_, real_neg_instance_weight_,
-      sampled_neg_instance_weight_, unbias_sampled_neg_,
-      origin_neg_in_pool_proba_, neg_sample_declay_factor_, easy_hard_ratio_,
-      variant_type_, mapper_->GetFeatureNameMapper());
+      throw_origin_neg_, cache_only_pos_, cache_negative_actions_,
+      real_neg_instance_weight_, sampled_neg_instance_weight_,
+      unbias_sampled_neg_, origin_neg_in_pool_proba_, neg_sample_declay_factor_,
+      easy_hard_ratio_, variant_type_, mapper_->GetFeatureNameMapper());
 }
 
 namespace {
