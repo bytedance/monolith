@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <tuple>
+#include <limits>
 
 #include "absl/strings/match.h"
 
@@ -119,8 +120,12 @@ void BaseParser::FillFeature(OpKernelContext *ctx, const EFeature &feature,
 
   if (feature.has_float_list()) {
     if (shape == 1) {
-      CHECK_GT(feature.float_list().value_size(), 0);
-      tensor->flat<float>()(offset) = feature.float_list().value(0);
+      if (feature.float_list().value_size() > 0) {
+        tensor->flat<float>()(offset) = feature.float_list().value(0);
+      } else {
+        tensor->flat<float>()(offset) = std::numeric_limits<float>::min();
+        LOG_EVERY_N(INFO, 10000) << "float feature " << name << " has missing data!";
+      }
     } else {
       auto matrix = tensor->matrix<float>();
       for (int j = 0; j < std::min(shape, feature.float_list().value_size());
@@ -130,8 +135,12 @@ void BaseParser::FillFeature(OpKernelContext *ctx, const EFeature &feature,
     }
   } else if (feature.has_double_list()) {
     if (shape == 1) {
-      CHECK_GT(feature.double_list().value_size(), 0);
-      tensor->flat<float>()(offset) = feature.double_list().value(0);
+      if (feature.double_list().value_size() > 0) {
+        tensor->flat<float>()(offset) = feature.double_list().value(0);
+      } else {
+        tensor->flat<float>()(offset) = std::numeric_limits<float>::min();
+        LOG_EVERY_N(INFO, 10000) << "double feature " << name << " has missing data!";
+      }
     } else {
       auto matrix = tensor->matrix<float>();
       for (int j = 0; j < std::min(shape, feature.double_list().value_size());
@@ -396,16 +405,21 @@ void ExampleParser::Parse(OpKernelContext *ctx,
     for (const Example *example : examples) {
       std::unordered_set<std::string> appeared;
       appeared.reserve(example->named_feature_size());
+      bool has_fill_label = false, has_fill_instance_weight = false;
       for (const auto &named_feature : example->named_feature()) {
         // FeatureNameMapper
         const std::string &name = named_feature.name();
         auto it = name2info_.find(name);
         if (it == name2info_.end()) continue;
-
         std::tie(idx, shape, dtype) = it->second;
         FillFeature(ctx, named_feature.feature(), out_tensors[idx], name, shape,
                     offset);
         appeared.insert(name);
+        if (name == "label") {
+          has_fill_label = true;
+        } else if (name == "instance_weight") {
+          has_fill_instance_weight = true;
+        }
       }
 
       for (const auto &ragged : ragged_names_) {
@@ -417,28 +431,47 @@ void ExampleParser::Parse(OpKernelContext *ctx,
       }
 
       // for label
-      auto it = name2info_.find("label");
-      if (it != name2info_.end()) {
-        std::tie(idx, shape, dtype) = it->second;
-        Tensor *tensor = out_tensors[idx];
-        if (shape == 1) {
-          tensor->flat<float>()(offset) = example->label(0);
-        } else {
-          auto matrix = tensor->matrix<float>();
-          for (int j = 0; j < std::min(shape, example->label_size()); ++j) {
-            matrix(offset, j) = example->label(j);
+      if (!has_fill_label) {
+        auto it = name2info_.find("label");
+        if (it != name2info_.end()) {
+          std::tie(idx, shape, dtype) = it->second;
+          Tensor *tensor = out_tensors[idx];
+          if (example->label_size() > 0) {
+            if (shape == 1) {
+              tensor->flat<float>()(offset) = example->label(0);
+            } else {
+              auto matrix = tensor->matrix<float>();
+              for (int j = 0; j < shape; ++j) {
+                if (j < example->label_size()) {
+                  matrix(offset, j) = example->label(j);
+                } else {
+                  matrix(offset, j) = internal::INVALID_LABEL;
+                }
+              }
+            }
+          } else {
+            if (shape == 1) {
+              tensor->flat<float>()(offset) = internal::INVALID_LABEL;
+            } else {
+              auto matrix = tensor->matrix<float>();
+              for (int j = 0; j < shape; ++j) {
+                matrix(offset, j) = internal::INVALID_LABEL;
+              }
+            }
           }
         }
       }
 
       // for instance_weight
-      it = name2info_.find("instance_weight");
-      if (it != name2info_.end()) {
-        std::tie(idx, shape, dtype) = it->second;
-        Tensor *tensor = out_tensors[idx];
-        float instance_weight = example->instance_weight();
-        tensor->flat<float>()(offset) =
-            instance_weight > 0 ? instance_weight : 1.0;
+      if (!has_fill_instance_weight) {
+        auto it = name2info_.find("instance_weight");
+        if (it != name2info_.end()) {
+          std::tie(idx, shape, dtype) = it->second;
+          Tensor *tensor = out_tensors[idx];
+          float instance_weight = example->instance_weight();
+          tensor->flat<float>()(offset) =
+              instance_weight > 0 ? instance_weight : 1.0;
+        }
       }
 
       // for extra fields in line_id

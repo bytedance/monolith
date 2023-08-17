@@ -38,7 +38,7 @@ from tensorflow_serving.apis.model_management_pb2 import ReloadConfigRequest
 from tensorflow_serving.config.model_server_config_pb2 import ModelServerConfig
 from monolith.agent_service import utils
 from monolith.agent_service.client import FLAGS
-from monolith.native_training.data.utils import enable_to_env
+from monolith.native_training.data.utils import enable_tob_env
 from monolith.native_training.data.feature_list import FeatureList, get_feature_name_and_slot
 from idl.matrix.proto.example_pb2 import Example, ExampleBatch, FeatureListType, Feature
 from idl.matrix.proto.line_id_pb2 import LineId
@@ -355,7 +355,7 @@ class ProfileThread(threading.Thread):
 
 
 def main(_):
-  enable_to_env()
+  enable_tob_env()
 
   env_utils.setup_host_ip()
   agent_conf = utils.AgentConfig.from_file(FLAGS.conf)

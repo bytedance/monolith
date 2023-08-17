@@ -55,7 +55,7 @@ from monolith.native_training.monolith_export import monolith_export
 from monolith.native_training.runtime.hash_table import \
     embedding_hash_table_pb2
 from monolith.native_training.data.feature_utils import switch_slot, switch_slot_batch
-from monolith.native_training.data.utils import get_slot_feature_name, enable_to_env, register_slots
+from monolith.native_training.data.utils import get_slot_feature_name, enable_tob_env, register_slots
 from monolith.native_training.utils import add_to_collections
 from monolith.native_training.model_dump.dump_utils import DumpUtils
 from monolith.native_training.dense_reload_utils import CustomRestoreListener, CustomRestoreListenerKey
@@ -243,7 +243,7 @@ class MonolithBaseModel(NativeTask, ABC):
 
   def __init__(self, params):
     super(MonolithBaseModel, self).__init__(params)
-    enable_to_env()
+    enable_tob_env()
     self.fs_dict = {}
     self.fc_dict = {}
     # feature_name -> slice_name -> FeatureSlice(feature_slot, start, end)

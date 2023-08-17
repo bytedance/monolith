@@ -19,7 +19,7 @@ USED_FREATUE_NAMES = {}
 NAME_TO_SLOT = {}
 
 
-def enable_to_env():
+def enable_tob_env():
   global TOBENV
   TOBENV = True
 
