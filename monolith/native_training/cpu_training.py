@@ -560,6 +560,7 @@ def _make_serving_feature_configs_from_training_configs(
     # config: entry.HashTableConfigInstance
     config.table_config.entry_config.entry_type = embedding_hash_table_pb2.EntryConfig.EntryType.SERVING
     config.table_config.skip_zero_embedding = skip_zero_embedding
+    config.table_config.cuckoo.SetInParent()
   return serving_feature_configs
 
 
