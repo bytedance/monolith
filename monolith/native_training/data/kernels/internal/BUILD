@@ -139,9 +139,24 @@ tf_cc_test(
 )
 
 cc_library(
-    name = "line_id_value_filter",
-    hdrs = ["line_id_value_filter.h"],
-    srcs = ["line_id_value_filter.cc"],
+    name = "value_filter_by_line_id",
+    hdrs = ["value_filter_by_line_id.h"],
+    srcs = ["value_filter_by_line_id.cc"],
+    deps = [
+        ":relational_utils",
+        "//idl:example_cc_proto",
+        "//third_party/nlohmann:json",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+        "@org_tensorflow//tensorflow/core/platform:env",
+    ],
+)
+
+cc_library(
+    name = "value_filter_by_feature",
+    hdrs = ["value_filter_by_feature.h"],
+    srcs = ["value_filter_by_feature.cc"],
     deps = [
         ":relational_utils",
         "//idl:example_cc_proto",

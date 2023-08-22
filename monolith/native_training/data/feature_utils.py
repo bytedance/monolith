@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from enum import Enum
 import string
 import numpy as np
 from typing import Any, List, Union, Dict, Tuple
@@ -70,6 +71,88 @@ def filter_by_fids(variant: tf.Tensor,
                                     has_actions or [], req_time_min,
                                     select_slots, variant_type)
 
+@monolith_export
+def filter_by_feature_value(variant: tf.Tensor,
+                            field_name: str,
+                            op: str,
+                            operand: Union[float, int, str, List[float], List[int],
+                                          List[str]],
+                            field_type: str,
+                            keep_empty: bool = False,
+                            operand_filepath: str = None):
+  """通过值过滤, 连续特征过滤, 
+  
+  Args:
+    variant (:obj:`Tensor`): 输入数据, 必须是variant类型
+    field_name (:obj:`List[int]`): 当field_name, 样本被过滤
+    op (:obj:`str`): 比较运算符, 可以是 gt/ge/eq/lt/le/neq/between/in/not-in 等
+      布尔运算，也可以是 all/any/diff 等集合布尔运算
+    operand (:obj:`float`): 操作数, 用于比较, 可以为值或者List
+    keep_empty (:obj:`bool`): False
+    field_type (:obj:`str`): 需要显式指定字段类型, 可以为int64/float/double/bytes
+
+  Returns:
+    variant tensor, 过滤后的数据, variant类型
+  """
+
+  assert op in {
+      'gt', 'ge', 'eq', 'lt', 'le', 'neq', 'between', 'in', 'not-in', 'all',
+      'any', 'diff', 'startswith', 'endswith'
+  }
+
+  assert (operand is None and operand_filepath) or (operand is not None and
+                                                    not operand_filepath)
+  assert field_type in {'int64', 'float', 'double', 'bytes'}, 'You must specify field_type for feature value_filter!'
+
+  string_operand = []
+  operand_filepath = '' if operand_filepath is None else operand_filepath
+
+  if operand_filepath:
+    assert op in {'in', 'not-in'}
+    assert (isinstance(operand_filepath, str) and
+            tf.io.gfile.exists(operand_filepath))
+    int_operand, float_operand = [], []
+  elif op in {'all', 'any', 'diff'}:
+    assert field_type == 'int64', 'all/any/diff op only support int64 list'
+    if not isinstance(operand, (list, tuple)):
+      assert isinstance(operand, int)
+      int_operand, float_operand = [operand], []
+    else:
+      assert all(isinstance(o, int) for o in operand)
+      int_operand, float_operand = list(operand), []
+  elif field_type in {'float', 'double'}:
+    if op == 'between':
+      assert all(isinstance(o, (int, float)) for o in operand)
+      int_operand, float_operand = [], [float(o) for o in operand]
+    else:
+      int_operand, float_operand = [], [float(operand)]
+  elif field_type == 'int64':
+    if op in {'in', 'not-in', 'between'}:
+      assert all(isinstance(o, int) for o in operand)
+      int_operand, float_operand = list(operand), []
+    else:
+      int_operand, float_operand = [int(operand)], []
+  elif field_type == 'bytes':
+    int_operand, float_operand = [], []
+    if isinstance(operand, str):
+      string_operand.append(operand)
+    elif isinstance(operand, (list, tuple)):
+      assert all(isinstance(o, str) for o in operand)
+      string_operand.extend(operand)
+    else:
+      raise RuntimeError("params error!")
+  else:
+    raise RuntimeError("params error!")
+
+  return ragged_data_ops.feature_value_filter(variant,
+                                              field_name=field_name,
+                                              op=op,
+                                              float_operand=float_operand,
+                                              int_operand=int_operand,
+                                              string_operand=string_operand,
+                                              operand_filepath=operand_filepath,
+                                              field_type=field_type,
+                                              keep_empty=keep_empty)
 
 @monolith_export
 def filter_by_value(variant: tf.Tensor,
@@ -159,7 +242,6 @@ def filter_by_value(variant: tf.Tensor,
                                       operand_filepath=operand_filepath,
                                       keep_empty=keep_empty,
                                       variant_type=variant_type)
-
 
 @monolith_export
 def add_action(

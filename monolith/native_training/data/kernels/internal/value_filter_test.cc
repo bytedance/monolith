@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "monolith/native_training/data/kernels/internal/line_id_value_filter.h"
+#include "monolith/native_training/data/kernels/internal/value_filter_by_line_id.h"
+#include "monolith/native_training/data/kernels/internal/value_filter_by_feature.h"
 
 #include <memory>
 #include <thread>

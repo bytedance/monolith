@@ -43,6 +43,18 @@ REGISTER_OP("SetFilter")
     .Attr("variant_type: string")
     .Output("output: bool");
 
+REGISTER_OP("FeatureValueFilter")
+    .Input("input: variant")
+    .Attr("field_name: string")
+    .Attr("op: string")
+    .Attr("float_operand: list(float)")
+    .Attr("int_operand: list(int)")
+    .Attr("string_operand: list(string)")
+    .Attr("operand_filepath: string")
+    .Attr("field_type: string")
+    .Attr("keep_empty: bool = false")
+    .Output("output: bool");
+
 REGISTER_OP("ValueFilter")
     .Input("input: variant")
     .Attr("field_name: string")

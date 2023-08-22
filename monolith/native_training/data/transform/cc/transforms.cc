@@ -22,7 +22,7 @@
 #include "absl/strings/str_join.h"
 #include "glog/logging.h"
 #include "monolith/native_training/data/kernels/internal/label_utils.h"
-#include "monolith/native_training/data/kernels/internal/line_id_value_filter.h"
+#include "monolith/native_training/data/kernels/internal/value_filter_by_line_id.h"
 #include "monolith/native_training/data/kernels/internal/relational_utils.h"
 #include "monolith/native_training/data/training_instance/cc/instance_utils.h"
 #include "monolith/native_training/runtime/common/linalg_utils.h"
@@ -295,6 +295,7 @@ class FilterByValue : public TransformInterface {
   }
 
  private:
+  // TODO(huangruiteng): support value filter by feature
   bool IsInstanceOfInterest(const LineId& line_id) const {
     tensorflow::Env* env = tensorflow::Env::Default();
     return line_id_value_filter_->IsInstanceOfInterest(env, line_id);

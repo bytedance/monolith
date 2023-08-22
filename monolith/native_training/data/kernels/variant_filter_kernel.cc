@@ -21,16 +21,17 @@
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/strings/str_format.h"
-#include "idl/matrix/proto/example.pb.h"
 #include "monolith/native_training/data/kernels/feature_name_mapper_tf_bridge.h"
-#include "monolith/native_training/data/kernels/internal/line_id_value_filter.h"
 #include "monolith/native_training/data/kernels/internal/relational_utils.h"
+#include "monolith/native_training/data/kernels/internal/value_filter_by_feature.h"
+#include "monolith/native_training/data/kernels/internal/value_filter_by_line_id.h"
 #include "monolith/native_training/data/training_instance/cc/instance_utils.h"
 #include "monolith/native_training/data/training_instance/cc/pb_variant.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/variant.h"
 #include "third_party/nlohmann/json.hpp"
 
 namespace tensorflow {
@@ -41,6 +42,7 @@ using Instance = ::parser::proto::Instance;
 using Example = ::monolith::io::proto::Example;
 using LineId = ::idl::matrix::proto::LineId;
 using tensorflow::monolith_tf::internal::LineIdValueFilter;
+using tensorflow::monolith_tf::internal::FeatureValueFilter;
 
 class SetFilterOp : public OpKernel {
  public:
@@ -105,8 +107,9 @@ class SetFilterOp : public OpKernel {
   void Compute(OpKernelContext *context) override {
     const Tensor &input_tensor = context->input(0);
     Tensor *output_tensor = nullptr;
-    OP_REQUIRES_OK(context, context->allocate_output(0, input_tensor.shape(),
-                                                     &output_tensor));
+    OP_REQUIRES_OK(
+        context,
+        context->allocate_output(0, input_tensor.shape(), &output_tensor));
     auto output = output_tensor->scalar<bool>();
     output() = IsInstanceOfInterest(input_tensor);
   }
@@ -137,6 +140,59 @@ class SetFilterOp : public OpKernel {
   FeatureNameMapperTfBridge *mapper_;
 };
 
+class FeatureValueFilterOp : public OpKernel {
+ public:
+  explicit FeatureValueFilterOp(OpKernelConstruction *context)
+      : OpKernel(context) {
+    OP_REQUIRES_OK(context, context->GetAttr("field_name", &field_name_));
+    OP_REQUIRES_OK(context, context->GetAttr("op", &op_));
+    OP_REQUIRES_OK(context, context->GetAttr("float_operand", &float_operand_));
+    OP_REQUIRES_OK(context, context->GetAttr("int_operand", &int_operand_));
+    OP_REQUIRES_OK(context,
+                   context->GetAttr("string_operand", &string_operand_));
+    OP_REQUIRES_OK(context,
+                   context->GetAttr("operand_filepath", &operand_filepath_));
+    OP_REQUIRES_OK(context, context->GetAttr("keep_empty", &keep_empty_));
+    OP_REQUIRES_OK(context, context->GetAttr("field_type", &field_type_));
+    OP_REQUIRES(context,
+                field_type_ == "int64" || field_type_ == "float" ||
+                    field_type_ == "double" || field_type_ == "bytes",
+                errors::Unknown(
+                    "field_type unknown! need to be int64/float/double/bytes"));
+    feature_value_filter_ = std::make_unique<FeatureValueFilter>(
+        field_name_, field_type_, op_, float_operand_, int_operand_,
+        string_operand_, operand_filepath_, keep_empty_);
+  }
+
+  void Compute(OpKernelContext *context) override {
+    const Tensor &input_tensor = context->input(0);
+    const Variant &variant = input_tensor.scalar<Variant>()();
+    OP_REQUIRES(context, variant.TypeId() == TypeIndex::Make<Example>(),
+                errors::InvalidArgument("input must be Example proto"));
+    Tensor *output_tensor = nullptr;
+    OP_REQUIRES_OK(
+        context,
+        context->allocate_output(0, input_tensor.shape(), &output_tensor));
+    auto output = output_tensor->scalar<bool>();
+    // only support Example input
+    output() = feature_value_filter_->IsInstanceOfInterest(
+        context->env(), *(input_tensor.scalar<Variant>()().get<Example>()));
+  }
+
+ private:
+  std::string field_name_;
+  std::string op_;  // gt, ge, eq, lt, le, neq, between
+  bool keep_empty_ = false;
+  std::string operand_filepath_;
+
+  std::vector<float> float_operand_;
+  std::vector<int64> int_operand_;
+  std::vector<std::string> string_operand_;
+
+  std::unique_ptr<FeatureValueFilter> feature_value_filter_;
+  std::string field_type_;
+};
+
 class ValueFilterOp : public OpKernel {
  public:
   explicit ValueFilterOp(OpKernelConstruction *context) : OpKernel(context) {
@@ -150,7 +206,6 @@ class ValueFilterOp : public OpKernel {
                    context->GetAttr("operand_filepath", &operand_filepath_));
     OP_REQUIRES_OK(context, context->GetAttr("keep_empty", &keep_empty_));
     OP_REQUIRES_OK(context, context->GetAttr("variant_type", &variant_type_));
-
     line_id_value_filter_ = std::make_unique<LineIdValueFilter>(
         field_name_, op_, float_operand_, int_operand_, string_operand_,
         operand_filepath_, keep_empty_);
@@ -159,10 +214,10 @@ class ValueFilterOp : public OpKernel {
   void Compute(OpKernelContext *context) override {
     const Tensor &input_tensor = context->input(0);
     Tensor *output_tensor = nullptr;
-    OP_REQUIRES_OK(context, context->allocate_output(0, input_tensor.shape(),
-                                                     &output_tensor));
+    OP_REQUIRES_OK(
+        context,
+        context->allocate_output(0, input_tensor.shape(), &output_tensor));
     auto output = output_tensor->scalar<bool>();
-
     const LineId &line_id = GetLineId(input_tensor);
     output() =
         line_id_value_filter_->IsInstanceOfInterest(context->env(), line_id);
@@ -226,16 +281,18 @@ class SpecialStrategyOp : public OpKernel {
     OP_REQUIRES(context, strategy_list_.size() > 0,
                 errors::InvalidArgument("strategy_list cannot be empty"));
 
-    OP_REQUIRES_OK(context, context->GetAttr("keep_empty_strategy",
-                                             &keep_empty_strategy_));
+    OP_REQUIRES_OK(
+        context,
+        context->GetAttr("keep_empty_strategy", &keep_empty_strategy_));
     OP_REQUIRES_OK(context, context->GetAttr("variant_type", &variant_type_));
   }
 
   void Compute(OpKernelContext *context) override {
     Tensor *input_tensor = const_cast<Tensor *>(&(context->input(0)));
     Tensor *output_tensor = nullptr;
-    OP_REQUIRES_OK(context, context->allocate_output(0, input_tensor->shape(),
-                                                     &output_tensor));
+    OP_REQUIRES_OK(
+        context,
+        context->allocate_output(0, input_tensor->shape(), &output_tensor));
     auto output = output_tensor->scalar<bool>();
     output() = DoCompute(input_tensor);
   }
@@ -356,8 +413,9 @@ class NegativeSampleOp : public OpKernel {
   void Compute(OpKernelContext *context) override {
     const Tensor &input_tensor = context->input(0);
     Tensor *output_tensor = nullptr;
-    OP_REQUIRES_OK(context, context->allocate_output(0, input_tensor.shape(),
-                                                     &output_tensor));
+    OP_REQUIRES_OK(
+        context,
+        context->allocate_output(0, input_tensor.shape(), &output_tensor));
     auto output = output_tensor->scalar<bool>();
     float label = GetLabel(input_tensor);
 
@@ -436,6 +494,9 @@ class NegativeSampleOp : public OpKernel {
 
 namespace {
 REGISTER_KERNEL_BUILDER(Name("SetFilter").Device(DEVICE_CPU), SetFilterOp);
+
+REGISTER_KERNEL_BUILDER(Name("FeatureValueFilter").Device(DEVICE_CPU),
+                        FeatureValueFilterOp);
 
 REGISTER_KERNEL_BUILDER(Name("ValueFilter").Device(DEVICE_CPU), ValueFilterOp);
 

@@ -16,17 +16,19 @@ import io
 from absl import logging
 import os
 import uuid
+import random
 import struct
 import tensorflow as tf
 import tempfile
+import threading
 from typing import List, BinaryIO
-from idl.matrix.proto import proto_parser_pb2, example_pb2
+from idl.matrix.proto import proto_parser_pb2, example_pb2, feature_pb2
 from monolith.native_training.data.datasets import PBDataset, PbType
 from monolith.native_training.data.parsers import parse_instances, \
   parse_examples
 from monolith.native_training.model_export.data_gen_utils import lg_header, sort_header
 from monolith.native_training.data.feature_utils import (
-    add_action, add_label, feature_combine, filter_by_fids, filter_by_label,
+    add_action, add_label, feature_combine, filter_by_fids, filter_by_label, filter_by_feature_value,
     filter_by_value, scatter_label, switch_slot, switch_slot_batch, map_id, use_field_as_label,
     label_upper_bound, label_normalization, multi_label_gen, string_to_variant,
     variant_to_zeros, has_variant, negative_sample)
@@ -137,13 +139,39 @@ def parse_example_batch(tensor: tf.Tensor, out_type,
     #     feature_dict['f_user_id'], feature_dict['f_goods_tags_terms'], slot=505)
   return feature_dict
 
+def line_id_to_feature(name, value):
+  tmp_feature = feature_pb2.Feature()
+  tmp_feature.name = name
+  value_mapping = {
+      str: lambda val: tmp_feature.bytes_value.append(val.encode()),
+      int: tmp_feature.int64_value.append,
+      float: tmp_feature.float_value.append,
+  }
+  if isinstance(value, list):
+    if len(value) > 0:
+      value_type = type(value[0])
+  else:
+    value_type = type(value)
+  append_func = value_mapping.get(value_type)
+  if append_func:
+    if isinstance(value, list):
+      for val in value:
+          append_func(val)
+    else:
+      append_func(value)
+  return tmp_feature
 
 def generate_instance(labels: List[int],
                       actions: List[int],
                       chnid: int = None,
                       did: str = None,
                       fid_v1_list: List[int] = None,
-                      device_type: str = None):
+                      device_type: str = None,
+                      req_id: str = None,
+                      chnids: List[int] = None,
+                      video_play_time: float = None,
+                      write_line_id_to_feature: bool = False,
+                      shuffle_features: bool = False):
   instance = proto_parser_pb2.Instance()
   instance.fid.extend(fid_v1_list if fid_v1_list else [])
   instance.label.extend(labels)
@@ -151,12 +179,30 @@ def generate_instance(labels: List[int],
   instance.line_id.uid = 100
   instance.line_id.sample_rate = 0.5
   instance.line_id.actions.extend(actions)
+  features = []
   if chnid is not None:
     instance.line_id.chnid = chnid
+    if write_line_id_to_feature:
+      features.append(line_id_to_feature('chnid', chnid))
   if did is not None:
     instance.line_id.did = did
+    if write_line_id_to_feature:
+      features.append(line_id_to_feature('did', did))
   if device_type is not None:
     instance.line_id.device_type = device_type
+  if req_id is not None:
+    instance.line_id.req_id = req_id
+    if write_line_id_to_feature:
+      features.append(line_id_to_feature('req_id', req_id))
+  if chnids is not None and write_line_id_to_feature:
+    features.append(line_id_to_feature('chnids', chnids))
+  if video_play_time is not None:
+    instance.line_id.video_play_time = video_play_time
+    if write_line_id_to_feature:
+      features.append(line_id_to_feature('video_play_time', video_play_time))
+  if shuffle_features:
+    random.shuffle(features)
+  instance.feature.extend(features)
   return instance
 
 
@@ -167,6 +213,36 @@ def write_instance_into_file(file: BinaryIO, instance):
   instance_serialized = instance.SerializeToString()
   file.write(struct.pack('<Q', len(instance_serialized)))
   file.write(instance_serialized)
+  
+# file_name = "monolith/native_training/data/training_instance/instance.pb"
+# with tf.io.gfile.GFile(file_name, "rb") as f:
+#   instance = parse_instance_from_file(f, True, False, True)
+#   print(instance)
+  
+def parse_instance_from_file(stream, has_kafka_dump, has_kafka_dump_prefix, has_sort_id):
+  size_t = 8
+  # kafka_prefix part, skip 16 bytes.
+  if has_kafka_dump_prefix:
+    stream.read(size_t * 2)
+  # sort id part, skip 8 bytes.
+  if has_sort_id:
+    size_binary = stream.read(size_t)[::-1]
+    size = struct.unpack('>Q', size_binary)[0]
+    sort_id = stream.read(size)
+  else:
+    sort_id = ""
+  # proto.
+  if has_kafka_dump:
+    stream.read(size_t)
+
+  # size + proto_binary
+  # This is the proto part.
+  size_binary = stream.read(size_t)[::-1]
+  size = struct.unpack('>Q', size_binary)[0]
+  proto_binary = stream.read(size)
+  instance = proto_parser_pb2.Instance()
+  instance.ParseFromString(proto_binary)
+  return instance
 
 
 class DataOpsTest(tf.test.TestCase):
@@ -588,8 +664,36 @@ class DataOpsTest(tf.test.TestCase):
           self.assertTrue(False)
     os.remove(file_name)
 
-  def test_filter_by_value(self):
-    file_name = "monolith/native_training/data/training_instance/instance.pb"
+  def test_filter_by_bytes_value(self):
+    mock_batch_num = 200
+    
+    def mock_instance_for_filter_by_bytes_value(batch_num: int = 200):
+      tmpfile = tempfile.mkstemp()[1]
+      labels = [[1], [2], [3], []]
+      actions = [[], [], [], []]
+      req_ids = ['abckjhfjh', 'kjhfjh', 'huggfyfixyz', '']
+      chnids = [10, 20, 30, 40]
+      dids = ['hello', 'world', '300', '400']
+      with io.open(tmpfile, 'wb') as writer:
+        for _ in range(batch_num):
+          for label, action, chnid, did, req_id in zip(labels, actions, chnids, dids, req_ids):
+            instance = generate_instance(label, action, chnid=chnid, did=did, req_id=req_id,
+                                         write_line_id_to_feature=True, shuffle_features=True)
+            write_instance_into_file(writer, instance)
+      return tmpfile
+
+    file_name = mock_instance_for_filter_by_bytes_value(mock_batch_num)
+    logging.info('file_name: %s', file_name)
+    
+    def parser(tensor: tf.Tensor):
+      return parse_examples(tensor,
+                            sparse_features=list(features.keys()),
+                            dense_features=['label', 'req_id'],
+                            dense_feature_shapes=[5, 1],
+                            dense_feature_types=[tf.float32, tf.string],
+                            extra_features=['uid', 'req_time', 'did'],
+                            extra_feature_shapes=[1, 1, 1])
+
     config = tf.compat.v1.ConfigProto()
     config.graph_options.rewrite_options.disable_meta_optimizer = True
 
@@ -597,38 +701,138 @@ class DataOpsTest(tf.test.TestCase):
       return filter_by_value(ts,
                              field_name='req_id',
                              op='endswith',
+                             variant_type='example',
                              operand=['kjhfjh', 'huggfyfi'])
+
+    def feature_filter_fn(ts):
+      return filter_by_feature_value(ts,
+                             field_name='req_id',
+                             op='endswith',
+                             operand=['kjhfjh', 'huggfyfi'],
+                             field_type='bytes')
 
     with self.session(config=config) as sess:
       dataset = PBDataset(file_name=file_name,
                           lagrangex_header=False,
                           has_sort_id=True,
-                          kafka_dump=True,
+                          kafka_dump=False,
                           kafka_dump_prefix=False,
                           input_pb_type=PbType.INSTANCE,
-                          output_pb_type=PbType.INSTANCE)
-      dataset = dataset.filter(filter_fn)
-      it = tf.compat.v1.data.make_one_shot_iterator(dataset)
-      element = it.get_next()
-      result = None
+                          output_pb_type=PbType.EXAMPLE)
+      dataset_filter = dataset.filter(filter_fn)
+      dataset_feature_filter = dataset.filter(feature_filter_fn)
+      batch_size = 4
+      dataset_filter = dataset_filter.batch(batch_size, drop_remainder=False).map(parser)
+      dataset_feature_filter = dataset_feature_filter.batch(batch_size, drop_remainder=False).map(parser)
+
+      num_parallel_calls = 4
+      dataset_feature_filter_parallel = dataset.map(map_func=lambda x: x, num_parallel_calls=num_parallel_calls) \
+                                               .filter(feature_filter_fn) \
+                                               .batch(100, drop_remainder=False).map(parser)
+
       try:
+        it = tf.compat.v1.data.make_one_shot_iterator(dataset_filter)
+        element = it.get_next()
         result = sess.run(element)
+        self.assertAllEqual(len(result['req_id']), 4)
+        self.assertAllEqual(result['req_id'], [[b'abckjhfjh'], [b'kjhfjh'], [b'abckjhfjh'], [b'kjhfjh']])
+
+        it = tf.compat.v1.data.make_one_shot_iterator(dataset_feature_filter)
+        element = it.get_next()
+        result = sess.run(element)
+        self.assertAllEqual(len(result['req_id']), 4)
+        self.assertAllEqual(result['req_id'], [[b'abckjhfjh'], [b'kjhfjh'], [b'abckjhfjh'], [b'kjhfjh']])
+        
+        # test for parallelism ("cached_feature_index" in kernel impl)
+        it = tf.compat.v1.data.make_one_shot_iterator(dataset_feature_filter_parallel)
+        element = it.get_next()
+        result = sess.run(element)
+        self.assertAllEqual(len(result['req_id']), 100)
+        self.assertAllEqual(result['req_id'], [[b'abckjhfjh'], [b'kjhfjh']] * 50)
+
       except tf.errors.OutOfRangeError:
-        self.assertTrue(result is None)
+        self.assertTrue(False)
+
+    os.remove(file_name)
+    
+  def test_filter_by_float_value(self):
+    mock_batch_num = 200
+    
+    def mock_instance_for_filter_by_float_value(batch_num: int = 200):
+      tmpfile = tempfile.mkstemp()[1]
+      labels = [[1], [2], [3], []]
+      actions = [[], [], [], []]
+      req_ids = ['abckjhfjh', 'kjhfjh', 'huggfyfixyz', 'mbzc']
+      video_play_times = [1.0, 2.0, 3.0, 4.0]
+      with io.open(tmpfile, 'wb') as writer:
+        for _ in range(batch_num):
+          for label, action, req_id, video_play_time in zip(labels, actions, req_ids, video_play_times):
+            instance = generate_instance(label, action, req_id=req_id, video_play_time=video_play_time,
+                                         write_line_id_to_feature=True, shuffle_features=True)
+            write_instance_into_file(writer, instance)
+      return tmpfile
+
+    file_name = mock_instance_for_filter_by_float_value(mock_batch_num)
+    logging.info('file_name: %s', file_name)
+    
+    def parser(tensor: tf.Tensor):
+      return parse_examples(tensor,
+                            sparse_features=list(features.keys()),
+                            dense_features=['label', 'req_id'],
+                            dense_feature_shapes=[5, 1],
+                            dense_feature_types=[tf.float32, tf.string],
+                            extra_features=['uid', 'req_time', 'did'],
+                            extra_feature_shapes=[1, 1, 1])
+
+    config = tf.compat.v1.ConfigProto()
+    config.graph_options.rewrite_options.disable_meta_optimizer = True
+
+    def feature_filter_fn(ts):
+      return filter_by_feature_value(ts,
+                             field_name='video_play_time',
+                             op='gt',
+                             operand=2.5,
+                             field_type='float')
+
+    with self.session(config=config) as sess:
+      dataset = PBDataset(file_name=file_name,
+                          lagrangex_header=False,
+                          has_sort_id=True,
+                          kafka_dump=False,
+                          kafka_dump_prefix=False,
+                          input_pb_type=PbType.INSTANCE,
+                          output_pb_type=PbType.EXAMPLE)
+      dataset_feature_filter = dataset.filter(feature_filter_fn)
+      batch_size = 4
+      dataset_feature_filter = dataset_feature_filter.batch(batch_size, drop_remainder=False).map(parser)
+
+
+      try:
+        it = tf.compat.v1.data.make_one_shot_iterator(dataset_feature_filter)
+        element = it.get_next()
+        result = sess.run(element)
+        self.assertAllEqual(len(result['req_id']), 4)
+        self.assertAllEqual(result['req_id'], [[b'huggfyfixyz'], [b'mbzc'], [b'huggfyfixyz'], [b'mbzc']])
+
+      except tf.errors.OutOfRangeError:
+        self.assertTrue(False)
+
+    os.remove(file_name)
+
 
   def test_filter_by_value_not_in(self):
     mock_batch_num = 1
 
     def mock_instance_for_filter_by_value(batch_num: int = 200):
       tmpfile = tempfile.mkstemp()[1]
-      labels = [[1], [2], [3], []]
-      actions = [[], [], [], []]
-      chnids = [10, 20, 30, 40]
-      dids = ['hello', 'world', '300', '400']
+      labels = [[1], [2], [3], [], []]
+      actions = [[], [], [], [], []]
+      chnids = [10, 20, 30, 40, 666]
+      dids = ['hello', 'world', 'excluded', '300', '400']
       with io.open(tmpfile, 'wb') as writer:
         for _ in range(batch_num):
           for label, action, chnid, did in zip(labels, actions, chnids, dids):
-            instance = generate_instance(label, action, chnid, did)
+            instance = generate_instance(label, action, chnid, did, write_line_id_to_feature=True)
             write_instance_into_file(writer, instance)
       return tmpfile
 
@@ -648,13 +852,13 @@ class DataOpsTest(tf.test.TestCase):
       f.write(filter_values.SerializeToString())
 
     def parser(tensor: tf.Tensor):
-      return parse_instances(tensor,
-                             fidv1_features=list(features.values()),
-                             dense_features=['label'],
-                             dense_feature_shapes=[5],
-                             dense_feature_types=[tf.float32],
-                             extra_features=['uid', 'req_time', 'did'],
-                             extra_feature_shapes=[1, 1, 1])
+      return parse_examples(tensor,
+                            sparse_features=list(features.keys()),
+                            dense_features=['label'],
+                            dense_feature_shapes=[5],
+                            dense_feature_types=[tf.float32],
+                            extra_features=['uid', 'req_time', 'did'],
+                            extra_feature_shapes=[1, 1, 1])
 
     with tf.Graph().as_default():
       config = tf.compat.v1.ConfigProto()
@@ -666,33 +870,64 @@ class DataOpsTest(tf.test.TestCase):
                                  kafka_dump=False,
                                  kafka_dump_prefix=False,
                                  input_pb_type=PbType.INSTANCE,
-                                 output_pb_type=PbType.INSTANCE)
+                                 output_pb_type=PbType.EXAMPLE)
         dataset_filter_by_list = dataset_base.filter(
             lambda variant: filter_by_value(variant,
                                             field_name='did',
                                             op='not-in',
-                                            operand=['hello', 'world']))
+                                            operand=['hello', 'world'],
+                                            variant_type='example'))
         dataset_filter_by_file_string = dataset_base.filter(
             lambda variant: filter_by_value(variant,
                                             field_name='did',
                                             op='not-in',
                                             operand=None,
                                             operand_filepath=
-                                            tmp_filter_values_file_string))
+                                            tmp_filter_values_file_string,
+                                            variant_type='example'))
         dataset_filter_by_file_int64 = dataset_base.filter(
             lambda variant: filter_by_value(variant,
                                             field_name='chnid',
                                             op='in',
                                             operand=None,
                                             operand_filepath=
-                                            tmp_filter_values_file_int64))
+                                            tmp_filter_values_file_int64,
+                                            variant_type='example'))
+        dataset_feature_filter_by_list = dataset_base.filter(
+            lambda variant: filter_by_feature_value(variant,
+                                                    field_name='did',
+                                                    op='not-in',
+                                                    operand=['hello', 'world'],
+                                                    field_type='bytes'))
+        dataset_feature_filter_by_file_string = dataset_base.filter(
+            lambda variant: filter_by_feature_value(variant,
+                                                    field_name='did',
+                                                    op='not-in',
+                                                    operand=None,
+                                                    operand_filepath=
+                                                    tmp_filter_values_file_string,
+                                                    field_type='bytes'))
+        dataset_feature_filter_by_file_int64 = dataset_base.filter(
+            lambda variant: filter_by_feature_value(variant,
+                                                    field_name='chnid',
+                                                    op='in',
+                                                    operand=None,
+                                                    operand_filepath=
+                                                    tmp_filter_values_file_int64,
+                                                    field_type='int64'))
 
-        batch_size = 4
+        batch_size = 5
         dataset_filter_by_list = dataset_filter_by_list.batch(
             batch_size, drop_remainder=False).map(parser)
         dataset_filter_by_file_string = dataset_filter_by_file_string.batch(
             batch_size, drop_remainder=False).map(parser)
         dataset_filter_by_file_int64 = dataset_filter_by_file_int64.batch(
+            batch_size, drop_remainder=False).map(parser)
+        dataset_feature_filter_by_list = dataset_feature_filter_by_list.batch(
+            batch_size, drop_remainder=False).map(parser)
+        dataset_feature_filter_by_file_string = dataset_feature_filter_by_file_string.batch(
+            batch_size, drop_remainder=False).map(parser)
+        dataset_feature_filter_by_file_int64 = dataset_feature_filter_by_file_int64.batch(
             batch_size, drop_remainder=False).map(parser)
 
         try:
@@ -700,8 +935,15 @@ class DataOpsTest(tf.test.TestCase):
           it = tf.compat.v1.data.make_one_shot_iterator(dataset_filter_by_list)
           element = it.get_next()
           element_result = sess.run(element)
-          self.assertAllEqual(len(element_result['did']), 2)
-          self.assertAllEqual(element_result['did'], [[b'300'], [b'400']])
+          self.assertAllEqual(len(element_result['did']), 3)
+          self.assertAllEqual(element_result['did'], [[b'excluded'], [b'300'], [b'400']])
+
+          it = tf.compat.v1.data.make_one_shot_iterator(dataset_feature_filter_by_list)
+          element = it.get_next()
+          element_result = sess.run(element)
+          self.assertAllEqual(len(element_result['did']), 3)
+          self.assertAllEqual(element_result['did'], [[b'excluded'], [b'300'], [b'400']])
+
           # test for filter by not-in file
           it = tf.compat.v1.data.make_one_shot_iterator(
               dataset_filter_by_file_string)
@@ -709,19 +951,98 @@ class DataOpsTest(tf.test.TestCase):
           element_result = sess.run(element)
           self.assertAllEqual(len(element_result['did']), 2)
           self.assertAllEqual(element_result['did'], [[b'300'], [b'400']])
+          
+          it = tf.compat.v1.data.make_one_shot_iterator(
+              dataset_feature_filter_by_file_string)
+          element = it.get_next()
+          element_result = sess.run(element)
+          self.assertAllEqual(len(element_result['did']), 2)
+          self.assertAllEqual(element_result['did'], [[b'300'], [b'400']])
+
           # test for filter by in file
           it = tf.compat.v1.data.make_one_shot_iterator(
               dataset_filter_by_file_int64)
           element = it.get_next()
           element_result = sess.run(element)
-          self.assertAllEqual(len(element_result['did']), 2)
-          self.assertAllEqual(element_result['did'], [[b'world'], [b'300']])
+          self.assertAllEqual(len(element_result['did']), 3)
+          self.assertAllEqual(element_result['did'], [[b'world'], [b'excluded'], [b'400']])
+
+          it = tf.compat.v1.data.make_one_shot_iterator(
+              dataset_feature_filter_by_file_int64)
+          element = it.get_next()
+          element_result = sess.run(element)
+          self.assertAllEqual(len(element_result['did']), 3)
+          self.assertAllEqual(element_result['did'], [[b'world'], [b'excluded'], [b'400']])
+
         except tf.errors.OutOfRangeError:
           self.assertTrue(False)
 
     os.remove(file_name)
     os.remove(tmp_filter_values_file_string)
     os.remove(tmp_filter_values_file_int64)
+    
+  def test_filter_by_value_all(self):
+    mock_batch_num = 1
+
+    def mock_instance_for_filter_by_value(batch_num: int = 200):
+      tmpfile = tempfile.mkstemp()[1]
+      labels = [[1], [2], [3], [], []]
+      actions = [[], [], [], [], []]
+      multi_chnids = [[10], [20, 30], [20, 30, 666], [40], [666]]
+      dids = ['hello', 'world', 'excluded', '300', '400']
+      with io.open(tmpfile, 'wb') as writer:
+        for _ in range(batch_num):
+          for label, action, chnids, did in zip(labels, actions, multi_chnids, dids):
+            instance = generate_instance(label, action, chnid=None, did=did, chnids=chnids, write_line_id_to_feature=True)
+            write_instance_into_file(writer, instance)
+      return tmpfile
+
+    file_name = mock_instance_for_filter_by_value(mock_batch_num)
+    logging.info('file_name: %s', file_name)
+
+    def parser(tensor: tf.Tensor):
+      return parse_examples(tensor,
+                            sparse_features=list(features.keys()),
+                            dense_features=['label'],
+                            dense_feature_shapes=[5],
+                            dense_feature_types=[tf.float32],
+                            extra_features=['uid', 'req_time', 'did'],
+                            extra_feature_shapes=[1, 1, 1])
+      
+    with tf.Graph().as_default():
+      config = tf.compat.v1.ConfigProto()
+      config.graph_options.rewrite_options.disable_meta_optimizer = True
+      with self.session(config=config) as sess:
+        dataset_base = PBDataset(file_name=file_name,
+                                 lagrangex_header=False,
+                                 has_sort_id=True,
+                                 kafka_dump=False,
+                                 kafka_dump_prefix=False,
+                                 input_pb_type=PbType.INSTANCE,
+                                 output_pb_type=PbType.EXAMPLE)
+        dataset_feature_filter_by_file_int64 = dataset_base.filter(
+              lambda variant: filter_by_feature_value(variant,
+                                                      field_name='chnids',
+                                                      op='all',
+                                                      operand=[20, 30, 666],
+                                                      operand_filepath=None,
+                                                      field_type='int64'))
+        batch_size = 5
+        dataset_feature_filter_by_file_int64 = dataset_feature_filter_by_file_int64.batch(
+            batch_size, drop_remainder=False).map(parser)
+
+        try:
+          it = tf.compat.v1.data.make_one_shot_iterator(
+              dataset_feature_filter_by_file_int64)
+          element = it.get_next()
+          element_result = sess.run(element)
+          self.assertAllEqual(len(element_result['did']), 1)
+          self.assertAllEqual(element_result['did'], [[b'excluded']])
+
+        except tf.errors.OutOfRangeError:
+          self.assertTrue(False)
+    
+    os.remove(file_name)
 
   def test_map_id(self):
     inputs = tf.constant([123, 456, 789, 912], dtype=tf.int32)

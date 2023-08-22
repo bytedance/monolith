@@ -25,7 +25,7 @@ cc_library(
         ":transform_config_cc_proto",
         "//monolith/native_training/data/training_instance:instance_utils",
         "//monolith/native_training/data/kernels/internal:label_utils",
-        "//monolith/native_training/data/kernels/internal:line_id_value_filter",
+        "//monolith/native_training/data/kernels/internal:value_filter_by_line_id",
         "//monolith/native_training/data/kernels/internal:relational_utils",
         "//monolith/native_training/runtime/common:linalg_utils",
         "@com_google_absl//absl/strings",
