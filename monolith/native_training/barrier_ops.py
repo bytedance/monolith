@@ -101,7 +101,7 @@ class BarrierOp:
 
   def wait_until_barrier_removed(self, session, index):
     with self._lock:
-      if index < 0 or index > self._capacity:
+      if index <= 0 or index >= self._capacity:
         raise ValueError(
             "Index [{}] must be non-negative and less than capacity [{}]. ".
             format(index, self._capacity))
@@ -152,6 +152,7 @@ class BarrierHook(tf.estimator.SessionRunHook):
 
   def after_run(self, run_context, run_values):
     barrier_placed_value = run_values.results
-    if barrier_placed_value:
+
+    if self._index > 0 and barrier_placed_value:
       self._barrier_op.wait_until_barrier_removed(run_context.session,
                                                   self._index)
