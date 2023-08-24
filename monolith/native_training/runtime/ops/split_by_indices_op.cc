@@ -263,7 +263,7 @@ REGISTER_OP("MonolithRaggedSplitByIndices")
       }
       offset += num_splits;
       for (int i = 0; i < num_splits; ++i) {
-        c->set_output(i, c->Vector(c->UnknownDim()));
+        c->set_output(offset + i, c->Vector(c->UnknownDim()));
       }
       return Status::OK();
     });
