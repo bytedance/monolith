@@ -114,6 +114,6 @@ class KProducer(object):
     self._success += 1
 
   def _send_failed(self, *args, **kwargs):
-    time.sleep(secs=2)  # if failed, sleep two second
+    time.sleep(2)  # if failed, sleep two second
     logging.warning('send metric to kafka error')
     self._failed += 1

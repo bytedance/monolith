@@ -93,7 +93,7 @@ from monolith.native_training.hooks import session_hooks
 from monolith.native_training.hooks import feature_engineering_hooks
 from monolith.native_training.hooks.server import server_lib as server_hook_lib
 from monolith.native_training.metric import cli
-from monolith.native_training.metric.metric_hook import Tf2ProfilerHook, Tf2ProfilerCaptureOnceHook, NVProfilerCaptureOnceHook
+from monolith.native_training.metric.metric_hook import Tf2ProfilerHook, Tf2ProfilerCaptureMultipleHook, NVProfilerCaptureMultipleHook
 from monolith.native_training.metric.metric_hook import ByteCCLTelemetryHook
 from monolith.native_training.metric.metric_hook import ThroughputMetricHook
 from monolith.native_training.model_export import export_hooks
@@ -1282,7 +1282,7 @@ class CpuTraining:
         start_step = self.config.profile_some_steps_from
         end_step = None if start_step is None else start_step + 10
         hooks.append(
-            Tf2ProfilerCaptureOnceHook(
+            Tf2ProfilerCaptureMultipleHook(
                 logdir=model_dir, capture_step_range=[start_step, end_step]))
 
       if self._params.metrics.enable_throughput_hook and is_chief(self.config):
@@ -2219,7 +2219,7 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
           # CUPTI doesn't allow multiple callback subscribers.
           # Only a single subscriber can be registered at a time.
           device_tracer_level=0 if config.profile_with_nvprof_from_to else 1)
-      prof_hook = Tf2ProfilerCaptureOnceHook(
+      prof_hook = Tf2ProfilerCaptureMultipleHook(
           logdir=config.tensorboard_log_path or config.model_dir,
           capture_step_range=(start_step, end_step),
           options=options)
@@ -2228,7 +2228,7 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
     if config.profile_with_nvprof_from_to:
       s, e = config.profile_with_nvprof_from_to.split(',')
       run_hooks.append(
-          NVProfilerCaptureOnceHook(capture_step_range=[int(s), int(e)]))
+          NVProfilerCaptureMultipleHook(capture_step_range=[int(s), int(e)]))
 
   if sync_backend is not None:
     run_hooks.append(

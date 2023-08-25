@@ -115,7 +115,7 @@ class NativeTask(BaseTask, abc.ABC):
                      "If enables throughput hook.")
     p.metrics.define("enable_kafka_metrics", False, "enable_kafka_metrics")
     p.metrics.define(
-        "enable_tf2_profiler_hook", False,
+        "enable_tf2_profiler_hook", True,
         "If enables tf profiler hook. When enabled, remeber to increase worker's memory."
     )
 

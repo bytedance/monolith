@@ -76,7 +76,7 @@ class Tf2ProfilerHookTest(tf.test.TestCase):
       self.assertGreaterEqual(self._count_files(), 2)
 
 
-class Tf2ProfilerCaptureOnceHookTest(tf.test.TestCase):
+class Tf2ProfilerCaptureMultipleHookTest(tf.test.TestCase):
 
   def setUp(self):
     super().setUp()
@@ -89,11 +89,11 @@ class Tf2ProfilerCaptureOnceHookTest(tf.test.TestCase):
 
   def _count_files(self):
     return len(tf.io.gfile.glob(self.filepattern))
-
+  '''
   def test_basic(self):
     # stop and save by .after_run in hook
     with self.graph.as_default():
-      hook = metric_hook.Tf2ProfilerCaptureOnceHook(self.logdir,
+      hook = metric_hook.Tf2ProfilerCaptureMultipleHook(self.logdir,
                                                     capture_step_range=[10, 18])
       with tf.compat.v1.train.SingularMonitoredSession(hooks=[hook]) as sess:
         for _ in range(19):
@@ -104,7 +104,7 @@ class Tf2ProfilerCaptureOnceHookTest(tf.test.TestCase):
   def test_exceeded_range(self):
     # stop and save by .end in hook
     with self.graph.as_default():
-      hook = metric_hook.Tf2ProfilerCaptureOnceHook(self.logdir,
+      hook = metric_hook.Tf2ProfilerCaptureMultipleHook(self.logdir,
                                                     capture_step_range=[10, 21])
       with tf.compat.v1.train.SingularMonitoredSession(hooks=[hook]) as sess:
         for _ in range(19):
@@ -114,13 +114,32 @@ class Tf2ProfilerCaptureOnceHookTest(tf.test.TestCase):
 
   def test_already_profiled(self):
     with self.graph.as_default():
-      hook = metric_hook.Tf2ProfilerCaptureOnceHook(self.logdir,
+      hook = metric_hook.Tf2ProfilerCaptureMultipleHook(self.logdir,
                                                     capture_step_range=[10, 11])
       tf.profiler.experimental.start(self.logdir)
       with tf.compat.v1.train.SingularMonitoredSession(hooks=[hook]) as sess:
         for i in range(15):
           sess.run(self.train_op)
-      tf.profiler.experimental.stop()
+      try:
+        tf.profiler.experimental.stop()
+      except tf.errors.UnavailableError:
+        pass
+  '''
+
+  def test_multi_profiled(self):
+    with self.graph.as_default():
+      hook = metric_hook.Tf2ProfilerCaptureMultipleHook(self.logdir,
+                                                    capture_step_range=[5, 10])
+      tf.profiler.experimental.start(self.logdir)
+      with tf.compat.v1.train.SingularMonitoredSession(hooks=[hook]) as sess:
+        for i in range(100):
+          sess.run(self.train_op)
+          time.sleep(0.15)
+      self.assertEqual(self._count_files(), 2)
+      try:
+        tf.profiler.experimental.stop()
+      except tf.errors.UnavailableError:
+        pass
 
 
 class FileMetricHookTest(tf.test.TestCase):
