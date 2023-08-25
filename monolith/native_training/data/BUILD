@@ -64,6 +64,7 @@ cc_library(
         "kernels/transform_dataset_kernel.cc",
         "kernels/transform_dataset_kernel.h",
         "kernels/variant_filter_kernel.cc",
+        "kernels/gen_fid_mask.cc",
     ],
     deps = [
         ":data_op_config_cc_proto",
@@ -174,6 +175,7 @@ py_library(
     deps = [
         ":utils",
         "//monolith/native_training:utils",
+        "@org_tensorflow//tensorflow:tensorflow_py",
     ],
 )
 
@@ -235,6 +237,7 @@ py_test(
     ],
     deps = [
         ":feature_utils_py",
+        ":feature_list",
         "//monolith:utils",
     ],
 )

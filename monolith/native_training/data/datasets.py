@@ -48,7 +48,7 @@ from monolith.utils import get_libops_path
 from monolith.native_training.monolith_export import monolith_export
 from monolith.native_training.data.feature_utils import create_item_pool, string_to_variant, \
   has_variant, kafka_resource_init, kafka_read_next, kafka_read_next_v2, string_to_variant_with_transform
-from monolith.native_training.data.feature_list import FeatureList
+from monolith.native_training.data.feature_list import FeatureList, add_feature
 from monolith.native_training.data.parsers import get_default_parser_ctx
 from monolith.native_training.data.transform.transforms import Transform
 from monolith.native_training import native_task_context
@@ -385,6 +385,8 @@ class ParquetDataset(dataset_ops.DatasetSource):
         isinstance(c, str) for c in select_columns)
     assert isinstance(select_columns_type, list) and all(
         t in ["int", "fid_v1", "fid_v2", "float"] for t in select_columns_type)
+    for feature in select_columns:
+      add_feature(feature)
 
     if output_pb_type == PbType.EXAMPLEBATCH and batch_size > 0 and drop_remainder:
       get_default_parser_ctx().set('batch_size', batch_size)

@@ -23,6 +23,7 @@ from monolith.utils import get_libops_path
 from monolith.native_training.monolith_export import monolith_export
 from monolith.native_training.runtime.ops import gen_monolith_ops
 from idl.matrix.proto.line_id_pb2 import LineId
+from monolith.native_training.data.feature_list import add_feature, add_feature_by_fids
 from monolith.native_training.data.data_op_config_pb2 import LabelConf, \
   TaskLabelConf
 
@@ -66,6 +67,10 @@ def filter_by_fids(variant: tf.Tensor,
   ]
   select_slots = [] if select_slots is None else select_slots
   assert all([slot > 0 for slot in select_slots])
+  if variant_type != 'instance':
+    add_feature_by_fids(filter_fids)
+    add_feature_by_fids(has_fids)
+    add_feature_by_fids(select_fids)
 
   return ragged_data_ops.set_filter(variant, filter_fids, has_fids, select_fids,
                                     has_actions or [], req_time_min,
@@ -178,6 +183,9 @@ def filter_by_value(variant: tf.Tensor,
     variant tensor, 过滤后的数据, variant类型
   """
 
+  if variant_type != 'instance':
+    add_feature('__LINE_ID__')
+
   assert op in {
       'gt', 'ge', 'eq', 'lt', 'le', 'neq', 'between', 'in', 'not-in', 'all',
       'any', 'diff', 'startswith', 'endswith'
@@ -266,6 +274,9 @@ def add_action(
     variant tensor, 改写后的数据，variant 类型
   """
 
+  if variant_type != 'instance':
+    add_feature('__LINE_ID__')
+
   assert op in {'gt', 'ge', 'eq', 'lt', 'le', 'neq', 'between', 'in'}
   assert variant_type in {'instance', 'example'}
   fields = LineId.DESCRIPTOR.fields_by_name
@@ -345,6 +356,8 @@ def add_label(
   """
 
   assert variant_type in {'instance', 'example'}
+  if variant_type != 'instance':
+    add_feature('__LINE_ID__')
   assert config, 'Please specify config and retry!'
   assert 0 < new_sample_rate <= 1.0, 'new_sample_rate should be in (0, 1.0]'
 
@@ -400,6 +413,9 @@ def scatter_label(
   """
 
   assert variant_type in {'instance', 'example'}
+  if variant_type != 'instance':
+    add_feature('__LABEL__')
+    add_feature('__LINE_ID__')
   assert config, 'Please specify config and retry!'
 
   return ragged_data_ops.scatter_label(variant,
@@ -432,6 +448,8 @@ def filter_by_label(
   """
 
   assert variant_type in {'instance', 'example'}
+  if variant_type != 'instance':
+    add_feature('__LABEL__')
   assert len(label_threshold) > 0, 'Please specify label_threshold and retry!'
 
   return ragged_data_ops.filter_by_label(variant,
@@ -459,6 +477,10 @@ def special_strategy(variant: tf.Tensor,
   Returns:
     variant tensor, 过滤后的数据, variant类型
   """
+
+  if variant_type != 'instance':
+    add_feature('__LABEL__')
+    add_feature('__LINE_ID__')
 
   items = [] if strategy_conf is None else strategy_conf.strip().split(',')
   special_strategies, sample_rates, labels = [], [], []
@@ -508,6 +530,9 @@ def negative_sample(variant: tf.Tensor,
   Returns:
     variant tensor, 过滤后的数据, variant类型
   """
+
+  if variant_type != 'instance':
+    add_feature('__LABEL__')
 
   assert action_priority is None or isinstance(action_priority, str)
   assert per_action_drop_rate is None or isinstance(per_action_drop_rate, str)
@@ -764,6 +789,8 @@ def fill_multi_rank_output(
   """When use_rank_multi_output flag is set.
   """
   assert variant_type in {'instance', 'example'}
+  if variant_type != 'instance':
+    add_feature('__LINE_ID__')
 
   return ragged_data_ops.fill_multi_rank_output(
       input=variant,
@@ -961,3 +988,8 @@ def kafka_read_next_v2(input, index: int, message_poll_timeout: int,
 
 def has_variant(input, variant_type: str = 'example'):
   return ragged_data_ops.HasVariant(input=input, variant_type=variant_type)
+
+
+def gen_fid_mask(tenosr: tf.RaggedTensor, fid: int) -> tf.Tensor:
+  fid = np.uint64(fid).astype(np.int64)
+  return ragged_data_ops.monolith_gen_fid_mask(tenosr.row_splits, tenosr.flat_values, fid=fid)

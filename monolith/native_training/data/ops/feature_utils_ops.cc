@@ -395,4 +395,26 @@ REGISTER_OP("KafkaGroupReadableNextV2")
       c->set_output(1, c->Scalar());
       return Status::OK();
     });
+
+REGISTER_OP("MonolithGenFidMask")
+    .Input("splits: T")
+    .Input("values: int64")
+    .Output("mask: float32")
+    .Attr("fid: int")
+    .Attr("T: {int32, int64}")
+    .SetShapeFn([](shape_inference::InferenceContext *ctx) {
+      shape_inference::ShapeHandle shape = ctx->input(0);
+      if (ctx->Rank(shape) == 1) {
+        shape_inference::DimensionHandle new_dim;
+        TF_RETURN_IF_ERROR(ctx->Subtract(ctx->Dim(shape, 0), 1, &new_dim));
+        shape_inference::ShapeHandle out_shape;
+        TF_RETURN_IF_ERROR(ctx->ReplaceDim(shape, 0, new_dim, &out_shape));
+        ctx->set_output(0, out_shape);
+      } else {
+        ctx->set_output(0, ctx->MakeShape({ctx->UnknownDim()}));
+      }
+
+      return Status::OK();
+    });
+
 }  // namespace tensorflow

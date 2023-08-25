@@ -31,7 +31,7 @@ from monolith.native_training.data.feature_utils import (
     add_action, add_label, feature_combine, filter_by_fids, filter_by_label, filter_by_feature_value,
     filter_by_value, scatter_label, switch_slot, switch_slot_batch, map_id, use_field_as_label,
     label_upper_bound, label_normalization, multi_label_gen, string_to_variant,
-    variant_to_zeros, has_variant, negative_sample)
+    variant_to_zeros, has_variant, negative_sample, gen_fid_mask)
 
 fid_v1_mask = (1 << 54) - 1
 fid_v2_mask = (1 << 48) - 1
@@ -1320,6 +1320,27 @@ class DataOpsTest(tf.test.TestCase):
                   self.assertEqual(value >> 48, shared_slot)
           except tf.errors.OutOfRangeError:
             break
+
+  def test_gen_fid_mask_int64(self):
+    config = tf.compat.v1.ConfigProto()
+    config.graph_options.rewrite_options.disable_meta_optimizer = True
+    with self.session(config=config) as sess:
+      ragged: tf.RaggedTensor = tf.ragged.constant([[1, 2, 3], [3], [], [4, 5, 6]], dtype=tf.int64)
+      mask_ts = gen_fid_mask(ragged, 3)
+      mask = sess.run(mask_ts)
+      exp_res = [1., 1., 0., 0.]
+      self.assertListEqual(list(mask), exp_res)
+
+  def test_gen_fid_mask_int32(self):
+    config = tf.compat.v1.ConfigProto()
+    config.graph_options.rewrite_options.disable_meta_optimizer = True
+    with self.session(config=config) as sess:
+      ragged: tf.RaggedTensor = tf.ragged.constant([[1, 2, 3], [3], [], [4, 5, 6]],
+        dtype=tf.int64, row_splits_dtype=tf.int32)
+      mask_ts = gen_fid_mask(ragged, 3)
+      mask = sess.run(mask_ts)
+      exp_res = [1., 1., 0., 0.]
+      self.assertListEqual(list(mask), exp_res)
 
 
   def test_negative_sample_with_positive_actions(self):

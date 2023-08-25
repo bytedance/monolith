@@ -32,6 +32,7 @@ from monolith.native_training import native_task_context
 from monolith.native_training.monolith_export import monolith_export
 from monolith.native_training.data.feature_list import get_feature_name_and_slot, FeatureList
 from monolith.native_training.data.data_op_config_pb2 import LabelConf, TaskLabelConf
+from monolith.native_training.data.feature_list import add_feature, is_example_batch
 from monolith.native_training.runtime.ops import gen_monolith_ops
 from monolith.native_training.utils import add_to_collections
 from tensorflow.python.framework import ops
@@ -395,6 +396,14 @@ def parse_examples(tensor: tf.Tensor,
   add_to_collections('extra_feature_shapes', extra_feature_shapes)
   add_to_collections('variant_type', 'example')
   get_default_parser_ctx().set('sparse_features', sparse_features)
+  if is_example_batch():
+    add_feature(sparse_features)
+    if dense_features:
+      if 'label' in dense_features:
+        add_feature('__LABEL__')
+      add_feature([feat for feat in dense_features if feat != 'label'])
+    if extra_features:
+      add_feature('__LINE_ID__')
 
   names, shapes, types = [], [], []
 
@@ -480,6 +489,14 @@ def parse_example_batch(
   add_to_collections('extra_feature_shapes', extra_feature_shapes)
   add_to_collections('variant_type', 'example_batch')
   get_default_parser_ctx().set('sparse_features', sparse_features)
+  if is_example_batch():
+    add_feature(sparse_features)
+    if dense_features:
+      if 'label' in dense_features:
+        add_feature('__LABEL__')
+      add_feature([feat for feat in dense_features if feat != 'label'])
+    if extra_features:
+      add_feature('__LINE_ID__')
 
   names, shapes, types = [], [], []
 

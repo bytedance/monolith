@@ -16,13 +16,15 @@ from absl import logging, flags
 from dataclasses import dataclass
 import inspect
 import threading
-from typing import List, Dict, Optional, Set, Tuple, get_type_hints
+from collections import defaultdict
+from typing import List, Dict, Optional, Set, Tuple, Union, get_type_hints
+import tensorflow as tf
 from monolith.native_training.data.utils import get_slot_feature_name, get_slot_from_feature_name
 from monolith.native_training.utils import add_to_collections
 
 _BOOL_FLAGS = {'true', 'yes', 't', 'y', '1'}
 _cache = {}
-
+FID_MASK = (1 << 64) - 1
 FLAGS = flags.FLAGS
 
 
@@ -141,6 +143,9 @@ class Feature:
     if isinstance(self.feature_id, str):
       self.feature_id = int(self.feature_id)
 
+    if isinstance(self.feature_version, str):
+      self.feature_version = int(self.feature_version)
+
   def __str__(self):
     terms = []
     for name, clz in get_type_hints(Feature).items():
@@ -200,12 +205,18 @@ class FeatureList(object):
     self.feeds = feeds
     self.caches = caches
     self.features = features
-    self.__slots = {feat.slot: feat for feat in features.values()}
+
+    self.__slots = defaultdict(list)
+    for feat in features.values():
+      self.__slots[feat.slot].append(feat)
     add_to_collections('feature_list', self)
 
   def __getitem__(self, item) -> Feature:
     if isinstance(item, int):
-      return self.__slots[item]
+      if item in self.__slots:
+        return self.__slots[item][0]
+      else:
+        raise Exception('there is no feature {}'.format(item))
     else:
       assert isinstance(item, str)
       item = item.strip()
@@ -232,6 +243,12 @@ class FeatureList(object):
       return self.__getitem__(item)
     except:
       return default
+
+  def get_with_slot(self, slot):
+    if slot in self.__slots:
+      return self.__slots[slot]
+    else:
+      return []
 
   def __len__(self):
     return len(self.features)
@@ -325,3 +342,63 @@ def get_feature_name_and_slot(item) -> Tuple[str, Optional[int]]:
     # for FeatureColumn
     assert hasattr(item, 'feature_name') and hasattr(item, 'feature_slot')
     return item.feature_name, item.feature_slot
+
+
+_VALID_FNAMES = set()
+
+
+def is_example_batch():
+  # only example batch need column prune, this function is design for example_batch
+  is_example_batch = False
+  if hasattr(FLAGS, 'data_type') and FLAGS.data_type:
+    if FLAGS.data_type.lower() in {'example_batch', 'examplebatch'}:
+      is_example_batch = True
+  return is_example_batch
+
+
+def add_feature(feature: Union[str, int, List[str], List[int]]):
+  global _VALID_FNAMES
+  if not isinstance(feature, (list, tuple)):
+    feature = [feature]
+  if feature:
+    for element in feature:
+      if isinstance(element, str):
+        _VALID_FNAMES.add(element)
+      else:
+        assert isinstance(element, int)
+        _VALID_FNAMES.add(get_slot_feature_name(element))
+
+
+def add_feature_by_fids(fids: Union[int, List[int]], feature_list: FeatureList = None):
+  if not is_example_batch():
+    return
+  if isinstance(fids, int):
+    fids = [fids]
+
+  if feature_list is None:
+    # for example_batch, there is a feature_list.conf
+    feature_list = FeatureList.parse()
+
+  if feature_list:
+    for fid in fids:
+      find_feature = False
+      fid = fid & FID_MASK
+      for feature in feature_list.get_with_slot(fid >> 54):
+        if feature.feature_version is None or feature.feature_version == 1:
+          add_feature(feature.feature_name)
+          find_feature = True
+
+      for feature in feature_list.get_with_slot(fid >> 48):
+        if feature.feature_version == 2:
+          add_feature(feature.feature_name)
+          find_feature = True
+
+      if not find_feature:
+        raise Exception(f'Cannot find feature name for fid: {fid}')
+  else:
+    raise Exception('Cannot create feature_list')
+
+
+def get_valid_features() -> List[str]:
+  global _VALID_FNAMES
+  return list(_VALID_FNAMES)
