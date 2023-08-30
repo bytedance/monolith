@@ -465,7 +465,9 @@ class ReplicaUpdater(object):
                                              socket.AF_INET6)[0][4][0]
     except:
       defalut_host_ipv6 = '::'
-    host_ipv6 = os.environ.get("MY_HOST_IPV6", defalut_host_ipv6)
+    host_ipv6 = os.environ.get("MY_HOST_IPV6")
+    if not host_ipv6:
+      host_ipv6 = defalut_host_ipv6
     host_ipv6 = '[{}]'.format(host_ipv6)
     replica_meta = ReplicaMeta(address=f'{host}:{grpc_port}',
                                address_ipv6=f'{host_ipv6}:{grpc_port}',

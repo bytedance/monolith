@@ -13,9 +13,11 @@
 # limitations under the License.
 
 import os
+from absl import logging
 from datetime import datetime, timedelta
 from kazoo.client import KazooClient
 from monolith.native_training.env_utils import get_zk_auth_data
+import socket
 
 _PORT = 2181
 
@@ -28,8 +30,19 @@ _HOSTS_IPV6 = [
 
 
 def is_ipv6_only():
-  _ipv4 = os.environ.get('MY_HOST_IP', os.environ.get('MY_POD_IP', None))
-  return _ipv4 is None or len(_ipv4.strip()) == 0
+  if "MY_HOST_IP" in os.environ or "MY_POD_IP" in os.environ or "MY_HOST_IPV6" in os.environ:
+    # in tce/byterec environment
+    ipv4_addr = os.environ.get("MY_HOST_IP", os.environ.get("MY_POD_IP", None))
+    logging.info(f"in tce env, ipv4 address is {ipv4_addr}")
+  else:
+    try:
+      ipv4_addr = socket.gethostbyname(socket.gethostname())
+    except:
+      ipv4_addr = None
+    logging.info(f"not in tce env, ipv4 address is {ipv4_addr}")
+  ipv6_only = not ipv4_addr
+  logging.info(f"is_ipv6_only is {ipv6_only}")
+  return ipv6_only
 _HOSTS = []
 _HOSTS_IPV6 = []
 def default_zk_servers(use_ipv6: bool = False):

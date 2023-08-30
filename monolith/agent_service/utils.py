@@ -820,16 +820,14 @@ class ZKPath(object):
   )
 
   def __init__(self, path: str):
-    logging.info(f'[INFO] ZKPATH path {path}')
     self.path = path
 
     if path is None or len(path) != 0:
       matched = self.PAT.match(self.path)
       if matched:
-        logging.info("[INFO] path matched")
         self._group_dict = matched.groupdict()
       else:
-        logging.info("[INFO] path not matched")
+        logging.info(f"[INFO] path not matched: {path}")
         self._group_dict = None
     else:
       self._group_dict = None

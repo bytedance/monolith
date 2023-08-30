@@ -99,7 +99,7 @@ class AgentServiceImpl(AgentServiceServicer):
           addr_list = AddressList()
           addr_list.address.extend(addrs)
           addresses[saved_model_name].CopyFrom(addr_list)
-    logging.info(f"heartbeat response: {response}")
+    logging.info(f"heartbeat response({request.server_type}): {response}")
     return response
 
   def GetResource(self, request: GetResourceRequest,
