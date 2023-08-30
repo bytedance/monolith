@@ -577,7 +577,10 @@ def make_native_task_context(config: CpuTrainingConfig,
 
 
 def is_chief(config: CpuTrainingConfig):
-  return config.server_type == "worker" and config.index == 0
+  if config.enable_sync_training or config.enable_partial_sync_training:
+    return config.server_type == "worker" and get_mpi_rank() == 0
+  else:
+    return config.server_type == "worker" and config.index == 0
 
 
 class CpuTraining:
@@ -1278,12 +1281,17 @@ class CpuTraining:
 
     def get_hooks_for_metrics(model_dir: str, save_steps: int):
       hooks = []
-      if self._params.metrics.enable_tf2_profiler_hook:
+      if self._params.metrics.enable_tf2_profiler_hook and is_chief(self.config):
         start_step = self.config.profile_some_steps_from
         end_step = None if start_step is None else start_step + 10
         hooks.append(
             Tf2ProfilerCaptureMultipleHook(
                 logdir=model_dir, capture_step_range=[start_step, end_step]))
+
+      if self.config.profile_with_nvprof_from_to and is_chief(self.config):
+        s, e = self.config.profile_with_nvprof_from_to.split(',')
+        hooks.append(
+            NVProfilerCaptureMultipleHook(capture_step_range=[int(s), int(e)]))
 
       if self._params.metrics.enable_throughput_hook and is_chief(self.config):
         hooks.append(
@@ -2205,32 +2213,6 @@ def distributed_sync_train(config: DistributedCpuTrainingConfig,
   estimator = tf.estimator.Estimator(training.create_model_fn(),
                                      config=run_config)
   run_hooks = get_sync_run_hooks(True)
-
-  # When we use distributed training, we always use rank 1 to profile
-  # because rank 0 might not get embedding shard due to partition logic
-  # for np >= 4.
-  if get_mpi_size() == 1 or get_mpi_rank() == 1:
-    tf.profiler.experimental.server.start(6666)
-    if config.profile_some_steps_from:
-      start_step = config.profile_some_steps_from
-      end_step = start_step + 10
-      options = tf.profiler.experimental.ProfilerOptions(
-          host_tracer_level=int(os.getenv('MONOLITH_TRACE_LEVEL', '3')),
-          python_tracer_level=1,
-          # CUPTI_ERROR_MULTIPLE_SUBSCRIBERS_NOT_SUPPORTED:
-          # CUPTI doesn't allow multiple callback subscribers.
-          # Only a single subscriber can be registered at a time.
-          device_tracer_level=0 if config.profile_with_nvprof_from_to else 1)
-      prof_hook = Tf2ProfilerCaptureMultipleHook(
-          logdir=config.tensorboard_log_path or config.model_dir,
-          capture_step_range=(start_step, end_step),
-          options=options)
-      run_hooks.append(prof_hook)
-
-    if config.profile_with_nvprof_from_to:
-      s, e = config.profile_with_nvprof_from_to.split(',')
-      run_hooks.append(
-          NVProfilerCaptureMultipleHook(capture_step_range=[int(s), int(e)]))
 
   if sync_backend is not None:
     run_hooks.append(

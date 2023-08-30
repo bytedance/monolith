@@ -23,7 +23,7 @@ from typing import Any, Tuple, Callable
 from queue import Queue, Empty
 from threading import Thread, RLock
 
-from absl import logging
+from absl import logging, flags
 from datetime import datetime
 from tensorflow.python.profiler.internal import _pywrap_traceme
 from tensorflow.python.training import basic_session_run_hooks
@@ -36,6 +36,9 @@ from monolith.native_training.metric import cli
 from monolith.native_training import utils
 from monolith.native_training.metric.kafka_utils import KProducer
 from monolith.native_training.metric.exit_hook import exit_hook
+
+
+FLAGS = flags.FLAGS
 
 
 class ThroughputMetricHook(tf.estimator.SessionRunHook):
@@ -215,6 +218,13 @@ class Tf2ProfilerCaptureMultipleHook(tf.estimator.SessionRunHook):
     self._range_reset_cnt = 0
 
   def begin(self):
+    try:
+      # if enable_sync_training, there is no tf.distribute.Server
+      # we need start profiler server
+      if FLAGS.enable_sync_training:
+        tf.profiler.experimental.server.start(6666)
+    except:
+      logging.warning("cannot start profiler server at 6666")
     self._global_step_tensor = training_util._get_or_create_global_step_read()
     if self._global_step_tensor is None:
       raise RuntimeError(
