@@ -101,7 +101,7 @@ from monolith.native_training.model_export import export_utils
 from monolith.native_training.model_export import saved_model_exporters
 from monolith.native_training.model_export import export_context
 from monolith.native_training.model_export.export_context import \
-    is_exporting, is_exporting_distributed, ExportMode
+    is_exporting, is_exporting_distributed, is_dry_run_or_exporting, ExportMode
 from monolith.native_training.native_task import NativeTask
 from monolith.native_training.prefetch_queue import \
     enqueue_dicts_with_queue_return, EnqueueHook
@@ -807,7 +807,7 @@ class CpuTraining:
           if isinstance(ds, tf.data.Dataset):
             if enable_reorder:
               ds = ds.map(reorder_parse_fn, num_parallel_calls=tf.data.AUTOTUNE)
-            if use_dataservice:
+            if use_dataservice and not is_dry_run_or_exporting():
               # This is a temporary hack. Will revisit here once we decided to
               # do the remanagement.
               tmp_mlp_env = mlp_utils.MLPEnv()
@@ -1830,6 +1830,8 @@ def _do_worker_train(config: DistributedCpuTrainingConfig,
       params.mode = tf.estimator.ModeKeys.PREDICT
       native_task = params.instantiate()
       training = CpuTraining(config, native_task)
+      if config.enable_partial_sync_training or config.use_dataservice:
+        training = sync_training_hooks.EofAwareTask(training, config.use_dataservice)
       estimator = tf.estimator.Estimator(training.create_model_fn(), config=run_config)
       estimator.train(training._task.create_item_input_fn(
           items_path), max_steps=params.train.max_steps)

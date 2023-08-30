@@ -1258,5 +1258,6 @@ py_library(
     deps = [
         ":distribution_utils",
         ":yarn_runtime",
+        "//monolith/native_training/model_export:export_context",
     ],
 )

@@ -175,10 +175,7 @@ class ParquetDatasetOp : public DatasetOpKernel {
             LOG(INFO) << "end_of_sequence of " << dataset()->file_name_;
           } else {
             counter_++;
-            if (counter_ % 1000 == 0) {
-              LOG(INFO) << "consume " << counter_ << "examples from "
-                        << dataset()->file_name_;
-            }
+            LOG_EVERY_N_SEC(INFO, 60) << "consume " << counter_ << " examples from " << dataset()->file_name_;
           }
         } else if (dataset()->output_pb_type_ == "examplebatch") {
           ExampleBatch example_batch;

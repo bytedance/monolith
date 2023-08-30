@@ -133,3 +133,9 @@ def enter_export_mode(mode: ExportMode, export_ctx=None):
   finally:
     EXPORT_MODE = ExportMode.NONE
     EXPORT_CTX = None
+
+
+@monolith_export
+def is_dry_run_or_exporting():
+  graph = tf.compat.v1.get_default_graph()
+  return is_exporting() or hasattr(graph, 'dry_run')

@@ -26,27 +26,13 @@ import tensorflow.python.data.experimental.service as dsvc
 from tensorflow_estimator.python.estimator.util import _DatasetInitializerHook
 from monolith.native_training.distribution_utils import get_mpi_rank, \
   get_mpi_size, get_mpi_local_size, enable_sync_training, get_device_str
+from monolith.native_training.model_export.export_context import \
+  is_exporting, is_dry_run_or_exporting
+
 
 FLAGS = flags.FLAGS
 
 from monolith.native_training import yarn_runtime
-
-
-def kill_by_port(port: int):
-  process = Popen(["lsof", "-i", ":{0}".format(port)], stdout=PIPE, stderr=PIPE)
-  stdout, stderr = process.communicate()
-  try:
-    pid = None
-    for process in str(stdout.decode("utf-8")).split("\n")[1:]:
-      data = [x for x in process.split(" ") if x]
-      if data and len(data) > 1:
-        pid = int(data[1])
-        break
-    print('pid is', pid)
-  except:
-    pass
-  if pid is not None:
-    os.kill(pid, signal.SIGKILL)
 
 
 def check_port(host: str, port: int, timeout: float = 1) -> bool:
@@ -420,36 +406,36 @@ def mlp_pass(dispatcher_role: str = 'dispatcher',
 def begin(self):
   self._initializer = self._iterator.initializer
   self._broadcast_dataset_id = None
-  self._rank = -1
-  graph = tf.compat.v1.get_default_graph()
-  if enable_sync_training() and not hasattr(graph, 'dry_run'):
-    try:
-      enable_bps = int(os.getenv("MONOLITH_WITH_BYTEPS", "0"))
-      if enable_bps:
-        import byteps.tensorflow as hvd
-      else:
-        import horovod.tensorflow as hvd
+  if not is_dry_run_or_exporting():
+    self._rank = -1
+    if enable_sync_training():
+      try:
+        enable_bps = int(os.getenv("MONOLITH_WITH_BYTEPS", "0"))
+        if enable_bps:
+          import byteps.tensorflow as hvd
+        else:
+          import horovod.tensorflow as hvd
 
-      dataset_ids = tf.compat.v1.get_collection(key='registed_dataset_id')
-      if dataset_ids is not None and len(dataset_ids) > 0:
-        dataset_id = dataset_ids[0]
-        if dataset_id is not None:
-          self._rank = hvd.rank()
-          #with tf.device(None), tf.device(get_device_str(True)):
-          self._broadcast_dataset_id = [
-              dataset_id,
-              hvd.broadcast(tensor=dataset_id,
-                            root_rank=0,
-                            name="broadcast_dataset_id")
-          ]
-          graph.clear_collection(name='registed_dataset_id')
-    except Exception as e:
-      logging.info(f'import byteps/horovod error: {e}')
+        dataset_ids = tf.compat.v1.get_collection(key='registed_dataset_id')
+        if dataset_ids is not None and len(dataset_ids) > 0:
+          dataset_id = dataset_ids[0]
+          if dataset_id is not None:
+            self._rank = hvd.rank()
+            #with tf.device(None), tf.device(get_device_str(True)):
+            self._broadcast_dataset_id = [
+                dataset_id,
+                hvd.broadcast(tensor=dataset_id,
+                              root_rank=0,
+                              name="broadcast_dataset_id")
+            ]
+            graph.clear_collection(name='registed_dataset_id')
+      except Exception as e:
+        logging.info(f'import byteps/horovod error: {e}')
 
 
 def after_create_session(self, session, coord):
   del coord
-  if self._broadcast_dataset_id is not None:
+  if self._broadcast_dataset_id is not None and not is_dry_run_or_exporting():
     dataset_id, bc_dataset_id = session.run(self._broadcast_dataset_id)
     logging.info(
         f'dataset_id is {dataset_id}, bc_dataset_id is {bc_dataset_id}, rank {self._rank}'
