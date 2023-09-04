@@ -116,53 +116,116 @@ class LayerOpsTest(tf.test.TestCase):
 
   def test_feature_insight(self):
     segment_sizes = [3, 2, 4]
-    input_embedding = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9,
-                       1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9,
-                       2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9]
-    input_embedding_tensor = tf.constant(value=input_embedding, shape=(3, 9), dtype=tf.float32)
-    weight = [0.1, 0.2, 0.3, 0.4, 0.5, 0.4, 0.3, 0.2, 0.1,
-              0.9, 0.8, 0.7, 0.6, 0.5, 0.6, 0.7, 0.8, 0.9]
+    input_embedding = [
+        0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.1, 1.2, 1.3, 1.4, 1.5,
+        1.6, 1.7, 1.8, 1.9, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9
+    ]
+    input_embedding_tensor = tf.constant(value=input_embedding,
+                                         shape=(3, 9),
+                                         dtype=tf.float32)
+    weight = [
+        0.1, 0.2, 0.3, 0.4, 0.5, 0.4, 0.3, 0.2, 0.1, 0.9, 0.8, 0.7, 0.6, 0.5,
+        0.6, 0.7, 0.8, 0.9
+    ]
     weight_tensor = tf.constant(value=weight, shape=(9, 2), dtype=tf.float32)
-    
-    input_embedding_splits = tf.split(input_embedding_tensor, num_or_size_splits=segment_sizes, axis=1)
-    weight_splits = tf.split(weight_tensor, num_or_size_splits=segment_sizes, axis=0)
-    concatenated = tf.concat([tf.matmul(ip, w) for ip, w in zip(input_embedding_splits, weight_splits)], axis=1)
+
+    input_embedding_splits = tf.split(input_embedding_tensor,
+                                      num_or_size_splits=segment_sizes,
+                                      axis=1)
+    weight_splits = tf.split(weight_tensor,
+                             num_or_size_splits=segment_sizes,
+                             axis=0)
+    concatenated = tf.concat([
+        tf.matmul(ip, w) for ip, w in zip(input_embedding_splits, weight_splits)
+    ],
+                             axis=1)
     k, num_feature = 2, 3
     segment_ids = []
     for i in range(num_feature):
       segment_ids.extend([i] * k)
-    segment_ids_tensor = tf.constant(value=segment_ids, shape=(k * num_feature,), dtype=tf.int32)
-    res_exp = tf.transpose(tf.math.segment_sum(tf.transpose(concatenated * concatenated), segment_ids=segment_ids_tensor))
-    out = layer_ops.feature_insight(input_embedding_tensor, weight_tensor, segment_sizes, aggregate=True)
+    segment_ids_tensor = tf.constant(value=segment_ids,
+                                     shape=(k * num_feature,),
+                                     dtype=tf.int32)
+    res_exp = tf.transpose(
+        tf.math.segment_sum(tf.transpose(concatenated * concatenated),
+                            segment_ids=segment_ids_tensor))
+    out = layer_ops.feature_insight(input_embedding_tensor,
+                                    weight_tensor,
+                                    segment_sizes,
+                                    aggregate=True)
     self.assertAllClose(out, res_exp)
 
   def test_feature_insight_grad(self):
     segment_sizes = [3, 2, 4]
-    input_embedding = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9,
-                       1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9,
-                       2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9]
-    input_embedding_tensor = tf.constant(value=input_embedding, shape=(3, 9), dtype=tf.float32)
-    weight = [0.1, 0.2, 0.3, 0.4, 0.5, 0.4, 0.3, 0.2, 0.1,
-              0.9, 0.8, 0.7, 0.6, 0.5, 0.6, 0.7, 0.8, 0.9]
+    input_embedding = [
+        0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.1, 1.2, 1.3, 1.4, 1.5,
+        1.6, 1.7, 1.8, 1.9, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9
+    ]
+    input_embedding_tensor = tf.constant(value=input_embedding,
+                                         shape=(3, 9),
+                                         dtype=tf.float32)
+    weight = [
+        0.1, 0.2, 0.3, 0.4, 0.5, 0.4, 0.3, 0.2, 0.1, 0.9, 0.8, 0.7, 0.6, 0.5,
+        0.6, 0.7, 0.8, 0.9
+    ]
     weight_tensor = tf.constant(value=weight, shape=(9, 2), dtype=tf.float32)
-    
+
     with tf.GradientTape(persistent=True) as g:
       g.watch(input_embedding_tensor)
       g.watch(weight_tensor)
-      input_embedding_splits = tf.split(input_embedding_tensor, num_or_size_splits=segment_sizes, axis=1)
-      weight_splits = tf.split(weight_tensor, num_or_size_splits=segment_sizes, axis=0)
-      res_exp = tf.concat([tf.matmul(ip, w) for ip, w in zip(input_embedding_splits, weight_splits)], axis=1)
-      out = layer_ops.feature_insight(input_embedding_tensor, weight_tensor, segment_sizes)
+      input_embedding_splits = tf.split(input_embedding_tensor,
+                                        num_or_size_splits=segment_sizes,
+                                        axis=1)
+      weight_splits = tf.split(weight_tensor,
+                               num_or_size_splits=segment_sizes,
+                               axis=0)
+      res_exp = tf.concat([
+          tf.matmul(ip, w)
+          for ip, w in zip(input_embedding_splits, weight_splits)
+      ],
+                          axis=1)
+      out = layer_ops.feature_insight(input_embedding_tensor, weight_tensor,
+                                      segment_sizes)
 
     input_embedding_grad_exp = g.gradient(res_exp, input_embedding_tensor)
     weight_grad_exp = g.gradient(res_exp, weight_tensor)
     input_embedding_grad = g.gradient(out, input_embedding_tensor)
     weight_grad = g.gradient(out, weight_tensor)
-    
+
     self.assertAllClose(out, res_exp)
     self.assertAllClose(input_embedding_grad, input_embedding_grad_exp)
     self.assertAllClose(weight_grad, weight_grad_exp)
 
+
+  def test_fid_counter_grad(self):
+    alpha = tf.constant([1.0])
+    with tf.GradientTape() as g:
+      g.watch(alpha)
+      counter = layer_ops.fid_counter(alpha, counter_threshold=1000, step=1)
+      counter_loss = tf.reduce_sum(counter)
+      var_grad = g.gradient(counter_loss, alpha)
+      self.assertAllClose(counter, [2.0])
+      self.assertAllClose(var_grad, [-1.0])
+      print(f"The grad {list(var_grad.numpy())}", flush=True)
+
+    with tf.GradientTape() as g:
+      g.watch(alpha)
+      counter = layer_ops.fid_counter(alpha, counter_threshold=1000, step=0.01)
+      counter_loss = tf.reduce_sum(counter)
+      var_grad = g.gradient(counter_loss, alpha)
+      self.assertAllClose(counter, [1.01])
+      self.assertAllClose(var_grad, [-0.01])
+      print(f"The grad {list(var_grad.numpy())}", flush=True)
+
+    alpha = tf.constant([1000.0])
+    with tf.GradientTape() as g:
+      g.watch(alpha)
+      counter = layer_ops.fid_counter(alpha, counter_threshold=1000, step=1)
+      counter_loss = tf.reduce_sum(counter)
+      var_grad = g.gradient(counter_loss, alpha)
+      self.assertAllClose(counter, [1000])
+      self.assertAllClose(var_grad, [0])
+      print(f"The grad {list(var_grad.numpy())}", flush=True)
 
 
 if __name__ == '__main__':

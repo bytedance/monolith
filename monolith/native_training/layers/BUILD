@@ -351,9 +351,11 @@ tf_kernel_library(
         "kernels/ffm_kernels.cc",
         "kernels/ffm_kernels.h",
         "kernels/feature_insight_kernels.cc",
+        "kernels/fid_counter_kernel.cc",
         "ops/ffm_ops.cc",
         "ops/nas_ops.cc",
         "ops/feature_insight_ops.cc",
+        "ops/fid_counter_op.cc",
     ],
     copts = ["-DNDEBUG"],
     gpu_srcs = [
@@ -407,4 +409,5 @@ exports_files([
     "kernels/nas_kernels.cc",
     "ops/nas_ops.cc",
     "ops/feature_insight_ops.cc",
+    "ops/fid_counter_ops.cc",
 ])
