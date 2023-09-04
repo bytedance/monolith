@@ -83,6 +83,7 @@ flags.DEFINE_integer('dataset_num_workers', None, 'int dataset_num_workers')
 flags.DEFINE_string('kafka_other_metadata', None,
                     'string, kafka_other_metadata')
 POOL_KEY = "TF_ITEMPOOL"
+OUTPUT_PB_TYPE_GRAPH_KEY = "monolith_dataset_output_pb_type"
 
 
 class FeaturePruningType(object):
@@ -393,6 +394,8 @@ class ParquetDataset(dataset_ops.DatasetSource):
 
     self._out_type = tf.string if output_pb_type == PbType.PLAINTEXT else tf.variant
 
+    tf.compat.v1.add_to_collection(name=OUTPUT_PB_TYPE_GRAPH_KEY,
+                                   value=output_pb_type.to_name())
     variant_tensor = pb_datasource_ops.parquet_dataset(
         file_name=file_name,
         output_pb_type=output_pb_type.to_name(),
@@ -507,6 +510,8 @@ class FilePBDataset(dataset_ops.DatasetSource):
     if use_snappy is None:
       use_snappy = False
 
+    tf.compat.v1.add_to_collection(name=OUTPUT_PB_TYPE_GRAPH_KEY,
+                                   value=output_pb_type.to_name())
     variant_tensor = pb_datasource_ops.pb_dataset(
         file_name=file_name,
         use_snappy=use_snappy,
@@ -781,7 +786,11 @@ class NegativeGenDataset(dataset_ops.UnaryUnchangedStructureDataset):
 def instance_reweight(self,
                       action_priority: str,
                       reweight: str,
-                      variant_type: str = 'example'):
+                      **kwargs):
+  value = tf.compat.v1.get_collection(OUTPUT_PB_TYPE_GRAPH_KEY)
+  assert len(value) == 1
+  variant_type = value[0]
+  assert variant_type in {"instance", "example"}
   return InstanceReweightDataset(self,
                                  action_priority,
                                  reweight,
@@ -879,6 +888,7 @@ class MergeFlowDataset(dataset_ops.DatasetV2):
         'ds_to_merge_{}'.format(i + 1)
         for i in range(len(self._dataset_to_merge))
     ]
+
     variant_tensor = pb_datasource_ops.merge_flow_dataset(
         input_dataset_variant,
         data_flow=data_flow,
@@ -918,7 +928,11 @@ def negative_gen(self,
                  origin_neg_in_pool_proba: float = 1.0,
                  neg_sample_declay_factor: float = 1.0,
                  easy_hard_ratio: float = 0.0,
-                 variant_type: str = 'example'):
+                 **kwargs):
+  value = tf.compat.v1.get_collection(OUTPUT_PB_TYPE_GRAPH_KEY)
+  assert len(value) == 1
+  variant_type = value[0]
+  assert variant_type in {"instance", "example"}
   return NegativeGenDataset(
       self,
       neg_num=neg_num,
@@ -951,7 +965,11 @@ def split_flow(self,
                data_flow: List[str],
                index: int,
                max_queue_size: int = 1024,
-               variant_type: str = 'example'):
+               **kwargs):
+  value = tf.compat.v1.get_collection(OUTPUT_PB_TYPE_GRAPH_KEY)
+  assert len(value) == 1
+  variant_type = value[0]
+  assert variant_type in {"instance", "example"}
   return SplitFlowDataset(self,
                           data_flow=data_flow,
                           index=index,
@@ -962,7 +980,11 @@ def split_flow(self,
 def merge_flow(self,
                dataset_to_merge,
                max_queue_size: int = 1024,
-               variant_type: str = 'example'):
+               **kwargs):
+  value = tf.compat.v1.get_collection(OUTPUT_PB_TYPE_GRAPH_KEY)
+  assert len(value) == 1
+  variant_type = value[0]
+  assert variant_type in {"instance", "example"}
   return MergeFlowDataset(self,
                           dataset_to_merge,
                           max_queue_size=max_queue_size,
@@ -1221,6 +1243,7 @@ class KafkaDataset(dataset_ops.DatasetSource):
         for meta in kafka_other_metadata_list:
           metadata.append(meta)
 
+      tf.compat.v1.add_to_collection(name=OUTPUT_PB_TYPE_GRAPH_KEY, value=output_pb_type)
       resource = kafka_resource_init(
           topics=topics,
           metadata=metadata,
@@ -1295,9 +1318,10 @@ def register_dataset(service, dataset, buffer_size=32):
   if external_state_policy is None:
     external_state_policy = ExternalStatePolicy.WARN
   logging.info('external_state_policy: %s', external_state_policy)
-  dataset = dataset.map(lambda *x: compression_ops.compress(x),
-                        # num_parallel_calls=dataset_ops.AUTOTUNE)
-                        num_parallel_calls=None)
+  dataset = dataset.map(
+      lambda *x: compression_ops.compress(x),
+      # num_parallel_calls=dataset_ops.AUTOTUNE)
+      num_parallel_calls=None)
   logging.info('num_parallel_calls: None')
   # dataset = dataset.prefetch(buffer_size=buffer_size)
   dataset = dataset._apply_options()
@@ -1521,7 +1545,10 @@ def distribute(self,
   return dataset
 
 
-def transform(self, t: Transform, variant_type: str):
+def transform(self, t: Transform, **kwargs):
+  value = tf.compat.v1.get_collection(OUTPUT_PB_TYPE_GRAPH_KEY)
+  assert len(value) == 1
+  variant_type = value[0]
   assert variant_type in {"instance", "example"}
   return TransformDataset(self, t, variant_type=variant_type)
 
@@ -1544,7 +1571,6 @@ class TransformDataset(dataset_ops.UnaryUnchangedStructureDataset):
   def __init__(self, input_dataset, transform: Transform, variant_type: str):
     assert variant_type in {"instance", "example"}
     self._transform = transform
-    self._variant_type = variant_type
 
     variant_tensor = pb_datasource_ops.transform_dataset(
         input=input_dataset._variant_tensor,
