@@ -1208,11 +1208,6 @@ class CpuTraining:
           use_native_multi_hash_table=self.config.use_native_multi_hash_table,
           no_first_save=not should_do_first_save)
 
-      if self.config.enable_sync_training and self.config.enable_realtime_training:
-        hooks.append(
-            sync_training_hooks.SyncTrainingForceDumpHook(
-                model_dir, saver_hook.timer))
-
       hooks.append(saver_hook)
 
       if not self.config.enable_sync_training:
