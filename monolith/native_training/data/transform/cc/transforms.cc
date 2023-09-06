@@ -583,6 +583,10 @@ std::unique_ptr<TransformInterface> NewTransformFromConfig(
 
     AssignOrCombine(&transform, std::move(t), CombineTransforms);
   }
+
+  if (transform == nullptr) {
+    transform = NewIdentity();
+  }
   return NewTransformSummary(std::move(transform), true);
 }
 

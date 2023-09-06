@@ -6,6 +6,22 @@ package(default_visibility = ["//visibility:public"])
 
 
 cc_library(
+    name = "fid",
+    hdrs = ["cc/fid.h"],
+    deps = [],
+)
+
+cc_test(
+    name = "fid_test",
+    srcs = ["cc/fid_test.cc"],
+    deps = [
+        ":fid",
+        ":reader_util",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "reader_util",
     srcs = ["cc/reader_util.cc"],
     hdrs = ["cc/reader_util.h"],
@@ -202,6 +218,23 @@ tf_cc_binary(
     deps = [
         ":data_reader",
         ":instance_utils",
+        "//third_party/nlohmann:json",
+        "@org_tensorflow//tensorflow/core:tensorflow",
+    ],
+)
+
+tf_cc_binary(
+    name = "instance_reader",
+    srcs = [
+        "cc/instance_reader.cc",
+    ],
+    copts = ["-fexceptions"],
+    deps = [
+        ":data_reader",
+        ":fid",
+        ":instance_utils",
+        "//monolith/native_training/data/transform:transforms",
+        "//third_party/cli11:cli11",
         "//third_party/nlohmann:json",
         "@org_tensorflow//tensorflow/core:tensorflow",
     ],
