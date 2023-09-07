@@ -172,9 +172,10 @@ def filter_by_value(variant: tf.Tensor,
   
   Args:
     variant (:obj:`Tensor`): 输入数据, 必须是variant类型
-    field_name (:obj:`List[int]`): 任意一个FID出现`filter_fids`中, 样本被过滤
+    field_name (:obj:`List[int]`): 需要执行过滤逻辑的字段名
     op (:obj:`str`): 比较运算符, 可以是 gt/ge/eq/lt/le/neq/between/in/not-in 等
-      布尔运算，也可以是 all/any/diff 等集合布尔运算
+      布尔运算，也可以是 all/any/diff 等集合布尔运算，也可以是 startswith/endswith 等
+      字符串判断逻辑
     operand (:obj:`float`): 操作数, 用于比较
     variant_type (:obj:`str`): variant类型, 可以为instance/example
     keep_empty (:obj:`bool`): False
