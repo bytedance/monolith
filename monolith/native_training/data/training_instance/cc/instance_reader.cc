@@ -21,12 +21,15 @@
 #include "monolith/native_training/data/training_instance/cc/fid.h"
 #include "monolith/native_training/data/transform/cc/transforms.h"
 #include "monolith/native_training/data/transform/transform_config.pb.h"
+#include "tensorflow/core/platform/base64.h"
 #include "third_party/cli11/CLI11.hpp"
 #include "third_party/nlohmann/json.hpp"
 
 namespace tf = tensorflow;
+using idl::matrix::proto::LineId;
 using monolith::io::proto::Example;
 using monolith::io::proto::ExampleBatch;
+using monolith::io::proto::Feature;
 using monolith::native_training::data::TransformConfig;
 using parser::proto::Instance;
 using tf::monolith_tf::FeatureNameMapper;
@@ -319,6 +322,109 @@ void to_json(nlohmann::json& j, const FIDV1& fid) { j = fid.DebugString(); }
 
 void to_json(nlohmann::json& j, const FIDV2& fid) { j = fid.DebugString(); }
 
+std::string JsonCallbackFn(const std::string& serialized) {
+  nlohmann::json json;
+  try {
+    json = nlohmann::json::parse(serialized);
+  } catch (const std::exception& e) {
+    LOG(FATAL) << e.what() << "\nserialized:\n" << serialized;
+  }
+
+  auto CollectFID = [](const nlohmann::json& j, std::vector<uint64_t>* fids) {
+    CHECK(j.is_array());
+    fids->reserve(j.size());
+    for (absl::string_view fid_str : j) {
+      uint64_t fid = 0;
+      CHECK(absl::SimpleAtoi(fid_str, &fid));
+      fids->emplace_back(fid);
+    }
+    std::sort(fids->begin(), fids->end());
+  };
+
+  // instance fid(v1)
+  if (json.contains("fid") && json["fid"].is_array()) {
+    std::vector<uint64_t> fids;
+    CollectFID(json["fid"], &fids);
+    std::vector<FIDV1> fids_v1(fids.begin(), fids.end());
+    json["fid"] = fids_v1;
+  }
+
+  // instance feature(v2)
+  if (json.contains("feature") && json["feature"].is_array()) {
+    for (nlohmann::json& element : json["feature"]) {
+      if (element.contains("fid") && element["fid"].is_array()) {
+        std::vector<uint64_t> fids;
+        CollectFID(element["fid"], &fids);
+        std::vector<FIDV2> fids_v2(fids.begin(), fids.end());
+        element["fid"] = fids_v2;
+      }
+    }
+  }
+
+  auto ReplaceFeatureFn = [&](nlohmann::json& feature, bool is_line_id) {
+    if (feature.contains("fid_v1_list")) {
+      nlohmann::json& fid_v1_list = feature["fid_v1_list"];
+      if (fid_v1_list.contains("value") && fid_v1_list["value"].is_array()) {
+        std::vector<uint64_t> fids;
+        CollectFID(fid_v1_list["value"], &fids);
+        std::vector<FIDV1> fids_v1(fids.begin(), fids.end());
+        fid_v1_list["value"] = fids_v1;
+      }
+    } else if (feature.contains("fid_v2_list")) {
+      nlohmann::json& fid_v2_list = feature["fid_v2_list"];
+      if (fid_v2_list.contains("value") && fid_v2_list["value"].is_array()) {
+        std::vector<uint64_t> fids;
+        CollectFID(fid_v2_list["value"], &fids);
+        std::vector<FIDV2> fids_v2(fids.begin(), fids.end());
+        fid_v2_list["value"] = fids_v2;
+      }
+    } else if (feature.contains("bytes_list") && is_line_id) {
+      nlohmann::json& bytes_list = feature["bytes_list"];
+      if (bytes_list.contains("value") && bytes_list["value"].is_array()) {
+        CHECK_EQ(bytes_list["value"].size(), 1);
+        LineId line_id;
+        std::string based64_encoded = bytes_list["value"][0];
+        std::string serialized;
+        tf::Base64Decode(based64_encoded, &serialized);
+        CHECK(line_id.ParseFromArray(serialized.data(), serialized.size()))
+            << serialized;
+        auto json_options = google::protobuf::util::JsonOptions();
+        json_options.add_whitespace = true;
+        json_options.preserve_proto_field_names = true;
+        std::string output;
+        google::protobuf::util::MessageToJsonString(line_id, &output,
+                                                    json_options);
+        bytes_list["value"] = nlohmann::json::parse(output);
+      }
+    }
+  };
+
+  // example named_feature
+  if (json.contains("named_feature") && json["named_feature"].is_array()) {
+    for (nlohmann::json& element : json["named_feature"]) {
+      if (element.contains("feature")) {
+        ReplaceFeatureFn(element["feature"], false);
+      }
+    }
+  }
+
+  // ExampleBatch named_feature_list
+  if (json.contains("named_feature_list") &&
+      json["named_feature_list"].is_array()) {
+    for (nlohmann::json& element : json["named_feature_list"]) {
+      if (element.contains("feature") && element["feature"].is_array()) {
+        bool is_line_id =
+            element.contains("name") && element["name"] == "__LINE_ID__";
+        for (nlohmann::json& feature : element["feature"]) {
+          ReplaceFeatureFn(feature, is_line_id);
+        }
+      }
+    }
+  }
+
+  return json.dump(2);
+}
+
 int main(int argc, char* argv[]) {
   CLI::App app("instance_reader");
   app.set_version_flag("--version", "0.0.1");
@@ -337,98 +443,15 @@ int main(int argc, char* argv[]) {
   InputReader reader(options, config);
   std::string output;
 
-  auto json_callback_fn = [](const std::string& serialized) {
-    nlohmann::json json;
-    try {
-      json = nlohmann::json::parse(serialized);
-    } catch (const std::exception& e) {
-      LOG(FATAL) << e.what() << "\nserialized:\n" << serialized;
-    }
-
-    auto CollectFID = [](const nlohmann::json& j, std::vector<uint64_t>* fids) {
-      CHECK(j.is_array());
-      fids->reserve(j.size());
-      for (absl::string_view fid_str : j) {
-        uint64_t fid = 0;
-        CHECK(absl::SimpleAtoi(fid_str, &fid));
-        fids->emplace_back(fid);
-      }
-      std::sort(fids->begin(), fids->end());
-    };
-
-    // instance fid(v1)
-    if (json.contains("fid") && json["fid"].is_array()) {
-      std::vector<uint64_t> fids;
-      CollectFID(json["fid"], &fids);
-      std::vector<FIDV1> fids_v1(fids.begin(), fids.end());
-      json["fid"] = fids_v1;
-    }
-
-    // instance feature(v2)
-    if (json.contains("feature") && json["feature"].is_array()) {
-      for (nlohmann::json& element : json["feature"]) {
-        if (element.contains("fid") && element["fid"].is_array()) {
-          std::vector<uint64_t> fids;
-          CollectFID(element["fid"], &fids);
-          std::vector<FIDV2> fids_v2(fids.begin(), fids.end());
-          element["fid"] = fids_v2;
-        }
-      }
-    }
-
-    auto ReplaceFeatureFn = [&](nlohmann::json& feature) {
-      if (feature.contains("fid_v1_list")) {
-        nlohmann::json& fid_v1_list = feature["fid_v1_list"];
-        if (fid_v1_list.contains("value") && fid_v1_list["value"].is_array()) {
-          std::vector<uint64_t> fids;
-          CollectFID(fid_v1_list["value"], &fids);
-          std::vector<FIDV1> fids_v1(fids.begin(), fids.end());
-          fid_v1_list["value"] = fids_v1;
-        }
-      } else if (feature.contains("fid_v2_list")) {
-        nlohmann::json& fid_v2_list = feature["fid_v2_list"];
-        if (fid_v2_list.contains("value") && fid_v2_list["value"].is_array()) {
-          std::vector<uint64_t> fids;
-          CollectFID(fid_v2_list["value"], &fids);
-          std::vector<FIDV2> fids_v2(fids.begin(), fids.end());
-          fid_v2_list["value"] = fids_v2;
-        }
-      }
-    };
-
-    // example named_feature
-    if (json.contains("named_feature") && json["named_feature"].is_array()) {
-      for (nlohmann::json& element : json["named_feature"]) {
-        if (element.contains("feature")) {
-          ReplaceFeatureFn(element["feature"]);
-        }
-      }
-    }
-
-    // ExampleBatch named_feature_list
-    if (json.contains("named_feature_list") &&
-        json["named_feature_list"].is_array()) {
-      for (nlohmann::json& element : json["named_feature_list"]) {
-        if (element.contains("feature") && element["feature"].is_array()) {
-          for (nlohmann::json& feature : element["feature"]) {
-            ReplaceFeatureFn(feature);
-          }
-        }
-      }
-    }
-
-    return json.dump(2);
-  };
-
   if (options.dtype == "instance") {
     Instance instance;
-    ReadAndSerialize(reader, &instance, options, json_callback_fn);
+    ReadAndSerialize(reader, &instance, options, JsonCallbackFn);
   } else if (options.dtype == "example") {
     Example example;
-    ReadAndSerialize(reader, &example, options, json_callback_fn);
+    ReadAndSerialize(reader, &example, options, JsonCallbackFn);
   } else if (options.dtype == "example_batch") {
     ExampleBatch example_batch;
-    ReadAndSerialize(reader, &example_batch, options, json_callback_fn);
+    ReadAndSerialize(reader, &example_batch, options, JsonCallbackFn);
   } else {
     throw std::invalid_argument(
         absl::StrFormat("Invalid dtype=%s", options.dtype));
