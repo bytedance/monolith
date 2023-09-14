@@ -1190,6 +1190,8 @@ class CpuTraining:
       # should_do_first_save = self.config.partial_recovery and ckpt_state is None
       # Here we just make it false because there are issues with uninitialized iterator.
       should_do_first_save = False
+      if self.config.enable_model_dump:
+        save_utils.NoFirstSaveCheckpointSaverHook._in_model_dump_mode = True
       saver_hook = save_utils.NoFirstSaveCheckpointSaverHook(
           model_dir,
           save_secs=save_checkpoints_secs,

@@ -249,6 +249,7 @@ class NoFirstSaveCheckpointSaverHook(tf.estimator.CheckpointSaverHook):
   """A saver hook which won't perform the first save (which happened on after_create_session)."""
 
   _has_dense_only: bool = False
+  _in_model_dump_mode: bool = False
   _last_triggered_step: int = 0
 
   def __init__(self,
@@ -416,11 +417,11 @@ class NoFirstSaveCheckpointSaverHook(tf.estimator.CheckpointSaverHook):
     logging.info("monolith ckpt state saved")
 
   def end(self, session):
+    last_step = session.run(self._global_step_tensor)
     if self._is_dense_only:
       pass
-    elif self._has_dense_only:
+    elif self._has_dense_only or self._in_model_dump_mode:
       # force save
-      last_step = session.run(self._global_step_tensor)
       self._timer.update_last_triggered_step(last_step)
       super()._save(session, last_step)
       for l in self._listeners:
