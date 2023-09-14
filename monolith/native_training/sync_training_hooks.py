@@ -313,18 +313,18 @@ class EofAwareTask:
         return model_fn
 
       def new_model_fn(features, mode, config):
-        if EofAwareTask.EOF_KEY in features:
-          logging.info(f"in model_fn: {EofAwareTask.EOF_KEY}")
-          eof = features[EofAwareTask.EOF_KEY]
-          features.pop(EofAwareTask.EOF_KEY)
-          real_features = features
+        spec: tf.estimator.EstimatorSpec = model_fn(features, mode, config)
+        dequeued_eof = tf.compat.v1.get_collection(EofAwareTask.EOF_KEY)
+        if dequeued_eof and not export_context.is_dry_run_or_exporting():
+          if isinstance(dequeued_eof, (list, tuple)):
+            dequeued_eof = dequeued_eof[0]
+          assert(isinstance(dequeued_eof, tf.Tensor))
+          training_hooks = spec.training_hooks or ()
+          training_hooks = [self.EofHook(dequeued_eof)] + list(training_hooks)
+          spec = spec._replace(training_hooks=training_hooks)
+          return spec
         else:
-          real_features, eof = features["1"], features["2"]
-        spec: tf.estimator.EstimatorSpec = model_fn(real_features, mode, config)
-        training_hooks = spec.training_hooks or ()
-        training_hooks = [self.EofHook(eof)] + list(training_hooks)
-        spec = spec._replace(training_hooks=training_hooks)
-        return spec
+          return spec
 
       return new_model_fn
 

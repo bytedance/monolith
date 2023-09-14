@@ -1349,6 +1349,14 @@ class CpuTraining:
       async_function_mgr = prefetch_queue.AsyncFunctionMgr(
           is_async=self.config.enable_variable_postpush)
       self._task.ctx.async_function_mgr = async_function_mgr
+      eof_key = sync_training_hooks.EofAwareTask.EOF_KEY
+      if '2' in features:
+        auxiliary_bundle[eof_key] = features.pop('2')
+        logging.info(f'eof: {auxiliary_bundle[eof_key]}, {id(auxiliary_bundle[eof_key])}')
+        features = features.pop('1')
+      elif eof_key in features:
+        auxiliary_bundle[eof_key] = features.pop(eof_key)
+        logging.info(f'eof: {auxiliary_bundle[eof_key]}, {id(auxiliary_bundle[eof_key])}')
 
       def call_raw_model_fn(features):
         raw_model_fn = self._task.create_model_fn()
@@ -1405,6 +1413,9 @@ class CpuTraining:
           auxiliary_bundle[
               "embedding_ragged_ids"] = parser_utils.RaggedEncodingHelper.contract(
                   embedding_ragged_ids)
+          logging.info(
+            f"input: auxiliary_bundle[{auxiliary_bundle}], features:[{features}]"
+          )
           embeddings, auxiliary_bundle = hash_table.lookup(
               name_to_ids, auxiliary_bundle, res_pack)
           dequeued_embeddings = embeddings
@@ -1425,6 +1436,9 @@ class CpuTraining:
           }
           # for MergedMultiTypeHashTable, lookup returns:
           embeddings: Dict[str, tf.Tensor] = hash_table.lookup(name_to_ids)
+          logging.info(
+            f"input: auxiliary_bundle[{auxiliary_bundle}], features:[{features}]"
+          )
           (dequeued_embeddings,
            auxiliary_bundle), q = enqueue_dicts_with_queue_return(
                (embeddings, auxiliary_bundle),
@@ -1607,6 +1621,11 @@ class CpuTraining:
             spec.training_chief_hooks))
         logging.info("Training Hooks: {}".format(spec.training_hooks))
 
+      logging.info(f'dequeue input: auxiliary_bundle[{auxiliary_bundle}], features:[{features}]')
+      dequeued_eof = auxiliary_bundle.pop(eof_key, None)
+      if dequeued_eof is not None:
+        tf.compat.v1.add_to_collection(eof_key, dequeued_eof)
+        logging.info(f'eof dequeue: {dequeued_eof}, {id(dequeued_eof)}')
       return spec
 
     def wrapped_model_fn(features: Dict[str, tf.Tensor], mode: str,
