@@ -415,8 +415,12 @@ class ReplicaUpdater(object):
       logging.info("conf.use_metrics is false")
 
   def init_metrics(self):
-    default_psm = 'data.monolith_serving.' + self._conf.base_name
-    prefix = os.environ.get('TCE_PSM', default_psm)
+    if "MONOLITH_METRIC_PREFIX" in os.environ: # In MLP Env
+      prefix = os.environ.get("MONOLITH_METRIC_PREFIX")
+    elif "TCE_PSM" in os.environ: # In  Byterec Env
+      prefix = os.environ.get("TCE_PSM")
+    else:
+      prefix = "data.monolith_serving." + self._conf.base_name
     self._metrics_cli = cli.get_cli(prefix=prefix)
     logging.info(f"after init_metrics, prefix is {prefix}")
 
