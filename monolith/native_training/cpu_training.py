@@ -93,7 +93,7 @@ from monolith.native_training.hooks import session_hooks
 from monolith.native_training.hooks import feature_engineering_hooks
 from monolith.native_training.hooks.server import server_lib as server_hook_lib
 from monolith.native_training.metric import cli
-from monolith.native_training.metric.metric_hook import Tf2ProfilerHook, Tf2ProfilerCaptureMultipleHook, NVProfilerCaptureMultipleHook
+from monolith.native_training.metric.metric_hook import Tf2ProfilerHook, NVProfilerHook
 from monolith.native_training.metric.metric_hook import ByteCCLTelemetryHook
 from monolith.native_training.metric.metric_hook import ThroughputMetricHook
 from monolith.native_training.model_export import export_hooks
@@ -489,6 +489,7 @@ class CpuTrainingConfig:
   enable_pipelined_fwda2a: bool = False
   enable_pipelined_bwda2a: bool = False
   profile_some_steps_from: int = None
+  profile_save_steps_interval: int = 5000
   profile_with_nvprof_from_to: str = None
   # Sync training optimization
   reorder_fids_in_data_pipeline: bool = False
@@ -1281,14 +1282,16 @@ class CpuTraining:
       if self._params.metrics.enable_tf2_profiler_hook and is_chief(self.config):
         start_step = self.config.profile_some_steps_from
         end_step = None if start_step is None else start_step + 10
+        save_steps = self.config.profile_save_steps_interval
         hooks.append(
-            Tf2ProfilerCaptureMultipleHook(
-                logdir=model_dir, capture_step_range=[start_step, end_step]))
+            Tf2ProfilerHook(
+                logdir=model_dir, init_step_range=[start_step, end_step], save_steps=save_steps))
 
       if self.config.profile_with_nvprof_from_to and is_chief(self.config):
         s, e = self.config.profile_with_nvprof_from_to.split(',')
+        save_steps = self.config.profile_save_steps_interval
         hooks.append(
-            NVProfilerCaptureMultipleHook(capture_step_range=[int(s), int(e)]))
+            NVProfilerHook(init_step_range=[int(s), int(e)], save_steps=save_steps))
 
       if self._params.metrics.enable_throughput_hook and is_chief(self.config):
         hooks.append(
