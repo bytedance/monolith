@@ -16,5 +16,5 @@ import monolith.native_training.data.datasets as datasets
 
 from monolith.native_training.data.datasets import PBDataset, InstanceReweightDataset, NegativeGenDataset, PbType
 from monolith.native_training.data.parsers import parse_examples, parse_instances, parse_example_batch
-from monolith.native_training.data.feature_utils import filter_by_fids, filter_by_value, feature_combine, \
-    negative_sample, switch_slot, special_strategy
+from monolith.native_training.data.feature_utils import filter_by_fids, filter_by_feature_value, filter_by_value, \
+    feature_combine, negative_sample, switch_slot, special_strategy
