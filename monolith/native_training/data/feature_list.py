@@ -16,6 +16,7 @@ from absl import logging, flags
 from dataclasses import dataclass
 import inspect
 import threading
+import numpy as np
 from collections import defaultdict
 from typing import List, Dict, Optional, Set, Tuple, Union, get_type_hints
 import tensorflow as tf
@@ -382,7 +383,11 @@ def add_feature_by_fids(fids: Union[int, List[int]], feature_list: FeatureList =
   if feature_list:
     for fid in fids:
       find_feature = False
-      fid = fid & FID_MASK
+      if isinstance(fid, int):
+        fid = fid & FID_MASK
+      else:
+        assert isinstance(fid, np.int64)
+        fid = fid & np.uint64(FID_MASK).astype(np.int64)
       for feature in feature_list.get_with_slot(fid >> 54):
         if feature.feature_version is None or feature.feature_version == 1:
           add_feature(feature.feature_name)
