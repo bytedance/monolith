@@ -32,6 +32,20 @@ namespace tensorflow {
 namespace monolith_tf {
 namespace internal {
 
+std::shared_ptr<ItemFeatures> MakeItemFeaturesFromProto(
+    const ::monolith::io::proto::FeatureData& feature_data) {
+  std::shared_ptr<ItemFeatures> item_feature_ptr =
+      std::make_shared<ItemFeatures>();
+  item_feature_ptr->item_id = feature_data.gid();
+  for (const auto& fid : feature_data.fids()) {
+    item_feature_ptr->fids.push_back(fid);
+  }
+  for (const auto& fc : feature_data.feature_columns()) {
+    item_feature_ptr->example_features.emplace(fc.name(), fc);
+  }
+  return item_feature_ptr;
+}
+
 bool ItemFeatures::Equal(const ItemFeatures& other) const {
   if (item_id != other.item_id) {
     return false;
@@ -79,7 +93,8 @@ CacheWithGid::CacheWithGid(int max_item_num, int start_num)
     : start_num_(start_num), max_item_num_(max_item_num) {}
 
 void CacheWithGid::Push(uint64_t item_id,
-                        std::shared_ptr<const ItemFeatures> item) {
+                        std::shared_ptr<const ItemFeatures> item,
+                        int64_t origin_cnt, int64_t sample_cnt) {
   auto it = data_.find(item_id);
   if (it == data_.end()) {
     data_queue_.emplace_back(item_id);
@@ -89,14 +104,15 @@ void CacheWithGid::Push(uint64_t item_id,
   auto iit = stats_.find(item_id);
   if (iit == stats_.end()) {
     auto stats_ptr = std::make_shared<GroupStat>();
-    stats_ptr->origin_cnt = 1;
-    stats_ptr->sample_cnt = 0;
+    stats_ptr->origin_cnt = origin_cnt;
+    stats_ptr->sample_cnt = sample_cnt;
     stats_.emplace(item_id, stats_ptr);
   } else {
-    iit->second->origin_cnt++;
+    iit->second->origin_cnt += origin_cnt;
+    iit->second->sample_cnt += sample_cnt;
   }
 
-  if (data_queue_.size() > max_item_num_) {
+  if ((int64_t)data_queue_.size() > max_item_num_) {
     uint64_t item_id = data_queue_.front();
     data_.erase(item_id);
     stats_.erase(item_id);
@@ -106,7 +122,7 @@ void CacheWithGid::Push(uint64_t item_id,
 
 std::shared_ptr<const ItemFeatures> CacheWithGid::RandomSelectOne(
     double* freq_factor, double* time_factor) const {
-  if (data_queue_.size() <= start_num_) {
+  if ((int64_t)data_queue_.size() <= start_num_) {
     return nullptr;
   }
   thread_local std::mt19937 gen((std::random_device())());
@@ -228,18 +244,17 @@ std::shared_ptr<const ItemFeatures> CacheManager::RandomSelectOne(
 }
 
 void CacheManager::Push(uint64_t channel_id, uint64_t item_id,
-                        const std::shared_ptr<const ItemFeatures>& item) {
+                        const std::shared_ptr<const ItemFeatures>& item,
+                        int64_t origin_cnt, int64_t sample_cnt) {
   auto it = channel_cache_.find(channel_id);
   if (it == channel_cache_.end()) {
+    LOG(INFO) << "Create channel(" << channel_id
+              << ") in ItemPoolResource CacheManager";
     auto ret = channel_cache_.emplace(
         channel_id, CacheWithGid(max_item_num_per_channel_, start_num_));
     it = ret.first;
   }
-  it->second.Push(item_id, item);
-}
-
-void CacheManager::Push(uint64_t channel_id, const CacheWithGid& cwg) {
-  channel_cache_.emplace(channel_id, cwg);
+  it->second.Push(item_id, item, origin_cnt, sample_cnt);
 }
 
 absl::flat_hash_map<uint64_t, CacheWithGid>& CacheManager::GetCache() {

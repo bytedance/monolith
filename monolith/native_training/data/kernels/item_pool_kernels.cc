@@ -74,7 +74,7 @@ Status ItemPoolResource::Add(
     uint64_t channel_id, uint64_t item_id,
     const std::shared_ptr<const internal::ItemFeatures>& item) {
   absl::MutexLock l(&mu_);
-  cache_->Push(channel_id, item_id, item);
+  cache_->Push(channel_id, item_id, item, 1, 0);
   return Status::OK();
 }
 
@@ -139,10 +139,15 @@ Status ItemPoolResource::Restore(RandomAccessFile* istream, int64 buffer_size) {
       restore_status.Update(Status::OK());
     }
 
-    internal::CacheWithGid cache_with_gid(max_item_num_per_channel_,
-                                          start_num_);
-    cache_with_gid.FromProto(channel_cache);
-    cache_->Push(channel_cache.channel_id(), cache_with_gid);
+    for (const auto& feature_data : channel_cache.feature_datas()) {
+      auto item_feature_ptr = internal::MakeItemFeaturesFromProto(feature_data);
+      cache_->Push(channel_cache.channel_id(), feature_data.gid(),
+                   item_feature_ptr, feature_data.origin_cnt(),
+                   feature_data.sample_cnt());
+    }
+    LOG(INFO) << absl::StrFormat(
+        "ItemPoolResource: after restore, channel %lld restore %llu items",
+        channel_cache.channel_id(), channel_cache.feature_datas_size());
   }
 
   TF_RETURN_IF_ERROR(restore_status);
@@ -567,7 +572,7 @@ class ItemPoolRestoreOp : public AsyncOpKernel {
           ctx->env()->GetMatchingPaths(fuzzy_matching_path, &files_fuzzy);
       if (fuzzy_match.ok() && !files_fuzzy.empty()) {
         int ckpt_num = FindFuzzyCkptNumber(files_fuzzy);
-        if (ckpt_num <= global_step_ && ckpt_num > global_step_ * 9 / 10) {
+        if (ckpt_num <= global_step_) {
           return absl::StrCat(model_path_, "/model.ckpt-", ckpt_num, "_",
                               FILE_NAME_PREFIX, index % last_save_worker_num,
                               "_", shard_index, "_", last_save_worker_num);

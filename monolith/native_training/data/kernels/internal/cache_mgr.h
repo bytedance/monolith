@@ -52,11 +52,15 @@ struct ItemFeatures {
   bool Equal(const ItemFeatures &other) const;
 };
 
+std::shared_ptr<ItemFeatures> MakeItemFeaturesFromProto(
+    const ::monolith::io::proto::FeatureData &feature_data);
+
 class CacheWithGid {
  public:
   explicit CacheWithGid(int max_item_num, int start_num = 0);
 
-  void Push(uint64_t item_id, std::shared_ptr<const ItemFeatures> item);
+  void Push(uint64_t item_id, std::shared_ptr<const ItemFeatures> item,
+            int64_t origin_cnt = 1, int64_t sample_cnt = 0);
 
   std::shared_ptr<const ItemFeatures> RandomSelectOne(
       double *freq_factor, double *time_factor) const;
@@ -67,7 +71,7 @@ class CacheWithGid {
 
   bool Equal(const CacheWithGid &other) const;
 
-  inline int Size() { return data_queue_.size(); }
+  inline int Size() const { return data_queue_.size(); }
 
  private:
   int start_num_;
@@ -86,9 +90,8 @@ class CacheManager {
       uint64_t channel_id, double *freq_factor, double *time_factor) const;
 
   void Push(uint64_t channel_id, uint64_t item_id,
-            const std::shared_ptr<const ItemFeatures> &item);
-
-  void Push(uint64_t channel_id, const CacheWithGid &cwg);
+            const std::shared_ptr<const ItemFeatures> &item,
+            int64_t origin_cnt = 1, int64_t sample_cnt = 0);
 
   absl::flat_hash_map<uint64_t, CacheWithGid> &GetCache();
 
