@@ -107,7 +107,7 @@ def fid_counter(counter: tf.Tensor, counter_threshold: int, step: float = 1.0):
                                              initializer= ConstantsInitializer(1.0),
                                              optimizer= SgdOptimizer(1.0),
                                              compressor= Fp32Compressor())
-      >>> item_count, item_count_loss = layer_ops.fid_counter(item_count, counter_threshold=60000, step=1)
+      >>> item_count = layer_ops.fid_counter(item_count, step=1)
       >>> item_count = tf.reshape(item_count, shape=(-1, ))
       >>> item_weights = 1 / (1 + tf.math.exp(4 - 0.03 * item_count))
   """
@@ -125,11 +125,7 @@ def fid_counter(counter: tf.Tensor, counter_threshold: int, step: float = 1.0):
 def _fid_counter_grad(op, grad: tf.Tensor) -> tf.Tensor:
   counter = op.inputs[0]
   step = op.get_attr('step')
-  grad = tf.fill(dims=counter.shape, value=-step)
+  grad = tf.ones_like(counter) * tf.cast(-step, counter.dtype)
   counter_threshold = op.get_attr('counter_threshold')
-  counter_threshold = tf.fill(dims=counter.shape,
-                              value=tf.cast(counter_threshold, counter.dtype))
-  grad = tf.cast(
-      tf.where(counter >= counter_threshold, tf.zeros_like(grad), grad),
-      counter.dtype)
+  grad = tf.where(counter >= counter_threshold, tf.zeros_like(grad), grad)
   return grad
