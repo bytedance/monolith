@@ -460,6 +460,24 @@ class DistributedMultiTypeHashTable(multi_type_hash_table.BaseMultiTypeHashTable
   ) -> DistributedMultiTypeHashTable:
     return self._update("assign_add", "dmtht_aa", slot_to_id_and_value)
 
+  def reinitialize(
+      self, slot: str,
+      ids: tf.Tensor) -> Tuple[DistributedMultiTypeHashTable, tf.Tensor]:
+    if self._table_support_raw_api:
+      with tf.name_scope("dmtht_reinit"):
+        index = tf.math.floormod(ids, self._num_ps)
+        split_ids = distribution_ops.split_by_indices(index, ids, self._num_ps)
+        new_tables, status = [], []
+        for i in range(self._num_ps):
+          new_table, split_status = self._tables[i].reinitialize(
+              slot, split_ids[i])
+          new_tables.append(new_table)
+          status.append(split_status)
+        return self._copy_with_new_table(new_tables), tf.concat(status, axis=0)
+    else:
+      raise NotImplementedError(
+          "DistributedMultiTypeHashTable dost not support reinitialize!")
+
   def apply_gradients(
       self,
       slot_to_id_and_grad: Dict[str, Tuple[tf.Tensor, tf.Tensor]],
@@ -814,15 +832,15 @@ class PartitionedHashTable(object):
     ps_idx_to_multi_type_resp = {}
 
     def emit_lookup_timer_ops(i, interval):
-        return [
-            logging_ops.emit_timer(
-                "embedding_lookup",
-                tf.cast(interval, tf.float32),
-                tags={
-                    "model_name": native_task_context.get().model_name,
-                    "ps": str(i)
-                })
-        ]
+      return [
+          logging_ops.emit_timer(
+              "embedding_lookup",
+              tf.cast(interval, tf.float32),
+              tags={
+                  "model_name": native_task_context.get().model_name,
+                  "ps": str(i)
+              })
+      ]
 
     interval_ops = []
     for i in range(self._num_ps):
@@ -855,15 +873,15 @@ class PartitionedHashTable(object):
     ps_idx_to_multi_type_resp = {}
 
     def emit_lookup_timer_ops(i, interval):
-        return [
-            logging_ops.emit_timer(
-                "embedding_lookup",
-                tf.cast(interval, tf.float32),
-                tags={
-                    "model_name": native_task_context.get().model_name,
-                    "ps": str(i)
-                })
-        ]
+      return [
+          logging_ops.emit_timer(
+              "embedding_lookup",
+              tf.cast(interval, tf.float32),
+              tags={
+                  "model_name": native_task_context.get().model_name,
+                  "ps": str(i)
+              })
+      ]
 
     interval_ops = []
     for i in range(self._num_ps):
@@ -993,8 +1011,10 @@ class PartitionedHashTable(object):
     if self._enable_gpu_emb:
       ret = self._lookup_gpu(features, auxiliary_bundle)
       if ret_fused_layout_callable_fn or ret_lookup_callable_fn:
+
         def lookup_callable_fn(auxiliary_bundle_, features_):
           return ret
+
         return lookup_callable_fn
       else:
         return ret
@@ -1046,13 +1066,17 @@ class PartitionedHashTable(object):
         for key, shard_fids in shards.items():
           sub_table_name, ps_idx = key.split(':')
           ps_idx = int(ps_idx)
-          name = '__sharding_sparse_fids__shards@{}@{}'.format(ps_idx, sub_table_name)
+          name = '__sharding_sparse_fids__shards@{}@{}'.format(
+              ps_idx, sub_table_name)
           auxiliary_bundle[name] = shard_fids
           if self._use_native_multi_hash_table:
-            name = '__sharding_sparse_fids__shards_row_split@{}@{}'.format(ps_idx, sub_table_name)
+            name = '__sharding_sparse_fids__shards_row_split@{}@{}'.format(
+                ps_idx, sub_table_name)
             auxiliary_bundle[name] = shards_row_split[key]
-            if shards_row_split_size is not None and shards_row_split_size[key] is not None:
-              name = '__sharding_sparse_fids__shards_row_split_size@{}@{}'.format(ps_idx, sub_table_name)
+            if shards_row_split_size is not None and shards_row_split_size[
+                key] is not None:
+              name = '__sharding_sparse_fids__shards_row_split_size@{}@{}'.format(
+                  ps_idx, sub_table_name)
               auxiliary_bundle[name] = shards_row_split_size[key]
 
     def fused_layout_callable_fn(auxiliary_bundle_, features_):
@@ -1068,17 +1092,23 @@ class PartitionedHashTable(object):
           '__sharding_sparse_fids__feature_offset']
       fid_offset_ = auxiliary_bundle_['__sharding_sparse_fids__fid_offset']
       batch_size_ = auxiliary_bundle_['__sharding_sparse_fids__batch_size']
-      nfl_size_ = auxiliary_bundle_.get('__sharding_sparse_fids__nfl_size', None)
-      feature_size_ = auxiliary_bundle_.get('__sharding_sparse_fids__feature_size', None)
-      fid_size_ = auxiliary_bundle_.get('__sharding_sparse_fids__fid_size', None)
-      emb_size_ = auxiliary_bundle_.get('__sharding_sparse_fids__emb_size', None)
+      nfl_size_ = auxiliary_bundle_.get('__sharding_sparse_fids__nfl_size',
+                                        None)
+      feature_size_ = auxiliary_bundle_.get(
+          '__sharding_sparse_fids__feature_size', None)
+      fid_size_ = auxiliary_bundle_.get('__sharding_sparse_fids__fid_size',
+                                        None)
+      emb_size_ = auxiliary_bundle_.get('__sharding_sparse_fids__emb_size',
+                                        None)
 
       if export_context.is_exporting():
-        fused_layout_use_gpu = export_context.get_current_export_ctx().with_remote_gpu
+        fused_layout_use_gpu = export_context.get_current_export_ctx(
+        ).with_remote_gpu
       else:
         fused_layout_use_gpu = self._use_gpu
 
-      with tf.device("/device:GPU:0" if fused_layout_use_gpu else "/device:CPU:0"):
+      with tf.device(
+          "/device:GPU:0" if fused_layout_use_gpu else "/device:CPU:0"):
         layout_tensors = distribution_ops.fused_embedding_to_layout(
             flattened_embs,
             None,  #self.fids_list_row_split, v3 not need fids_list_row_split
@@ -1119,8 +1149,8 @@ class PartitionedHashTable(object):
       return layout_embeddings  #deq_layout_embeddings
 
     def call_lookup(lookup_data_on_wk: LookupData,
-                    lookup_data_on_wk_row_split: LookupData,
-                    auxiliary_bundle_, features_):
+                    lookup_data_on_wk_row_split: LookupData, auxiliary_bundle_,
+                    features_):
       with tf.name_scope("pht_lookup"):
         # ps_idx_to_multi_type_resp: Dict[int, Dict[str, tf.Tensor]] = {}
         with tf.device("/device:CPU:0"):
@@ -1140,7 +1170,8 @@ class PartitionedHashTable(object):
 
         for sub_table_name in self._sub_table_names:
           for ps_idx in range(self._num_ps):
-            embeddings_tensor = ps_idx_to_multi_type_resp[ps_idx][sub_table_name]
+            embeddings_tensor = ps_idx_to_multi_type_resp[ps_idx][
+                sub_table_name]
             auxiliary_bundle_[
                 f'__sharding_sparse_fids__{sub_table_name}:{ps_idx}:embs'] = embeddings_tensor
             if not export_context.is_exporting():
@@ -1157,13 +1188,13 @@ class PartitionedHashTable(object):
         logging.info(
             f"PartitionedHashTable lookup gpu fused_layout tensor to gpu before: {auxiliary_bundle} {features}"
         )
-        self.tensor_move_to_gpu(
-            ((auxiliary_bundle_, ["__sharding_sparse_fids__batch_size",
-                                  "__sharding_sparse_fids__nfl_size",
-                                  "__sharding_sparse_fids__feature_size",
-                                  "__sharding_sparse_fids__fid_size",
-                                  "__sharding_sparse_fids__emb_size"]),
-             (features_, ["req_time"])))
+        self.tensor_move_to_gpu(((auxiliary_bundle_, [
+            "__sharding_sparse_fids__batch_size",
+            "__sharding_sparse_fids__nfl_size",
+            "__sharding_sparse_fids__feature_size",
+            "__sharding_sparse_fids__fid_size",
+            "__sharding_sparse_fids__emb_size"
+        ]), (features_, ["req_time"])))
       logging.info(
           f"PartitionedHashTable lookup fused_layout enqueue before: {auxiliary_bundle} {features}"
       )
@@ -1184,21 +1215,26 @@ class PartitionedHashTable(object):
         lookup_data_on_wk_row_split: LookupData = {}
         for sub_table_name in self._sub_table_names:
           for ps_idx in range(self._num_ps):
-            key = '__sharding_sparse_fids__shards@{}@{}'.format(ps_idx, sub_table_name)
+            key = '__sharding_sparse_fids__shards@{}@{}'.format(
+                ps_idx, sub_table_name)
             if ps_idx not in lookup_data_on_wk:
               lookup_data_on_wk[ps_idx] = {}
             lookup_data_on_wk[ps_idx][sub_table_name] = auxiliary_bundle_[key]
 
             if self._use_native_multi_hash_table:
-              key = '__sharding_sparse_fids__shards_row_split@{}@{}'.format(ps_idx, sub_table_name)
-              size_key = '__sharding_sparse_fids__shards_row_split_size@{}@{}'.format(ps_idx, sub_table_name)
+              key = '__sharding_sparse_fids__shards_row_split@{}@{}'.format(
+                  ps_idx, sub_table_name)
+              size_key = '__sharding_sparse_fids__shards_row_split_size@{}@{}'.format(
+                  ps_idx, sub_table_name)
               if ps_idx not in lookup_data_on_wk_row_split:
                 lookup_data_on_wk_row_split[ps_idx] = {}
               if size_key not in auxiliary_bundle_:
-                lookup_data_on_wk_row_split[ps_idx][sub_table_name] = auxiliary_bundle_[key]
+                lookup_data_on_wk_row_split[ps_idx][
+                    sub_table_name] = auxiliary_bundle_[key]
               else:
-                lookup_data_on_wk_row_split[ps_idx][sub_table_name] = distribution_ops.normalize_merged_split(
-                    auxiliary_bundle_[key], auxiliary_bundle_[size_key])
+                lookup_data_on_wk_row_split[ps_idx][
+                    sub_table_name] = distribution_ops.normalize_merged_split(
+                        auxiliary_bundle_[key], auxiliary_bundle_[size_key])
 
       call_lookup(lookup_data_on_wk, lookup_data_on_wk_row_split,
                   auxiliary_bundle_, features_)
@@ -1257,8 +1293,11 @@ class PartitionedHashTable(object):
     assert auxiliary_bundle is not None
     if self._enable_gpu_emb:
       assert not async_push
-      return self._apply_gradients_gpu(layout_grads_and_vars, global_step,
-                                       req_time, auxiliary_bundle, grad_scale=grad_scale)
+      return self._apply_gradients_gpu(layout_grads_and_vars,
+                                       global_step,
+                                       req_time,
+                                       auxiliary_bundle,
+                                       grad_scale=grad_scale)
     with tf.name_scope("pht_apply_gradients"):
       layout_grad, layout = zip(*layout_grads_and_vars)
       flattened_fids, flattened_fids_row_split, flattened_embs = [], [], []

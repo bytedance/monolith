@@ -72,13 +72,11 @@ class DistributedMultiTypeHashTableMpi(
   def __init__(
       self,
       shard_num: int,
-      table_factory: Callable[[int],
-                              Union[
-                                # when use_native_multi_hash_table=False
-                                multi_type_hash_table.MultiTypeHashTable,
-                                # when use_native_multi_hash_table=True
-                                multi_hash_table_ops.MultiHashTable
-                              ]],
+      table_factory: Callable[[int], Union[
+          # when use_native_multi_hash_table=False
+          multi_type_hash_table.MultiTypeHashTable,
+          # when use_native_multi_hash_table=True
+          multi_hash_table_ops.MultiHashTable]],
       queue_configs: Dict[str, int] = None):
 
     self._shard_num = shard_num
@@ -120,8 +118,7 @@ class DistributedMultiTypeHashTableMpi(
       with tf.device("/CPU:0"):
         tf.compat.v1.summary.scalar("all_fids_size", tf.size(all_fids))
         tf.compat.v1.summary.histogram("shard_sizes", shard_sizes)
-        tf.compat.v1.summary.histogram("sharded_slot_sizes",
-                                        sharded_slot_sizes)
+        tf.compat.v1.summary.histogram("sharded_slot_sizes", sharded_slot_sizes)
     # We exchange the flattened IDs and their splits.
     # M: num_of_ids,
     # N: num_of_shards,
@@ -164,7 +161,10 @@ class DistributedMultiTypeHashTableMpi(
     auxiliary_bundle["shard_sizes"] = shard_sizes
     with tf.device("/device:GPU:0"):
       auxiliary_bundle["fused_embedding_offsets"] = tf.split(
-        fused_embedding_offsets, emb_offset_sz, axis=0, name="concat_emb_offsets_split")
+          fused_embedding_offsets,
+          emb_offset_sz,
+          axis=0,
+          name="concat_emb_offsets_split")
     auxiliary_bundle["emb_offset_sz"] = emb_offset_sz
     auxiliary_bundle["id_flat_t"] = id_flat_t
     # Note: id_flat_split_t is not being used in later computation.
@@ -193,7 +193,8 @@ class DistributedMultiTypeHashTableMpi(
         ),
         [-1]  # flatten
     )
-    auxiliary_bundle["recv_embeddings_size"] = tf.reduce_sum(auxiliary_bundle["recv_emb_splits"])
+    auxiliary_bundle["recv_embeddings_size"] = tf.reduce_sum(
+        auxiliary_bundle["recv_emb_splits"])
 
     auxiliary_bundle, queue = enqueue_dicts_with_queue_return(
         auxiliary_bundle,
@@ -297,14 +298,19 @@ class DistributedMultiTypeHashTableMpi(
   ) -> DistributedMultiTypeHashTableMpi:
     raise NotImplementedError
 
+  def reinitialize(
+      self, slot: str,
+      ids: tf.Tensor) -> Tuple[DistributedMultiTypeHashTableMpi, tf.Tensor]:
+    raise NotImplementedError(
+        "DistributedMultiTypeHashTableMpi dost not support reinitialize!")
+
   # Apply_gradients uses fused update.
-  def apply_gradients(
-      self,
-      slot_to_grad: Dict[str, tf.Tensor],
-      auxiliary_bundle: Dict[str, tf.Tensor],
-      global_step: tf.Tensor,
-      req_time: tf.Tensor = None,
-      scale: tf.Tensor = 1) -> DistributedMultiTypeHashTableMpi:
+  def apply_gradients(self,
+                      slot_to_grad: Dict[str, tf.Tensor],
+                      auxiliary_bundle: Dict[str, tf.Tensor],
+                      global_step: tf.Tensor,
+                      req_time: tf.Tensor = None,
+                      scale: tf.Tensor = 1) -> DistributedMultiTypeHashTableMpi:
 
     auxiliary_bundle['global_step'] = global_step
     if req_time is None:
@@ -316,7 +322,7 @@ class DistributedMultiTypeHashTableMpi(
 
     recv_embeddings_size = auxiliary_bundle.pop("recv_embeddings_size")
     fused_embedding_offsets = auxiliary_bundle.pop("fused_embedding_offsets")
-    # make this depend on fusion op before allreduce, 
+    # make this depend on fusion op before allreduce,
     # so allreduce can be dispatched before alltoall
     with tf.control_dependencies(feature_utils.control_ops):
       with tf.device("/device:GPU:0"):
@@ -486,14 +492,13 @@ class DistributedMultiTypeHashTableMpi(
     with tf.control_dependencies(feature_utils.dense_opt_ops):
       with tf.device("/GPU:0"):
         updated_table = self._table.fused_apply_gradient(
-            auxiliary_bundle.pop("id_flat_t"),
-            auxiliary_bundle.pop("indices"),
+            auxiliary_bundle.pop("id_flat_t"), auxiliary_bundle.pop("indices"),
             auxiliary_bundle.pop("id_size_flat_t"),
             auxiliary_bundle.pop("grad_flat_t"),
             auxiliary_bundle.pop("id_offsets"),
             auxiliary_bundle.pop("emb_offsets"),
-            auxiliary_bundle.pop("global_step"), auxiliary_bundle.pop("req_time"),
-            self._shard_num)
+            auxiliary_bundle.pop("global_step"),
+            auxiliary_bundle.pop("req_time"), self._shard_num)
 
     update_op = self._copy_with_new_table(updated_table)
     # TODO(zouxuan): add better tests to test the async optimize.

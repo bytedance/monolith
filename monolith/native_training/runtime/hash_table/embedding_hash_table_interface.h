@@ -59,6 +59,10 @@ class EmbeddingHashTableInterface {
   virtual void AssignAdd(int64_t id, absl::Span<const float> update,
                          int64_t update_time) = 0;
 
+  // Reinitialize the hash table entry
+  virtual void Reinitialize(absl::Span<const int64_t> ids,
+                            absl::Span<int> status) = 0;
+
   // Update the hash table based on optimizer.
   virtual void BatchOptimize(absl::Span<int64_t> ids,
                              absl::Span<absl::Span<const float>> grads,
@@ -169,6 +173,11 @@ class DefaultEmbeddingHashTableDecorator : public EmbeddingHashTableInterface {
   void AssignAdd(int64_t id, absl::Span<const float> update,
                  int64_t update_time) override {
     return base_->AssignAdd(id, update, update_time);
+  }
+
+  void Reinitialize(absl::Span<const int64_t> ids,
+                    absl::Span<int> status) override {
+    base_->Reinitialize(ids, status);
   }
 
   void BatchOptimize(absl::Span<int64_t> ids,

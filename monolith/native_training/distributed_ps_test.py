@@ -263,7 +263,7 @@ class DistributedMultiTypeHashTableTest(tf.test.TestCase,
       self.assertAllEqual(values["2"], [[-1.5, -1.5]])
 
   @parameterized.parameters([(True,), (False,)])
-  def test_assign(self, use_native_multi_hash_table):
+  def test_assign_and_reinitialize(self, use_native_multi_hash_table):
     servers, config = test_utils.create_test_ps_cluster(2)
     with tf.compat.v1.Session(servers[0].target, config=config) as sess:
       slot_to_config = {
@@ -299,6 +299,19 @@ class DistributedMultiTypeHashTableTest(tf.test.TestCase,
       values = sess.run(values)
       self.assertAllEqual(values["1"], [[-0.5], [-1]])
       self.assertAllEqual(values["2"], [[-1.5, -1.5]])
+
+      if use_native_multi_hash_table:
+        ids11 = tf.constant([1, 2, 3], dtype=tf.int64)
+        updated_hash_table, status1 = updated_hash_table.reinitialize(
+            "1", ids11)
+        updated_hash_table, status2 = updated_hash_table.reinitialize(
+            "3", ids11)
+        values = updated_hash_table.lookup({"1": ids11, "2": ids2, "3": ids11})
+        values, status1, status2 = sess.run([values, status1, status2])
+        self.assertAllEqual(values["1"], [[0], [0], [0]])
+        self.assertAllEqual(values["2"], [[-1.5, -1.5]])
+        self.assertAllEqual(status1, [1, 1, 0])
+        self.assertAllEqual(status2, [-1, -1, -1])
 
   @parameterized.parameters([(True,), (False,)])
   def test_apply_gradients_with_learning_rate_function(

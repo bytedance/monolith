@@ -193,6 +193,57 @@ REGISTER_KERNEL_BUILDER(
     Name("MonolithMultiHashTableAssignAdd").Device(DEVICE_CPU),
     MultiHashTableAssignAddOp);
 
+class MultiHashTableReinitializeOp : public OpKernel {
+ public:
+  explicit MultiHashTableReinitializeOp(OpKernelConstruction* ctx)
+      : OpKernel(ctx) {}
+
+  void Compute(OpKernelContext* c) override {
+    core::RefCountPtr<MultiHashTable> mtable;
+    OP_REQUIRES_OK(c, LookupResource(c, HandleFromInput(c, 0), &mtable));
+    auto table_name = c->input(1).scalar<tstring>()();
+    auto id_vec = c->input(2).flat<int64>();
+    Tensor* status_tensor;
+    OP_REQUIRES_OK(c, c->allocate_output(1, {id_vec.size()}, &status_tensor));
+    auto status_vec = status_tensor->vec<int32>();
+    // -1: table_name does not exist, and the id will not be processed
+    //  0: the id was inserted and is initialized
+    //  1: the id was already in the table and is reinitialized
+    status_vec.setConstant(-1);
+    int* status = reinterpret_cast<int*>(status_tensor->data());
+    std::vector<std::string> names = mtable->names();
+    auto it = std::find_if(
+        names.begin(), names.end(),
+        [&table_name](const std::string& name) { return name == table_name; });
+    if (it == names.end()) {
+      LOG(ERROR) << "table " << table_name << " does not exist!";
+    } else {
+      int index = std::distance(names.begin(), it);
+      EmbeddingHashTableTfBridge* table = mtable->table(index);
+      OP_REQUIRES_OK(c, table->Reinitialize(
+                            reinterpret_cast<const int64_t*>(id_vec.data()),
+                            id_vec.size(), status));
+    }
+    c->set_output(0, c->input(0));
+  }
+};
+
+REGISTER_OP("MonolithMultiHashTableReinitialize")
+    .Input("mtable: resource")
+    .Input("table_name: string")
+    .Input("id: int64")
+    .Output("updated_table: resource")
+    .Output("id_status: int32")
+    .SetShapeFn([](shape_inference::InferenceContext* ctx) {
+      ctx->set_output(0, ctx->Scalar());
+      ctx->set_output(1, ctx->input(2));
+      return Status::OK();
+    });
+
+REGISTER_KERNEL_BUILDER(
+    Name("MonolithMultiHashTableReinitialize").Device(DEVICE_CPU),
+    MultiHashTableReinitializeOp);
+
 template <typename Device>
 class MultiHashTableFusedOptimizeOp : public OpKernel {
  public:

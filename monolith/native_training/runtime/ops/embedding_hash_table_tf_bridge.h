@@ -66,6 +66,7 @@ class EmbeddingHashTableTfBridge : public ResourceBase {
                    int64_t update_time) const;
   Status AssignAdd2(int64 id, absl::Span<const float> value,
                     int64_t update_time);
+  Status Reinitialize(const int64_t* ids, int64_t num_ids, int* status);
   Status BatchOptimize(OpKernelContext* ctx, size_t num_ids, const int64_t* ids,
                        const float* tensor,
                        absl::Span<const float> learning_rates,

@@ -214,15 +214,17 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
     with tf.device(device):
       # We separate the table creation and use by using a dummy var.
       init_handle = hash_table_ops.create_monolith_multi_hash_table(
-            filter_handle=hash_filter,
-            sync_client_handle=sync_client,
-            config=cc.mconfig_tensor,
-            shared_name=self._shared_name)
+          filter_handle=hash_filter,
+          sync_client_handle=sync_client,
+          config=cc.mconfig_tensor,
+          shared_name=self._shared_name)
       self._initializer = init_handle.op
       self._handle = hash_table_ops.read_monolith_multi_hash_table(
           shared_name=self._shared_name)
-      self._is_initialized = hash_table_ops.is_hash_table_initialized(init_handle)
-      resources.register_resource(init_handle, self._initializer, self._is_initialized)
+      self._is_initialized = hash_table_ops.is_hash_table_initialized(
+          init_handle)
+      resources.register_resource(init_handle, self._initializer,
+                                  self._is_initialized)
     tf.compat.v1.get_collection_ref(_MULTI_HASH_TABLE_GRAPH_KEY).append(self)
 
   def _init_from_proto(
@@ -244,7 +246,8 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
         ops.prepend_name_scope(proto.handle_tensor, import_scope))
     init_handle = self._initializer.outputs[0]
     self._is_initialized = hash_table_ops.is_hash_table_initialized(init_handle)
-    resources.register_resource(init_handle, self._initializer, self._is_initialized)
+    resources.register_resource(init_handle, self._initializer,
+                                self._is_initialized)
 
   @classmethod
   def from_cached_config(cls,
@@ -369,6 +372,12 @@ class MultiHashTable(BaseMultiTypeHashTable, RawMultiTypeHashTable):
         value=flat_value,
         update_time=req_time)
     return self._copy_with_new_table(new_handle)
+
+  def reinitialize(self, slot: str,
+                   ids: tf.Tensor) -> Tuple["MultiHashTable", tf.Tensor]:
+    new_handle, status = hash_table_ops.monolith_multi_hash_table_reinitialize(
+        mtable=self._handle, table_name=slot, id=ids)
+    return self._copy_with_new_table(new_handle), status
 
   def lookup(self, slot_to_id: Dict[str, tf.Tensor]) -> Dict[str, tf.Tensor]:
     ragged_id = self.get_ragged_id(
@@ -682,6 +691,5 @@ ops.register_proto_function(
     proto_type=multi_hash_table_ops_pb2.MultiHashTableProto,
     to_proto=MultiHashTable.to_proto,
     from_proto=MultiHashTable.from_proto)
-
 
 ops.NotDifferentiable("IsHashTableInitialized")

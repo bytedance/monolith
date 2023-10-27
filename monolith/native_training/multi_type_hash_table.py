@@ -62,6 +62,11 @@ class BaseMultiTypeHashTable(abc.ABC):
     pass
 
   @abc.abstractmethod
+  def reinitialize(self, slot: str,
+                   ids: tf.Tensor) -> Tuple[BaseMultiTypeHashTable, tf.Tensor]:
+    pass
+
+  @abc.abstractmethod
   def apply_gradients(self, slot_to_id_and_grad: Dict[str, Tuple[tf.Tensor,
                                                                  tf.Tensor]],
                       *args) -> BaseMultiTypeHashTable:
@@ -142,6 +147,11 @@ class MultiTypeHashTable(BaseMultiTypeHashTable):
   ) -> MultiTypeHashTable:
     return self._update("assign_add", slot_to_id_and_value)
 
+  def reinitialize(self, slot: str,
+                   ids: tf.Tensor) -> Tuple[MultiTypeHashTable, tf.Tensor]:
+    raise NotImplementedError(
+        "MultiTypeHashTable dost not support reinitialize!")
+
   def apply_gradients(
       self,
       slot_to_id_and_grad: Dict[str, Tuple[tf.Tensor, tf.Tensor]],
@@ -183,8 +193,11 @@ class MultiTypeHashTable(BaseMultiTypeHashTable):
 
   # This is a very concise API that supports fused lookup, without mapping the
   # IDs to its slots.
-  def fused_lookup(self, ids: tf.Tensor, fused_slot_size: tf.Tensor,
-                   num_of_shards: int, req_time=None) -> Tuple[tf.Tensor]:
+  def fused_lookup(self,
+                   ids: tf.Tensor,
+                   fused_slot_size: tf.Tensor,
+                   num_of_shards: int,
+                   req_time=None) -> Tuple[tf.Tensor]:
     if req_time is None:
       req_time = tf.constant(0, dtype=tf.int64)
     return hash_table_ops.fused_lookup(self._hash_table_resources, ids,
@@ -205,9 +218,9 @@ class MultiTypeHashTable(BaseMultiTypeHashTable):
       num_of_shards: int,
       enable_grad_accumulation: bool = False) -> MultiTypeHashTable:
     table_handles_output = hash_table_ops.fused_apply_gradient(
-        self._hash_table_resources, ids, indices, fused_slot_size, id_grads, id_offsets,
-        grad_offsets, self._learning_rate_tensors,
-        req_time, global_step, num_of_shards, enable_grad_accumulation)
+        self._hash_table_resources, ids, indices, fused_slot_size, id_grads,
+        id_offsets, grad_offsets, self._learning_rate_tensors, req_time,
+        global_step, num_of_shards, enable_grad_accumulation)
     copied = copy.copy(self)
     updated_tables = dict(self._hash_tables)
     for slot, handle in zip(sorted(self._slot_to_config.keys()),
@@ -352,6 +365,12 @@ class MergedMultiTypeHashTable(BaseMultiTypeHashTable):
       self, slot_to_id_and_value: Dict[str, Tuple[tf.Tensor, tf.Tensor]]
   ) -> MergedMultiTypeHashTable:
     return self._update(self._table.assign_add, slot_to_id_and_value)
+
+  def reinitialize(
+      self, slot: str,
+      ids: tf.Tensor) -> Tuple[MergedMultiTypeHashTable, tf.Tensor]:
+    raise NotImplementedError(
+        "MergedMultiTypeHashTable dost not support reinitialize!")
 
   def apply_gradients(self, slot_to_id_and_grad: Dict[str, Tuple[tf.Tensor,
                                                                  tf.Tensor]],

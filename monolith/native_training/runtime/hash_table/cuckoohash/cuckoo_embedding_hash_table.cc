@@ -212,6 +212,19 @@ class CuckooEmbeddingHashTable : public EmbeddingHashTableInterface {
     });
   }
 
+  void Reinitialize(absl::Span<const int64_t> ids,
+                    absl::Span<int> status) override {
+    int64_t update_time = absl::ToUnixSeconds(absl::Now());
+    for (size_t i = 0; i < ids.size(); ++i) {
+      int64_t id = ids[i];
+      bool existed = !UpsertEntry(id, [&](EntryType& entry) {
+        entry.SetTimestamp(update_time);
+        accessor_->Init(entry_helper_.Get(entry));
+      });
+      status[i] = existed;
+    }
+  }
+
   // Update the hash table based on optimizer.
   void BatchOptimize(absl::Span<int64_t> ids,
                      absl::Span<absl::Span<const float>> grads,
@@ -330,13 +343,13 @@ class CuckooEmbeddingHashTable : public EmbeddingHashTableInterface {
   }
 
  private:
-  void UpsertEntry(int64_t id,
+  bool UpsertEntry(int64_t id,
                    const std::function<void(EntryType&)>& upsert_fn) {
     auto init_fn = [&](EntryType& entry) {
       accessor_->Init(entry_helper_.Get(entry));
       upsert_fn(entry);
     };
-    entry_helper_.Upsert(&m_, id, upsert_fn, init_fn);
+    return entry_helper_.Upsert(&m_, id, upsert_fn, init_fn);
   }
 
   CuckooEmbeddingHashTableConfig config_;

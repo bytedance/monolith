@@ -239,6 +239,22 @@ Status EmbeddingHashTableTfBridge::AssignAdd2(int64 id,
   }
 }
 
+Status EmbeddingHashTableTfBridge::Reinitialize(const int64_t* ids,
+                                                int64_t num_ids, int* status) {
+  auto id_vec = absl::MakeConstSpan(ids, num_ids);
+  try {
+    table_->Reinitialize(id_vec, absl::MakeSpan(status, num_ids));
+    if (hash_set_ != nullptr) {
+      for (int64_t id : id_vec) {
+        hash_set_->insert(std::make_pair(id, this));
+      }
+    }
+    return Status::OK();
+  } catch (const std::exception& e) {
+    return errors::InvalidArgument(e.what());
+  }
+}
+
 Status EmbeddingHashTableTfBridge::BatchOptimize(
     OpKernelContext* ctx, size_t num_ids, const int64_t* ids,
     const float* tensor, absl::Span<const float> learning_rates,

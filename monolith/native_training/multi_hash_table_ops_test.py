@@ -49,7 +49,7 @@ def from_configs(configs, *args, **kwargs):
 
 class MultiTypeHashTableTest(tf.test.TestCase, parameterized.TestCase):
 
-  def test_lookup_assign_add(self):
+  def test_lookup_assign_add_reinitialize(self):
 
     multi_table = multi_hash_table_ops.MultiHashTable.from_configs(
         configs={
@@ -78,6 +78,25 @@ class MultiTypeHashTableTest(tf.test.TestCase, parameterized.TestCase):
     }
     for slot, values in values_dict.items():
       self.assertAllEqual(values, expected_values_dict[slot])
+
+    multi_table, status1 = multi_table.reinitialize("slot2", _id([1, 2, 3]))
+    multi_table, status2 = multi_table.reinitialize("slot3", _id([1, 2, 3]))
+    values_dict = multi_table.lookup(slot_to_id={
+        "slot0": _id([0]),
+        "slot1": _id([1]),
+        "slot2": _id([1, 2, 3]),
+    })
+    with tf.compat.v1.train.SingularMonitoredSession() as sess:
+      values_dict, status1, status2 = sess.run([values_dict, status1, status2])
+    expected_values_dict = {
+        "slot0": [[1]],
+        "slot1": [[2, 2]],
+        "slot2": [[0, 0], [0, 0], [0, 0]]
+    }
+    for slot, values in values_dict.items():
+      self.assertAllEqual(values, expected_values_dict[slot])
+    self.assertAllEqual(status1, [0, 1, 1])
+    self.assertAllEqual(status2, [-1, -1, -1])
 
   def test_apply_gradients(self):
     with self.session() as sess:
