@@ -24,8 +24,8 @@ from monolith.native_training.monolith_export import monolith_export
 from monolith.native_training.runtime.ops import gen_monolith_ops
 from idl.matrix.proto.line_id_pb2 import LineId
 from monolith.native_training.data.feature_list import add_feature, add_feature_by_fids
-from monolith.native_training.data.data_op_config_pb2 import LabelConf, \
-  TaskLabelConf
+from monolith.native_training.data.data_op_config_pb2 import (
+    LabelConf, TaskLabelConf, TFRecordFeatureDescription)
 
 ragged_data_ops = gen_monolith_ops
 
@@ -76,12 +76,13 @@ def filter_by_fids(variant: tf.Tensor,
                                     has_actions or [], req_time_min,
                                     select_slots, variant_type)
 
+
 @monolith_export
 def filter_by_feature_value(variant: tf.Tensor,
                             field_name: str,
                             op: str,
-                            operand: Union[float, int, str, List[float], List[int],
-                                          List[str]],
+                            operand: Union[float, int, str, List[float],
+                                           List[int], List[str]],
                             field_type: str,
                             keep_empty: bool = False,
                             operand_filepath: str = None):
@@ -107,7 +108,9 @@ def filter_by_feature_value(variant: tf.Tensor,
 
   assert (operand is None and operand_filepath) or (operand is not None and
                                                     not operand_filepath)
-  assert field_type in {'int64', 'float', 'double', 'bytes'}, 'You must specify field_type for feature value_filter!'
+  assert field_type in {
+      'int64', 'float', 'double', 'bytes'
+  }, 'You must specify field_type for feature value_filter!'
 
   string_operand = []
   operand_filepath = '' if operand_filepath is None else operand_filepath
@@ -158,6 +161,7 @@ def filter_by_feature_value(variant: tf.Tensor,
                                               operand_filepath=operand_filepath,
                                               field_type=field_type,
                                               keep_empty=keep_empty)
+
 
 @monolith_export
 def filter_by_value(variant: tf.Tensor,
@@ -251,6 +255,7 @@ def filter_by_value(variant: tf.Tensor,
                                       operand_filepath=operand_filepath,
                                       keep_empty=keep_empty,
                                       variant_type=variant_type)
+
 
 @monolith_export
 def add_action(
@@ -646,8 +651,12 @@ def switch_slot_batch(variant: tf.Tensor,
     slots.append(slot)
 
   assert variant_type in {'example', 'example_batch'}
-  output = ragged_data_ops.switch_slot_batch(
-    variant, features=feats, slots=slots, inplaces=inplaces, suffix=suffix, variant_type=variant_type)
+  output = ragged_data_ops.switch_slot_batch(variant,
+                                             features=feats,
+                                             slots=slots,
+                                             inplaces=inplaces,
+                                             suffix=suffix,
+                                             variant_type=variant_type)
   return output
 
 
@@ -917,6 +926,8 @@ dataset = dataset.flat_map(lambda v: tf.data.Dataset.from_tensors(
         datasources=self._datasources,
         default_datasource=self._default_datasource)))
 '''
+
+
 def string_to_variant_with_transform(tensor: tf.Tensor,
                                      input_type: str = 'example',
                                      output_type: str = 'example',
@@ -979,13 +990,15 @@ def kafka_read_next(input, index: int, message_poll_timeout: int,
       message_poll_timeout=message_poll_timeout,
       stream_timeout=stream_timeout)
 
+
 def kafka_read_next_v2(input, index: int, message_poll_timeout: int,
-                    stream_timeout: int):
+                       stream_timeout: int):
   return ragged_data_ops.KafkaGroupReadableNextV2(
       input=input,
       index=index,
       message_poll_timeout=message_poll_timeout,
       stream_timeout=stream_timeout)
+
 
 def has_variant(input, variant_type: str = 'example'):
   return ragged_data_ops.HasVariant(input=input, variant_type=variant_type)
@@ -993,4 +1006,65 @@ def has_variant(input, variant_type: str = 'example'):
 
 def gen_fid_mask(tenosr: tf.RaggedTensor, fid: int) -> tf.Tensor:
   fid = np.uint64(fid).astype(np.int64)
-  return ragged_data_ops.monolith_gen_fid_mask(tenosr.row_splits, tenosr.flat_values, fid=fid)
+  return ragged_data_ops.monolith_gen_fid_mask(tenosr.row_splits,
+                                               tenosr.flat_values,
+                                               fid=fid)
+
+
+@monolith_export
+def tf_example_to_example(serialized: tf.Tensor,
+                          sparse_features: Dict[str, int],
+                          dense_features: List[str],
+                          label: str,
+                          instance_weight: str = None):
+  """ 将序列化的 tf.example 转换为 Monolith Example，在转换的同时，指定的 sparse_features
+      会被抽取成 FID
+  Args:
+    serialized (:obj:`Tensor`): tf.example 的序列化数据，string 类型
+    sparse_features (:obj:`Dict[str, int]`): sparse feature name 到 slot id 的映射，
+      举例：sparse_features = {"user_id": 1, "item_id": 2, "posterior_ctr": 3}，
+        1. "user_id" 原始类型为 int64，它将被抽取成 FID，存入 Monolith Example 的 fid_v2_list，对应 slot_id=1
+        2. "item_id" 原始类型为 int64，它将被抽取成 FID，存入 Monolith Example 的 fid_v2_list，对应 slot_id=2
+        3. "posterior_ctr" 原始类型为 float32，它将被抽取成 FID，存入 Monolith Example 的 fid_v2_list，对应 slot_id=3
+    dense_features (:obj:`List[str]`): 指定的这些字段将直接 Copy 到 Monolith Example 中
+    label (:obj:`str`): 存储在 tf.example 中的哪个字段是 label
+    instance_weight (:obj:`str`): 存储在 tf.example 中的哪个字段是 instance_weight
+
+  Returns:
+    variant tensor: Monolith Example 格式的 variant tensor
+  """
+
+  ## default value setting
+  sparse_features = sparse_features or []
+  dense_features = dense_features or []
+  label = label or ""
+  instance_weight = instance_weight or ""
+
+  ## validity check
+  intersection = set(sparse_features.keys()) & set(dense_features)
+  assert len(
+      intersection
+  ) == 0, f"{intersection} occur in sparse_features and dense_features simultaneously, please investigate and retry!"
+  assert label not in sparse_features, f"label: {label} should NOT occur in sparse_features, please investigate and retry!"
+  assert label not in dense_features, f"label: {label} should NOT occur in dense_features, please investigate and retry!"
+  assert instance_weight not in sparse_features, f"instance_weight: {instance_weight} should NOT occur in sparse_features, please investigate and retry!"
+  assert instance_weight not in dense_features, f"instance_weight: {instance_weight} should NOT occur in dense_features, please investigate and retry!"
+
+  slot_ids = list(sparse_features.values())
+  duplicates = {slot for slot in slot_ids if slot_ids.count(slot) > 1}
+  assert len(
+      duplicates
+  ) == 0, f"{duplicates} have multiple sparse feature name mapping, please investigate and retry!"
+  for slot_id in slot_ids:
+    assert 0 < slot_id < 32768, "slot_id should be in [1, 32768)"
+
+  ## generate feature_description proto
+  feature_description = TFRecordFeatureDescription()
+  for k, v in sparse_features.items():
+    feature_description.sparse_features[k] = v
+  feature_description.dense_features.extend(dense_features)
+  feature_description.label = label
+  feature_description.instance_weight = instance_weight
+  return ragged_data_ops.MonolithTFExampleToExample(
+      input=serialized,
+      feature_description=feature_description.SerializeToString())

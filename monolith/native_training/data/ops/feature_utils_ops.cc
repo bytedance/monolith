@@ -94,6 +94,15 @@ REGISTER_OP("AddLabel")
       return Status::OK();
     });
 
+REGISTER_OP("MonolithTFExampleToExample")
+    .Input("input: string")
+    .Attr("feature_description: string")
+    .Output("output: variant")
+    .SetShapeFn([](shape_inference::InferenceContext *ctx) {
+      ctx->set_output(0, ctx->input(0));
+      return Status::OK();
+    });
+
 REGISTER_OP("ScatterLabel")
     .Input("input: variant")
     .Attr("config: string")

@@ -26,3 +26,10 @@ message TaskLabelConf {
 message LabelConf {
   repeated TaskLabelConf conf = 1;
 }
+
+message TFRecordFeatureDescription {
+  map<string, int32> sparse_features = 1;
+  repeated string dense_features = 2;
+  optional string label = 3 [default = ""];
+  optional string instance_weight = 4 [default = ""];
+}
