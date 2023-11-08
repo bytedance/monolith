@@ -400,8 +400,10 @@ class ReplicaUpdater(object):
 
     self._entry_last_update_version = None
     self._metrics_cli = None
+    self._metrics_cli_global = None
     self._tagkv = {'status': 'OK'}
     self._model_latest_version = {}
+    self._model_last_update_ts = {}
     if self._conf.use_metrics:
       try:
         self.init_metrics()
@@ -422,6 +424,7 @@ class ReplicaUpdater(object):
     else:
       prefix = "data.monolith_serving." + self._conf.base_name
     self._metrics_cli = cli.get_cli(prefix=prefix)
+    self._metrics_cli_global = cli.get_cli(prefix="data.monolith_serving.global")
     logging.info(f"after init_metrics, prefix is {prefix}")
 
   @property
@@ -634,13 +637,19 @@ class ReplicaUpdater(object):
           "idc": f"{self._conf.idc}:{self._conf.cluster}",
           "replica_id": str(self._conf.replica_id),
           "shard_id": str(self._conf.shard_id),
+          "base_name": self._conf.base_name
       }
       self._metrics_cli.emit_store("serving_model.latest_version",
                                    latest_version, tags)
+      if name in self._model_last_update_ts:
+        interval = req_ts - self._model_last_update_ts[name]
+        self._metrics_cli_global.emit_store("serving_model.since_last_update",
+                                            interval, tags)
       if name not in self._model_latest_version or self._model_latest_version[
           name] < latest_version:
         self._metrics_cli.emit_store("serving_model.update_ts", req_ts, tags)
         self._model_latest_version[name] = latest_version
+        self._model_last_update_ts[name] = req_ts
       self._metrics_cli.flush()
 
     return
