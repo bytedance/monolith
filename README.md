@@ -3,7 +3,7 @@
 ## What is it?
 
 [Monolith](https://arxiv.org/abs/2209.07663) is a deep learning framework for large scale recommendation modeling. It introduces two important features which are crucial for advanced recommendation system: 
-* collisionless embedding tables guarantees unique represeantion for different id features
+* collisionless embedding tables guarantees unique representation for different id features
 * real time training captures the latest hotspots and help users to discover new intersts rapidly
 
 Monolith is built on the top of TensorFlow and supports batch/real-time training and serving.
