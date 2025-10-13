@@ -76,7 +76,7 @@ python-decouple==3.0
 python-memcached==1.58
 python-utils==2.3.0
 pytz==2019.1
-PyYAML==3.12
+PyYAML==5.4
 redis==2.10.5
 requests==2.11.1
 roman==2.0.0
